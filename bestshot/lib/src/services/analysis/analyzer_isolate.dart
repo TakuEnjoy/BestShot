@@ -222,14 +222,14 @@ class AnalyzerIsolate {
     cv.CascadeClassifier? faceCascade,
     cv.CascadeClassifier? eyeCascade,
   }) async {
-    Uint8List bytes;
+    Uint8List rawBytes;
     if (filePath != null) {
-      bytes = await File(filePath).readAsBytes();
+      rawBytes = await File(filePath).readAsBytes();
     } else {
-      bytes = displayBytes ?? Uint8List(0);
+      rawBytes = displayBytes ?? Uint8List(0);
     }
 
-    if (bytes.isEmpty) {
+    if (rawBytes.isEmpty) {
       return AnalyzeOutput(
         key: key,
         pHashHex: '0000000000000000',
@@ -252,153 +252,184 @@ class AnalyzerIsolate {
       );
     }
 
-    final pHashHex = _calcEqualizedPHashHex(bytes);
-    final fullSharpness = _calcLaplacianVariance(bytes);
-    final (exposure, histogram) = _calcExposureAndHistogram(bytes);
-    final orb = _calcOrbDescriptors(bytes);
+    cv.Mat? mat;
+    cv.Mat? work;
+    Uint8List? workBytes;
 
-    var hasFace = false;
-    var faceX = 0;
-    var faceY = 0;
-    var faceW = 0;
-    var faceH = 0;
-    var faceSharpness = 0.0;
-    var eyeOpenAvg = -1.0;
-    var eyesClosed = false;
-    var bothEyesDetected = false;
-    var eyeSharpness = -1.0;
-
-    var sharpnessForScore = fullSharpness;
-
-    if (mode == DetectionMode.portrait) {
-      if (Platform.isAndroid && faceDetector != null && tmpDir != null) {
-        final r = await _portraitAnalyzeAndroid(
-          bytes,
-          faceDetector: faceDetector,
-          tmpDir: tmpDir,
+    try {
+      mat = cv.imdecode(rawBytes, cv.IMREAD_COLOR);
+      if (mat.isEmpty) {
+        return AnalyzeOutput(
+          key: key,
+          pHashHex: '0000000000000000',
+          sharpness: 0,
+          exposureScore: 0,
+          orbRows: 0,
+          orbCols: 0,
+          orbBytes: Uint8List(0),
+          histogram: Uint8List(256),
+          hasFace: false,
+          faceX: 0,
+          faceY: 0,
+          faceW: 0,
+          faceH: 0,
+          faceSharpness: 0,
+          eyeOpenAvg: -1,
+          eyesClosed: false,
+          bothEyesDetected: false,
+          eyeSharpness: -1,
         );
-        hasFace = r.hasFace;
-        faceX = r.faceX;
-        faceY = r.faceY;
-        faceW = r.faceW;
-        faceH = r.faceH;
-        faceSharpness = r.faceSharpness;
-        eyeOpenAvg = r.eyeOpenAvg;
-        eyesClosed = r.eyesClosed;
-        bothEyesDetected = r.bothEyesDetected;
-        eyeSharpness = r.eyeSharpness;
-      } else if (Platform.isWindows &&
-          faceCascade != null &&
-          eyeCascade != null) {
-        final r = _portraitAnalyzeWindows(
-          bytes,
-          faceCascade: faceCascade,
-          eyeCascade: eyeCascade,
-        );
-        hasFace = r.hasFace;
-        faceX = r.faceX;
-        faceY = r.faceY;
-        faceW = r.faceW;
-        faceH = r.faceH;
-        faceSharpness = r.faceSharpness;
-        eyeOpenAvg = r.eyeOpenAvg;
-        eyesClosed = r.eyesClosed;
-        bothEyesDetected = r.bothEyesDetected;
-        eyeSharpness = r.eyeSharpness;
       }
 
-      if (hasFace && faceSharpness > 0) {
-        sharpnessForScore = faceSharpness;
+      // Resize for analysis (speed & accuracy)
+      const maxEdge = 640;
+      if (mat.cols > maxEdge || mat.rows > maxEdge) {
+        final scale = maxEdge / (mat.cols > mat.rows ? mat.cols : mat.rows);
+        work = cv.resize(mat, (
+          (mat.cols * scale).round(),
+          (mat.rows * scale).round(),
+        ));
+      } else {
+        work = mat.clone();
       }
-      if (eyeSharpness > 0) {
-        // 瞳のピントを重視
-        sharpnessForScore = (sharpnessForScore * 0.4) + (eyeSharpness * 0.6);
+
+      // Some methods still use bytes, so encode once if needed.
+      final encodeRes = cv.imencode(
+        '.jpg',
+        work,
+        params: [cv.IMWRITE_JPEG_QUALITY, 90],
+      );
+      workBytes = encodeRes.$2;
+
+      final pHashHex = _calcEqualizedPHashHexFromMat(work);
+      final fullSharpness = _calcLaplacianVarianceFromMat(work, workBytes);
+      final (exposure, histogram) = _calcExposureAndHistogramFromMat(work);
+      final orb = _calcOrbDescriptorsFromMat(work);
+
+      var hasFace = false;
+      var faceX = 0;
+      var faceY = 0;
+      var faceW = 0;
+      var faceH = 0;
+      var faceSharpness = 0.0;
+      var eyeOpenAvg = -1.0;
+      var eyesClosed = false;
+      var bothEyesDetected = false;
+      var eyeSharpness = -1.0;
+
+      var sharpnessForScore = fullSharpness;
+
+      if (mode == DetectionMode.portrait) {
+        if (Platform.isAndroid && faceDetector != null && tmpDir != null) {
+          final r = await _portraitAnalyzeAndroid(
+            rawBytes, // Face detection on original for accuracy
+            faceDetector: faceDetector,
+            tmpDir: tmpDir,
+          );
+          hasFace = r.hasFace;
+          faceX = r.faceX;
+          faceY = r.faceY;
+          faceW = r.faceW;
+          faceH = r.faceH;
+          faceSharpness = r.faceSharpness;
+          eyeOpenAvg = r.eyeOpenAvg;
+          eyesClosed = r.eyesClosed;
+          bothEyesDetected = r.bothEyesDetected;
+          eyeSharpness = r.eyeSharpness;
+        } else if (Platform.isWindows &&
+            faceCascade != null &&
+            eyeCascade != null) {
+          final r = _portraitAnalyzeWindowsFromMat(
+            mat, // Use original for Windows detection accuracy
+            faceCascade: faceCascade,
+            eyeCascade: eyeCascade,
+          );
+          hasFace = r.hasFace;
+          faceX = r.faceX;
+          faceY = r.faceY;
+          faceW = r.faceW;
+          faceH = r.faceH;
+          faceSharpness = r.faceSharpness;
+          eyeOpenAvg = r.eyeOpenAvg;
+          eyesClosed = r.eyesClosed;
+          bothEyesDetected = r.bothEyesDetected;
+          eyeSharpness = r.eyeSharpness;
+        }
+
+        if (hasFace && faceSharpness > 0) {
+          sharpnessForScore = faceSharpness;
+        }
+        if (eyeSharpness > 0) {
+          sharpnessForScore = (sharpnessForScore * 0.4) + (eyeSharpness * 0.6);
+        }
+        if (eyesClosed) {
+          sharpnessForScore *= 0.2;
+        }
       }
-      if (eyesClosed) {
-        sharpnessForScore *= 0.2; // 大幅減点
-      }
+
+      return AnalyzeOutput(
+        key: key,
+        pHashHex: pHashHex,
+        sharpness: sharpnessForScore,
+        exposureScore: exposure,
+        orbRows: orb.rows,
+        orbCols: orb.cols,
+        orbBytes: orb.bytes,
+        histogram: histogram,
+        hasFace: hasFace,
+        faceX: faceX,
+        faceY: faceY,
+        faceW: faceW,
+        faceH: faceH,
+        faceSharpness: faceSharpness,
+        eyeOpenAvg: eyeOpenAvg,
+        eyesClosed: eyesClosed,
+        bothEyesDetected: bothEyesDetected,
+        eyeSharpness: eyeSharpness,
+      );
+    } catch (_) {
+      return AnalyzeOutput(
+        key: key,
+        pHashHex: '0000000000000000',
+        sharpness: 0,
+        exposureScore: 0,
+        orbRows: 0,
+        orbCols: 0,
+        orbBytes: Uint8List(0),
+        histogram: Uint8List(256),
+        hasFace: false,
+        faceX: 0,
+        faceY: 0,
+        faceW: 0,
+        faceH: 0,
+        faceSharpness: 0,
+        eyeOpenAvg: -1,
+        eyesClosed: false,
+        bothEyesDetected: false,
+        eyeSharpness: -1,
+      );
+    } finally {
+      mat?.dispose();
+      work?.dispose();
     }
-
-    return AnalyzeOutput(
-      key: key,
-      pHashHex: pHashHex,
-      sharpness: sharpnessForScore,
-      exposureScore: exposure,
-      orbRows: orb.rows,
-      orbCols: orb.cols,
-      orbBytes: orb.bytes,
-      histogram: histogram,
-      hasFace: hasFace,
-      faceX: faceX,
-      faceY: faceY,
-      faceW: faceW,
-      faceH: faceH,
-      faceSharpness: faceSharpness,
-      eyeOpenAvg: eyeOpenAvg,
-      eyesClosed: eyesClosed,
-      bothEyesDetected: bothEyesDetected,
-      eyeSharpness: eyeSharpness,
-    );
   }
 
-  static String _calcEqualizedPHashHex(Uint8List bytes) {
+  static String _calcEqualizedPHashHexFromMat(cv.Mat mat) {
     try {
-      final decoded = img.decodeImage(bytes);
-      if (decoded == null) return '0000000000000000';
-
-      final resized = img.copyResize(decoded, width: 32, height: 32);
-
-      // Build grayscale buffer.
-      final gray = Uint8List(32 * 32);
-      var idx = 0;
-      for (var y = 0; y < 32; y++) {
-        for (var x = 0; x < 32; x++) {
-          final px = resized.getPixel(x, y);
-          final r = img.getRed(px);
-          final g = img.getGreen(px);
-          final b = img.getBlue(px);
-          // luminance approx
-          final v = ((0.299 * r) + (0.587 * g) + (0.114 * b)).round().clamp(
-            0,
-            255,
-          );
-          gray[idx++] = v;
-        }
-      }
-
-      // Histogram equalization (on grayscale).
-      final hist = List<int>.filled(256, 0);
-      for (final v in gray) {
-        hist[v]++;
-      }
-      final cdf = List<int>.filled(256, 0);
-      var c = 0;
-      for (var i = 0; i < 256; i++) {
-        c += hist[i];
-        cdf[i] = c;
-      }
-      final total = gray.length;
-      var cdfMin = 0;
-      for (var i = 0; i < 256; i++) {
-        if (cdf[i] != 0) {
-          cdfMin = cdf[i];
-          break;
-        }
-      }
-      final lut = Uint8List(256);
-      for (var i = 0; i < 256; i++) {
-        final num = (cdf[i] - cdfMin);
-        final den = (total - cdfMin);
-        final mapped = den <= 0 ? 0 : ((num * 255) / den).round();
-        lut[i] = mapped.clamp(0, 255);
-      }
+      final small = cv.resize(mat, (32, 32));
+      final gray = cv.cvtColor(small, cv.COLOR_BGR2GRAY);
+      final eq = cv.equalizeHist(gray);
 
       final pixels = <ic.Pixel>[];
-      for (final v in gray) {
-        final e = lut[v];
-        pixels.add(ic.Pixel(e, e, e, 255));
+      final data = eq.data;
+      for (final v in data) {
+        pixels.add(ic.Pixel(v, v, v, 255));
       }
-      // calcPhash mutates list internally; keep it dynamic to avoid runtime type errors.
+
+      small.dispose();
+      gray.dispose();
+      eq.dispose();
+
       final dynamicPixelList = <dynamic>[...pixels];
       final hex = ic.PerceptualHash().calcPhash(dynamicPixelList);
       return hex.padLeft(16, '0');
@@ -407,28 +438,197 @@ class AnalyzerIsolate {
     }
   }
 
-  static double _calcLaplacianVariance(Uint8List bytes) {
-    cv.Mat? mat;
+  static double _calcLaplacianVarianceFromMat(cv.Mat bgr, Uint8List? bytes) {
     cv.Mat? gray;
     cv.Mat? lap;
     try {
-      mat = cv.imdecode(bytes, cv.IMREAD_COLOR);
-      if (mat.isEmpty) {
-        return _fallbackLaplacianVariance(bytes);
-      }
-      gray = cv.cvtColor(mat, cv.COLOR_BGR2GRAY);
+      gray = cv.cvtColor(bgr, cv.COLOR_BGR2GRAY);
       lap = cv.laplacian(gray, cv.MatType.CV_64F);
       final (_, stddev) = cv.meanStdDev(lap);
       final v = stddev.val1 * stddev.val1;
       final out = (v.isFinite ? v : 0).toDouble();
-      // If OpenCV path fails (often returns 0), keep a pure-Dart fallback.
-      return out > 0 ? out : _fallbackLaplacianVariance(bytes);
+      if (out > 0) return out;
+      if (bytes != null) return _fallbackLaplacianVariance(bytes);
+      return 0;
     } catch (_) {
-      return _fallbackLaplacianVariance(bytes);
+      if (bytes != null) return _fallbackLaplacianVariance(bytes);
+      return 0;
     } finally {
-      mat?.dispose();
       gray?.dispose();
       lap?.dispose();
+    }
+  }
+
+  static (double, Uint8List) _calcExposureAndHistogramFromMat(cv.Mat bgr) {
+    cv.Mat? gray;
+    cv.Mat? hist;
+    try {
+      gray = cv.cvtColor(bgr, cv.COLOR_BGR2GRAY);
+
+      hist = cv.calcHist(
+        cv.VecMat.fromList([gray]),
+        cv.VecI32.fromList([0]),
+        cv.Mat.empty(),
+        cv.VecI32.fromList([256]),
+        cv.VecF32.fromList([0, 256]),
+      );
+      final data = hist.data;
+      if (data.isEmpty) return (0.0, Uint8List(256));
+
+      double maxVal = 0;
+      for (var i = 0; i < data.length; i++) {
+        final v = data[i].toDouble();
+        if (v > maxVal) maxVal = v;
+      }
+      final normHist = Uint8List(256);
+      if (maxVal > 0) {
+        for (var i = 0; i < 256; i++) {
+          normHist[i] = ((data[i].toDouble() / maxVal) * 255).round();
+        }
+      }
+
+      double sum = 0;
+      for (final v in data) {
+        sum += v;
+      }
+      if (sum <= 0) return (0.0, normHist);
+
+      double clipLow = 0;
+      for (var i = 0; i <= 5; i++) {
+        clipLow += data[i];
+      }
+      double clipHigh = 0;
+      for (var i = 250; i < 256; i++) {
+        clipHigh += data[i];
+      }
+      final clip = (clipLow + clipHigh) / sum;
+
+      final (mean, _) = cv.meanStdDev(gray);
+      final meanVal = mean.val1;
+      final meanPenalty = (meanVal - 127.0).abs() / 127.0;
+
+      final score = (1.0 - clip) * (1.0 - (meanPenalty * 0.35));
+      return (score.clamp(0.0, 1.0), normHist);
+    } catch (_) {
+      return (0.0, Uint8List(256));
+    } finally {
+      gray?.dispose();
+      hist?.dispose();
+    }
+  }
+
+  static _OrbDesc _calcOrbDescriptorsFromMat(cv.Mat mat) {
+    cv.Mat? gray;
+    cv.Mat? eq;
+    cv.Mat? desc;
+    try {
+      gray = cv.cvtColor(mat, cv.COLOR_BGR2GRAY);
+      eq = cv.equalizeHist(gray);
+
+      final orb = cv.ORB.create(nFeatures: 600, scaleFactor: 1.2, nLevels: 8);
+      final result = orb.detectAndCompute(eq, cv.Mat.empty());
+      desc = result.$2;
+      if (desc.isEmpty) return _OrbDesc.empty();
+      final rows = desc.rows > 256 ? 256 : desc.rows;
+      final cols = desc.cols;
+      final elemSize = desc.elemSize;
+      final bytesLen = rows * cols * elemSize;
+      final all = desc.data;
+      if (all.length < bytesLen) return _OrbDesc.empty();
+      final sliced = Uint8List.fromList(all.sublist(0, bytesLen));
+      return _OrbDesc(rows: rows, cols: cols, bytes: sliced);
+    } catch (_) {
+      return _OrbDesc.empty();
+    } finally {
+      gray?.dispose();
+      eq?.dispose();
+      desc?.dispose();
+    }
+  }
+
+  static _PortraitResult _portraitAnalyzeWindowsFromMat(
+    cv.Mat mat, {
+    required cv.CascadeClassifier faceCascade,
+    required cv.CascadeClassifier eyeCascade,
+  }) {
+    cv.Mat? gray;
+    cv.Mat? faceGray;
+    try {
+      if (mat.isEmpty) return const _PortraitResult.none();
+      gray = cv.cvtColor(mat, cv.COLOR_BGR2GRAY);
+
+      final faces = faceCascade.detectMultiScale(
+        gray,
+        scaleFactor: 1.1,
+        minNeighbors: 3,
+        minSize: (48, 48),
+      );
+      if (faces.isEmpty) return const _PortraitResult.none();
+
+      cv.Rect best = faces[0];
+      var bestArea = best.width * best.height;
+      for (final r in faces) {
+        final area = r.width * r.height;
+        if (area > bestArea) {
+          best = r;
+          bestArea = area;
+        }
+      }
+
+      final faceSharpness = _calcLaplacianVarianceInRoi(mat, best);
+
+      faceGray = gray.region(best);
+      var eyesClosed = false;
+      var bothEyesDetected = false;
+      var eyeSharpness = -1.0;
+
+      if (!faceGray.isEmpty) {
+        final eyes = eyeCascade.detectMultiScale(
+          faceGray,
+          scaleFactor: 1.1,
+          minNeighbors: 3,
+          minSize: (16, 16),
+        );
+        bothEyesDetected = eyes.length >= 2;
+        eyesClosed = eyes.isEmpty;
+
+        if (eyes.isNotEmpty) {
+          final eyeVariances = <double>[];
+          for (final eyeRect in eyes) {
+            final absEyeRect = cv.Rect(
+              best.x + eyeRect.x,
+              best.y + eyeRect.y,
+              eyeRect.width,
+              eyeRect.height,
+            );
+            final v = _calcLaplacianVarianceInRoi(mat, absEyeRect);
+            if (v > 0) eyeVariances.add(v);
+          }
+          if (eyeVariances.isNotEmpty) {
+            final avgV =
+                eyeVariances.reduce((a, b) => a + b) / eyeVariances.length;
+            eyeSharpness = (avgV / 1000.0).clamp(0.0, 1.0);
+          }
+        }
+      }
+
+      return _PortraitResult(
+        hasFace: true,
+        faceX: best.x,
+        faceY: best.y,
+        faceW: best.width,
+        faceH: best.height,
+        faceSharpness: faceSharpness,
+        eyeOpenAvg: -1,
+        eyesClosed: eyesClosed,
+        bothEyesDetected: bothEyesDetected,
+        eyeSharpness: eyeSharpness,
+      );
+    } catch (_) {
+      return const _PortraitResult.none();
+    } finally {
+      gray?.dispose();
+      faceGray?.dispose();
     }
   }
 
@@ -677,74 +877,6 @@ class AnalyzerIsolate {
     }
   }
 
-  static _PortraitResult _portraitAnalyzeWindows(
-    Uint8List bytes, {
-    required cv.CascadeClassifier faceCascade,
-    required cv.CascadeClassifier eyeCascade,
-  }) {
-    cv.Mat? mat;
-    cv.Mat? gray;
-    cv.Mat? faceGray;
-    try {
-      mat = cv.imdecode(bytes, cv.IMREAD_COLOR);
-      if (mat.isEmpty) return const _PortraitResult.none();
-      gray = cv.cvtColor(mat, cv.COLOR_BGR2GRAY);
-
-      final faces = faceCascade.detectMultiScale(
-        gray,
-        scaleFactor: 1.1,
-        minNeighbors: 3,
-        minSize: (48, 48),
-      );
-      if (faces.isEmpty) return const _PortraitResult.none();
-
-      cv.Rect best = faces[0];
-      var bestArea = best.width * best.height;
-      for (final r in faces) {
-        final area = r.width * r.height;
-        if (area > bestArea) {
-          best = r;
-          bestArea = area;
-        }
-      }
-
-      final faceSharpness = _calcLaplacianVarianceInRoi(mat, best);
-
-      faceGray = gray.region(best);
-      var eyesClosed = false;
-      var bothEyesDetected = false;
-      if (!faceGray.isEmpty) {
-        final eyes = eyeCascade.detectMultiScale(
-          faceGray,
-          scaleFactor: 1.1,
-          minNeighbors: 3,
-          minSize: (16, 16),
-        );
-        bothEyesDetected = eyes.length >= 2;
-        eyesClosed = eyes.isEmpty;
-      }
-
-      return _PortraitResult(
-        hasFace: true,
-        faceX: best.x,
-        faceY: best.y,
-        faceW: best.width,
-        faceH: best.height,
-        faceSharpness: faceSharpness,
-        eyeOpenAvg: -1,
-        eyesClosed: eyesClosed,
-        bothEyesDetected: bothEyesDetected,
-        eyeSharpness: -1,
-      );
-    } catch (_) {
-      return const _PortraitResult.none();
-    } finally {
-      mat?.dispose();
-      gray?.dispose();
-      faceGray?.dispose();
-    }
-  }
-
   static Future<String> _ensureAssetFile({
     required String assetPath,
     required String outPath,
@@ -755,111 +887,6 @@ class AnalyzerIsolate {
     await f.parent.create(recursive: true);
     await f.writeAsBytes(data.buffer.asUint8List(), flush: true);
     return outPath;
-  }
-
-  static (double, Uint8List) _calcExposureAndHistogram(Uint8List bytes) {
-    cv.Mat? mat;
-    cv.Mat? gray;
-    cv.Mat? hist;
-    try {
-      mat = cv.imdecode(bytes, cv.IMREAD_COLOR);
-      if (mat.isEmpty) return (0.0, Uint8List(256));
-      gray = cv.cvtColor(mat, cv.COLOR_BGR2GRAY);
-
-      // Histogram (256 bins)
-      hist = cv.calcHist(
-        cv.VecMat.fromList([gray]),
-        cv.VecI32.fromList([0]),
-        cv.Mat.empty(),
-        cv.VecI32.fromList([256]),
-        cv.VecF32.fromList([0, 256]),
-      );
-      final data = hist.data;
-      if (data.isEmpty) return (0.0, Uint8List(256));
-
-      // Normalize histogram for display/storage
-      double maxVal = 0;
-      for (var i = 0; i < data.length; i++) {
-        final v = data[i].toDouble();
-        if (v > maxVal) maxVal = v;
-      }
-      final normHist = Uint8List(256);
-      if (maxVal > 0) {
-        for (var i = 0; i < 256; i++) {
-          normHist[i] = ((data[i].toDouble() / maxVal) * 255).round();
-        }
-      }
-
-      double sum = 0;
-      for (final v in data) {
-        sum += v;
-      }
-      if (sum <= 0) return (0.0, normHist);
-
-      // clip ratio in shadows (0..5) and highlights (250..255)
-      double clipLow = 0;
-      for (var i = 0; i <= 5; i++) {
-        clipLow += data[i];
-      }
-      double clipHigh = 0;
-      for (var i = 250; i < 256; i++) {
-        clipHigh += data[i];
-      }
-      final clip = (clipLow + clipHigh) / sum;
-
-      // mean brightness penalty
-      final (mean, _) = cv.meanStdDev(gray);
-      final meanVal = mean.val1;
-      final meanPenalty = (meanVal - 127.0).abs() / 127.0; // 0..~1
-
-      final score = (1.0 - clip) * (1.0 - (meanPenalty * 0.35));
-      return (score.clamp(0.0, 1.0), normHist);
-    } catch (_) {
-      return (0.0, Uint8List(256));
-    } finally {
-      mat?.dispose();
-      gray?.dispose();
-      hist?.dispose();
-    }
-  }
-
-  static _OrbDesc _calcOrbDescriptors(Uint8List bytes) {
-    cv.Mat? mat;
-    cv.Mat? small;
-    cv.Mat? gray;
-    cv.Mat? eq;
-    cv.Mat? desc;
-    try {
-      mat = cv.imdecode(bytes, cv.IMREAD_COLOR);
-      if (mat.isEmpty) return _OrbDesc.empty();
-
-      // Smaller image for faster ORB (keep aspect by scaling via fx/fy)
-      small = cv.resize(mat, (640, 640));
-      gray = cv.cvtColor(small, cv.COLOR_BGR2GRAY);
-      eq = cv.equalizeHist(gray);
-
-      final orb = cv.ORB.create(nFeatures: 600, scaleFactor: 1.2, nLevels: 8);
-      final result = orb.detectAndCompute(eq, cv.Mat.empty());
-      desc = result.$2;
-      // Keep at most first 256 descriptors to limit CPU in Dart matcher.
-      if (desc.isEmpty) return _OrbDesc.empty();
-      final rows = desc.rows > 256 ? 256 : desc.rows;
-      final cols = desc.cols;
-      final elemSize = desc.elemSize;
-      final bytesLen = rows * cols * elemSize;
-      final all = desc.data;
-      if (all.length < bytesLen) return _OrbDesc.empty();
-      final sliced = Uint8List.fromList(all.sublist(0, bytesLen));
-      return _OrbDesc(rows: rows, cols: cols, bytes: sliced);
-    } catch (_) {
-      return _OrbDesc.empty();
-    } finally {
-      mat?.dispose();
-      small?.dispose();
-      gray?.dispose();
-      eq?.dispose();
-      desc?.dispose();
-    }
   }
 }
 
