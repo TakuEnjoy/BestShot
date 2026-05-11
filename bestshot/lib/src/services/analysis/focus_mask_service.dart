@@ -30,32 +30,27 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
       work = mat.clone();
     }
 
+    // 1. 安定した基本ロジック
     gray = cv.cvtColor(work, cv.COLOR_BGR2GRAY);
     lap = cv.laplacian(gray, cv.MatType.CV_64F);
-
-    // コントラストを強調しつつ、エッジ強度を絶対値に変換 (alpha: 5.0 で信号を増幅)
-    absLap = cv.convertScaleAbs(lap, alpha: 5.0);
-
-    // ガウシアンブラーでノイズ平滑化
+    absLap = cv.convertScaleAbs(lap);
     blurred = cv.gaussianBlur(absLap, (15, 15), 0);
 
-    // 最低限のノイズカット（エッジ強度が低い部分を 0 に落とす）
-    // これにより、全体が低コントラストな場合に Otsu が閾値を 0 にしてしまうのを防ぐ
-    final noiseCut = cv.threshold(blurred, 15, 255, cv.THRESH_TOZERO);
-    final processed = noiseCut.$2;
-
     final otsu = cv.threshold(
-      processed,
+      blurred,
       0,
       255,
       cv.THRESH_BINARY | cv.THRESH_OTSU,
     );
     binSmall = otsu.$2;
 
+    // 2. 元の解像度にリサイズ
     binFull = cv.resize(binSmall, (
       origW,
       origH,
     ), interpolation: cv.INTER_NEAREST);
+
+    // 3. シンプルな白黒PNGを返す（元の実装に戻す）
     final encodeResult = cv.imencode('.png', binFull);
     return encodeResult.$2;
   } catch (_) {

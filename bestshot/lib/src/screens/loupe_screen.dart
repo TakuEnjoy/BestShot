@@ -328,11 +328,8 @@ class _ZoomPane extends StatelessWidget {
                             opacity: maskOpacity,
                             child: Image.memory(
                               maskPng!,
-                              filterQuality: FilterQuality.medium,
                               color: maskColor,
-                              colorBlendMode: maskColor == Colors.black
-                                  ? BlendMode.dst
-                                  : BlendMode.srcIn,
+                              colorBlendMode: BlendMode.srcIn,
                             ),
                           ),
                       ],

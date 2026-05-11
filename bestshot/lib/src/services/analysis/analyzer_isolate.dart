@@ -297,7 +297,7 @@ class AnalyzerIsolate {
       final encodeRes = cv.imencode(
         '.jpg',
         work,
-        params: [cv.IMWRITE_JPEG_QUALITY, 90],
+        params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, 90]),
       );
       workBytes = encodeRes.$2;
 
