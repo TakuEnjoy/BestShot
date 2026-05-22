@@ -31,8 +31,8 @@ class _LoupeScreenState extends State<LoupeScreen> {
   bool _showFocusMask = false;
   bool _focusMaskBusy = false;
   final Map<String, Uint8List?> _focusMaskPngByKey = {};
-  Color _focusMaskColor = Colors.red;
-  double _focusMaskOpacity = 0.5;
+  Color _focusMaskColor = Colors.white;
+  double _focusMaskOpacity = 0.8;
 
   bool _syncEnabled = false; // Changed: Default to false
   final List<TransformationController> _controllers = [];
@@ -144,18 +144,9 @@ class _LoupeScreenState extends State<LoupeScreen> {
                 : Icon(_showFocusMask ? Icons.blur_off : Icons.blur_on),
           ),
           if (_showFocusMask) ...[
-            PopupMenuButton<Color>(
-              icon: Icon(Icons.color_lens, color: _focusMaskColor),
-              onSelected: (c) => setState(() => _focusMaskColor = c),
-              itemBuilder: (ctx) => [
-                const PopupMenuItem(value: Colors.red, child: Text('レッド')),
-                const PopupMenuItem(value: Colors.blue, child: Text('ブルー')),
-                const PopupMenuItem(value: Colors.white, child: Text('ホワイト')),
-                const PopupMenuItem(value: Colors.black, child: Text('モノクロ')),
-              ],
-            ),
+            const SizedBox(width: 8),
             SizedBox(
-              width: 80,
+              width: 100,
               child: Slider(
                 value: _focusMaskOpacity,
                 onChanged: (v) => setState(() => _focusMaskOpacity = v),
@@ -328,8 +319,7 @@ class _ZoomPane extends StatelessWidget {
                             opacity: maskOpacity,
                             child: Image.memory(
                               maskPng!,
-                              color: maskColor,
-                              colorBlendMode: BlendMode.srcIn,
+                              filterQuality: FilterQuality.low,
                             ),
                           ),
                       ],

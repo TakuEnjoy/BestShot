@@ -24,40 +24,61 @@ class _CmakeResolver implements ToolResolver {
   final executableName = OS.current.executableFileName('cmake');
 
   CliVersionResolver _getAndroidResolver({UserConfig? userConfig}) {
-    return unitTestCmakeAndroidResolver ?? CliVersionResolver(
-      wrappedResolver: ToolResolvers([
-        InstallLocationResolver(
-          toolName: 'CMake',
-          paths: [
-            if (userConfig?.androidHome != null) '${userConfig?.androidHome}/cmake/*/bin/$executableName',
-            if (Platform.isLinux) r'$HOME/Android/Sdk/cmake/*/bin/' + executableName,
-            if (Platform.isMacOS) r'$HOME/Library/Android/sdk/cmake/*/bin/' + executableName,
-            if (Platform.isWindows) r'$HOME/AppData/Local/Android/Sdk/cmake/*/bin/' + executableName,
-          ],
-        ),
-      ]),
-    );
+    return unitTestCmakeAndroidResolver ??
+        CliVersionResolver(
+          wrappedResolver: ToolResolvers([
+            InstallLocationResolver(
+              toolName: 'CMake',
+              paths: [
+                if (userConfig?.androidHome != null)
+                  '${userConfig?.androidHome}/cmake/*/bin/$executableName',
+                if (Platform.isLinux)
+                  r'$HOME/Android/Sdk/cmake/*/bin/' + executableName,
+                if (Platform.isMacOS)
+                  r'$HOME/Library/Android/sdk/cmake/*/bin/' + executableName,
+                if (Platform.isWindows)
+                  r'$HOME/AppData/Local/Android/Sdk/cmake/*/bin/' +
+                      executableName,
+              ],
+            ),
+          ]),
+        );
   }
 
   CliVersionResolver _getSystemResolver() {
-    return unitTestCmakeSystemResolver ?? CliVersionResolver(
-      wrappedResolver: ToolResolvers([
-        if (Platform.isWindows)
-          InstallLocationResolver(
-            toolName: 'CMake',
-            paths: [
-              // Prefer Visual Studio bundled CMake on Windows. Android SDK CMake
-              // is often on PATH but may not support modern VS generators.
-              r'C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/' +
-                  executableName,
-              // Avoid parentheses in glob patterns ("Program Files (x86)").
-              r'C:/PROGRA~2/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/' +
-                  executableName,
-            ],
-          ),
-        PathToolResolver(toolName: 'CMake', executableName: 'cmake'),
-      ]),
-    );
+    return unitTestCmakeSystemResolver ??
+        CliVersionResolver(
+          wrappedResolver: ToolResolvers([
+            if (Platform.isWindows)
+              InstallLocationResolver(
+                toolName: 'CMake',
+                paths: [
+                  // Prefer Visual Studio bundled CMake on Windows. Android SDK CMake
+                  // is often on PATH but may not support modern VS generators.
+                  // Visual Studio 2026 (Version 18)
+                  r'C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/' +
+                      executableName,
+                  r'C:/PROGRA~2/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/' +
+                      executableName,
+                  // Visual Studio 2022 (Version 17)
+                  r'C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/' +
+                      executableName,
+                  r'C:/Program Files/Microsoft Visual Studio/2022/Professional/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/' +
+                      executableName,
+                  r'C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/' +
+                      executableName,
+                  r'C:/PROGRA~2/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/' +
+                      executableName,
+                  // Visual Studio 2019 (Version 16)
+                  r'C:/PROGRA~2/Microsoft Visual Studio/2019/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/' +
+                      executableName,
+                  r'C:/PROGRA~2/Microsoft Visual Studio/2019/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/' +
+                      executableName,
+                ],
+              ),
+            PathToolResolver(toolName: 'CMake', executableName: 'cmake'),
+          ]),
+        );
   }
 
   @override
@@ -68,12 +89,22 @@ class _CmakeResolver implements ToolResolver {
   }) async {
     // here, we always try to find android cmake first and filter out unsatisfied versions
     final androidResolver = _getAndroidResolver(userConfig: userConfig);
-    final androidCmakeInstances = await androidResolver.resolve(logger: logger, environment: environment);
-    logger?.info('Found Android CMake: ${androidCmakeInstances.map((e) => e.toString()).join(', ')}');
+    final androidCmakeInstances = await androidResolver.resolve(
+      logger: logger,
+      environment: environment,
+    );
+    logger?.info(
+      'Found Android CMake: ${androidCmakeInstances.map((e) => e.toString()).join(', ')}',
+    );
 
     final systemResolver = _getSystemResolver();
-    final systemCmakeInstances = await systemResolver.resolve(logger: logger, environment: environment);
-    logger?.info('Found System CMake: ${systemCmakeInstances.map((e) => e.toString()).join(', ')}');
+    final systemCmakeInstances = await systemResolver.resolve(
+      logger: logger,
+      environment: environment,
+    );
+    logger?.info(
+      'Found System CMake: ${systemCmakeInstances.map((e) => e.toString()).join(', ')}',
+    );
 
     final combinedCmakeInstances = <ToolInstance>[];
     if (userConfig?.preferAndroidCmake ?? false) {
@@ -110,10 +141,16 @@ class _CmakeResolver implements ToolResolver {
       );
     }
 
-    logger?.info('Found CMake: ${combinedCmakeInstances.map((e) => e.toString()).join(', ')}');
+    logger?.info(
+      'Found CMake: ${combinedCmakeInstances.map((e) => e.toString()).join(', ')}',
+    );
     if (combinedCmakeInstances.isEmpty) {
-      logger?.severe('Failed to find cmake with version=${specificCmakeVersion ?? 'latest'}');
-      throw Exception('Failed to find cmake version: ${specificCmakeVersion ?? 'latest'}');
+      logger?.severe(
+        'Failed to find cmake with version=${specificCmakeVersion ?? 'latest'}',
+      );
+      throw Exception(
+        'Failed to find cmake version: ${specificCmakeVersion ?? 'latest'}',
+      );
     }
 
     return combinedCmakeInstances;

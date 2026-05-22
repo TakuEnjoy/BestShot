@@ -138,7 +138,18 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
       interpolation: cv.INTER_NEAREST,
     );
 
-    final encodeResult = cv.imencode('.png', binFull);
+    // ── Step 8: 透過RGBA画像の作成 ──────────────────────────────────────
+    // R=255, G=255, B=255, A=binFull (白=不透明, 黒=透明)
+    final white = cv.Mat.fromScalar(origH, origW, cv.MatType.CV_8UC1, cv.Scalar.all(255));
+    
+    final channels = cv.VecMat.fromList([white, white, white, binFull]);
+    final rgba = cv.merge(channels);
+
+    final encodeResult = cv.imencode('.png', rgba);
+    
+    white.dispose();
+    rgba.dispose();
+    
     return encodeResult.$2;
   } catch (_) {
     return null;

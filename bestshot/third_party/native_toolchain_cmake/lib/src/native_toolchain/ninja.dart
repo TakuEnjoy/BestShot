@@ -24,25 +24,55 @@ class _NinjaResolver implements ToolResolver {
   final executableName = OS.current.executableFileName('ninja');
 
   CliVersionResolver _getAndroidResolver({UserConfig? userConfig}) {
-    return unitTestNinjaAndroidResolver ?? CliVersionResolver(
-      wrappedResolver: ToolResolvers([
-        InstallLocationResolver(
-          toolName: 'Ninja',
-          paths: [
-            if (userConfig?.androidHome != null) '${userConfig?.androidHome}/cmake/*/bin/$executableName',
-            if (Platform.isLinux) r'$HOME/Android/Sdk/cmake/*/bin/' + executableName,
-            if (Platform.isMacOS) r'$HOME/Library/Android/sdk/cmake/*/bin/' + executableName,
-            if (Platform.isWindows) r'$HOME/AppData/Local/Android/Sdk/cmake/*/bin/' + executableName,
-          ],
-        ),
-      ]),
-    );
+    return unitTestNinjaAndroidResolver ??
+        CliVersionResolver(
+          wrappedResolver: ToolResolvers([
+            InstallLocationResolver(
+              toolName: 'Ninja',
+              paths: [
+                if (userConfig?.androidHome != null)
+                  '${userConfig?.androidHome}/cmake/*/bin/$executableName',
+                if (Platform.isLinux)
+                  r'$HOME/Android/Sdk/cmake/*/bin/' + executableName,
+                if (Platform.isMacOS)
+                  r'$HOME/Library/Android/sdk/cmake/*/bin/' + executableName,
+                if (Platform.isWindows)
+                  r'$HOME/AppData/Local/Android/Sdk/cmake/*/bin/' +
+                      executableName,
+              ],
+            ),
+          ]),
+        );
   }
 
   CliVersionResolver _getSystemResolver() {
-    return unitTestNinjaSystemResolver ?? CliVersionResolver(
-      wrappedResolver: PathToolResolver(toolName: 'Ninja', executableName: 'ninja'),
-    );
+    return unitTestNinjaSystemResolver ??
+        CliVersionResolver(
+          wrappedResolver: ToolResolvers([
+            if (Platform.isWindows)
+              InstallLocationResolver(
+                toolName: 'Ninja',
+                paths: [
+                  // Visual Studio 2026 (Version 18)
+                  r'C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/' +
+                      executableName,
+                  r'C:/PROGRA~2/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/' +
+                      executableName,
+                  // Visual Studio 2022 (Version 17)
+                  r'C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/' +
+                      executableName,
+                  r'C:/PROGRA~2/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/' +
+                      executableName,
+                  // Visual Studio 2019 (Version 16)
+                  r'C:/PROGRA~2/Microsoft Visual Studio/2019/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/' +
+                      executableName,
+                  r'C:/PROGRA~2/Microsoft Visual Studio/2019/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/' +
+                      executableName,
+                ],
+              ),
+            PathToolResolver(toolName: 'Ninja', executableName: 'ninja'),
+          ]),
+        );
   }
 
   @override
@@ -58,7 +88,8 @@ class _NinjaResolver implements ToolResolver {
       userConfig: userConfig,
     );
     if (androidNinjaInstances.isEmpty) {
-      final sdk = userConfig?.androidHome ??
+      final sdk =
+          userConfig?.androidHome ??
           Platform.environment['ANDROID_HOME'] ??
           Platform.environment['ANDROID_SDK_ROOT'];
       if (sdk != null && sdk.isNotEmpty) {
@@ -69,11 +100,18 @@ class _NinjaResolver implements ToolResolver {
         );
       }
     }
-    logger?.info('Found Android Ninja: ${androidNinjaInstances.map((e) => e.toString()).join(', ')}');
+    logger?.info(
+      'Found Android Ninja: ${androidNinjaInstances.map((e) => e.toString()).join(', ')}',
+    );
 
     final systemResolver = _getSystemResolver();
-    final systemNinjaInstances = await systemResolver.resolve(logger: logger, environment: environment);
-    logger?.info('Found System Ninja: ${systemNinjaInstances.map((e) => e.toString()).join(', ')}');
+    final systemNinjaInstances = await systemResolver.resolve(
+      logger: logger,
+      environment: environment,
+    );
+    logger?.info(
+      'Found System Ninja: ${systemNinjaInstances.map((e) => e.toString()).join(', ')}',
+    );
 
     final combinedNinjaInstances = <ToolInstance>[];
     if (userConfig?.preferAndroidNinja ?? false) {
@@ -107,10 +145,16 @@ class _NinjaResolver implements ToolResolver {
       );
     }
 
-    logger?.info('Found Ninja: ${combinedNinjaInstances.map((e) => e.toString()).join(', ')}');
+    logger?.info(
+      'Found Ninja: ${combinedNinjaInstances.map((e) => e.toString()).join(', ')}',
+    );
     if (combinedNinjaInstances.isEmpty) {
-      logger?.severe('Failed to find ninja with version=${specificNinjaVersion ?? 'latest'}');
-      throw Exception('Failed to find ninja version: ${specificNinjaVersion ?? 'latest'}');
+      logger?.severe(
+        'Failed to find ninja with version=${specificNinjaVersion ?? 'latest'}',
+      );
+      throw Exception(
+        'Failed to find ninja version: ${specificNinjaVersion ?? 'latest'}',
+      );
     }
 
     return combinedNinjaInstances;
@@ -137,7 +181,9 @@ class _NinjaResolver implements ToolResolver {
       );
     }
     if (out.isNotEmpty) {
-      logger?.fine('Found ${out.length} Ninja binary(ies) under ${cmakeRoot.path}');
+      logger?.fine(
+        'Found ${out.length} Ninja binary(ies) under ${cmakeRoot.path}',
+      );
     }
     return out;
   }
