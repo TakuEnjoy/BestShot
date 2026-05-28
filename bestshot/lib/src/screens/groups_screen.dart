@@ -100,7 +100,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
 
     return Scaffold(
-      backgroundColor: colorScheme.surfaceVariant.withOpacity(0.3),
+      backgroundColor: colorScheme.surfaceContainer.withOpacity(0.3),
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -139,16 +139,43 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         MaterialPageRoute(
                           builder: (_) => LoupeScreen(
                             items: items,
-                            exifTexts: _loupeSelection
-                                .map((k) => _entryByKey[k])
-                                .whereType<PhotoEntry>()
-                                .map((e) => _exifText(e))
-                                .toList(),
                             scores: _loupeSelection
                                 .map((k) => _entryByKey[k])
                                 .whereType<PhotoEntry>()
                                 .map((e) => e.sharpness)
                                 .toList(),
+                            isBests: _loupeSelection
+                                .map((k) => _entryByKey[k])
+                                .whereType<PhotoEntry>()
+                                .map((e) {
+                                  for (final g in widget.groups) {
+                                    if (g.items.any((item) => item.key == e.key)) {
+                                      return e.key == g.bestKey;
+                                    }
+                                  }
+                                  return false;
+                                })
+                                .toList(),
+                            initialSelectedForDelete: _selectedForDelete,
+                            onToggleDelete: (key, val) {
+                              setState(() {
+                                if (val) {
+                                  _selectedForDelete.add(key);
+                                } else {
+                                  _selectedForDelete.remove(key);
+                                }
+                              });
+                            },
+                            onSetBest: (key) {
+                              setState(() {
+                                for (final g in widget.groups) {
+                                  if (g.items.any((item) => item.key == key)) {
+                                    g.bestKey = key;
+                                    break;
+                                  }
+                                }
+                              });
+                            },
                           ),
                         ),
                       );
@@ -226,12 +253,36 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         children: [
                           ClipRRect(
                             borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
-                            child: Image.memory(
-                              e.displayBytes,
-                              width: 96,
-                              height: 96,
-                              fit: BoxFit.cover,
-                              gaplessPlayback: true,
+                            child: Stack(
+                              children: [
+                                Image.memory(
+                                  e.displayBytes,
+                                  width: 120,
+                                  height: 120,
+                                  fit: BoxFit.cover,
+                                  gaplessPlayback: true,
+                                ),
+                                if (loupeSelected)
+                                  Positioned(
+                                    top: 8,
+                                    left: 8,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context).colorScheme.primary,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Text(
+                                        '${_loupeSelection.indexOf(e.key) + 1}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -315,6 +366,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         }
                       });
                     },
+                    onSelectBestOnly: () {
+                      setState(() {
+                        for (final item in g.items) {
+                          if (item.key != g.bestKey) {
+                            _selectedForDelete.add(item.key);
+                          }
+                        }
+                      });
+                    },
                   ),
                 );
               },
@@ -330,6 +390,7 @@ class _ExpandableGroupCard extends StatelessWidget {
     required this.onToggleDelete,
     required this.loupeSelection,
     required this.onToggleLoupe,
+    required this.onSelectBestOnly,
   });
 
   final PhotoGroup group;
@@ -337,6 +398,7 @@ class _ExpandableGroupCard extends StatelessWidget {
   final void Function(String key, bool selected) onToggleDelete;
   final List<String> loupeSelection;
   final void Function(String key) onToggleLoupe;
+  final VoidCallback onSelectBestOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -377,10 +439,24 @@ class _ExpandableGroupCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    '${group.items.length} 枚',
-                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
-                    overflow: TextOverflow.ellipsis,
+                  child: Row(
+                    children: [
+                      Text(
+                        '${group.items.length} 枚',
+                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton.icon(
+                        onPressed: onSelectBestOnly,
+                        icon: const Icon(Icons.playlist_remove, size: 16),
+                        label: const Text('Best以外を削除候補に', style: TextStyle(fontSize: 11)),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 if (group.isBurst) ...[
@@ -416,7 +492,7 @@ class _ExpandableGroupCard extends StatelessWidget {
                           sharpness: e.sharpness,
                           exposureScore: e.exposureScore,
                           faceQualityScore: e.faceQualityScore,
-                          exifText: _exifText(e),
+                          exifText: e.exifText,
                           isBest: e.key == group.bestKey,
                           selectedForDelete: selectedForDelete.contains(e.key),
                           onChanged: (v) => onToggleDelete(e.key, v),
@@ -435,27 +511,6 @@ class _ExpandableGroupCard extends StatelessWidget {
       ),
     );
   }
-}
-
-String _exifText(PhotoEntry e) {
-  final exif = e.exif;
-  if (exif == null) return '';
-  final parts = <String>[];
-
-  // Add captured time if available
-  if (exif.capturedAt != null) {
-    final t = exif.capturedAt!;
-    final timeStr =
-        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
-    parts.add(timeStr);
-  }
-
-  if (exif.fNumber != null && exif.fNumber!.isNotEmpty)
-    parts.add('F${exif.fNumber}');
-  if (exif.shutter != null && exif.shutter!.isNotEmpty)
-    parts.add(exif.shutter!);
-  if (exif.iso != null && exif.iso!.isNotEmpty) parts.add('ISO${exif.iso}');
-  return parts.join('  ');
 }
 
 class DeleteReviewScreen extends StatefulWidget {
@@ -525,8 +580,8 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
                         MaterialPageRoute(
                           builder: (_) => LoupeScreen(
                             items: items,
-                            exifTexts: items.map((e) => _exifText(e)).toList(),
                             scores: items.map((e) => e.sharpness).toList(),
+                            isBests: List.generate(items.length, (_) => false),
                           ),
                         ),
                       );
@@ -613,7 +668,7 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
                         onPressed: () {
                           widget.onRemoveFromDelete(item.key);
                           setState(() {
-                            _currentItems.removeAt(i);
+                            _currentItems.remove(item);
                             _loupeSelection.remove(item.key);
                           });
                           if (_currentItems.isEmpty) {
@@ -725,10 +780,19 @@ class _PhotoTile extends StatelessWidget {
           Positioned.fill(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(16),
-              child: Image.memory(
-                bytes,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
+              child: Opacity(
+                opacity: selectedForDelete ? 0.45 : 1.0,
+                child: ColorFiltered(
+                  colorFilter: ColorFilter.mode(
+                    selectedForDelete ? Colors.grey : Colors.transparent,
+                    BlendMode.saturation,
+                  ),
+                  child: Image.memory(
+                    bytes,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+                ),
               ),
             ),
           ),
@@ -742,10 +806,21 @@ class _PhotoTile extends StatelessWidget {
                   borderRadius: BorderRadius.circular(16),
                   border: selectedForDelete
                       ? Border.all(color: colorScheme.error, width: 3)
-                      : Border.all(
-                          color: Colors.white.withOpacity(0.1),
-                          width: 1,
-                        ),
+                      : (isBest
+                          ? Border.all(color: const Color(0xFF22C55E), width: 2.5)
+                          : Border.all(
+                              color: Colors.white.withOpacity(0.1),
+                              width: 1,
+                            )),
+                  boxShadow: isBest
+                      ? [
+                          BoxShadow(
+                            color: const Color(0xFF22C55E).withOpacity(0.4),
+                            blurRadius: 8,
+                            spreadRadius: 1,
+                          )
+                        ]
+                      : null,
                   color: selectedForDelete
                       ? colorScheme.error.withOpacity(0.1)
                       : Colors.transparent,
@@ -764,7 +839,7 @@ class _PhotoTile extends StatelessWidget {
                   const _Badge(label: 'Best', color: Color(0xFF22C55E)),
                 if (!isBest)
                   _Badge(
-                    label: '${sharpness.toStringAsFixed(0)}',
+                    label: sharpness.toStringAsFixed(0),
                     color: Colors.black.withOpacity(0.6),
                   ),
               ],

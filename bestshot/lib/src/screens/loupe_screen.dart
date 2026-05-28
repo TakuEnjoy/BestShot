@@ -11,13 +11,22 @@ class LoupeScreen extends StatefulWidget {
   const LoupeScreen({
     super.key,
     required this.items,
-    required this.exifTexts,
     required this.scores,
+    required this.isBests,
+    this.initialSelectedForDelete,
+    this.onToggleDelete,
+    this.onSetBest,
   });
 
   final List<PhotoEntry> items;
-  final List<String> exifTexts;
   final List<double> scores;
+  final List<bool> isBests;
+  final Set<String>? initialSelectedForDelete;
+  final void Function(String key, bool val)? onToggleDelete;
+  final void Function(String key)? onSetBest;
+
+  // Cache focus mask bytes for the duration of the app session
+  static final Map<String, Uint8List> _sessionMaskCache = {};
 
   @override
   State<LoupeScreen> createState() => _LoupeScreenState();
@@ -31,7 +40,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
   bool _showFocusMask = false;
   bool _focusMaskBusy = false;
   final Map<String, Uint8List?> _focusMaskPngByKey = {};
-  Color _focusMaskColor = Colors.white;
+  Color _focusMaskColor = Colors.white; // Non-final to allow color cycle
   double _focusMaskOpacity = 0.8;
 
   bool _syncEnabled = false; // Changed: Default to false
@@ -96,6 +105,13 @@ class _LoupeScreenState extends State<LoupeScreen> {
       for (final item in widget.items) {
         final key = item.key;
         if (_focusMaskPngByKey.containsKey(key)) continue;
+
+        // Check if the mask is already cached in memory for this session
+        if (LoupeScreen._sessionMaskCache.containsKey(key)) {
+          _focusMaskPngByKey[key] = LoupeScreen._sessionMaskCache[key];
+          continue;
+        }
+
         final b = _loadedBytes[key];
         if (b == null) {
           _focusMaskPngByKey[key] = null;
@@ -104,10 +120,30 @@ class _LoupeScreenState extends State<LoupeScreen> {
         final png = await compute(focusMaskPngFromBytes, b);
         if (!mounted) return;
         _focusMaskPngByKey[key] = png;
+
+        // Store the computed mask in the session cache
+        if (png != null) {
+          LoupeScreen._sessionMaskCache[key] = png;
+        }
       }
     } finally {
       if (mounted) setState(() => _focusMaskBusy = false);
     }
+  }
+
+  final List<Color> _maskColors = [
+    Colors.white,
+    Colors.red,
+    Colors.yellow,
+    Colors.green,
+  ];
+
+  void _cycleMaskColor() {
+    final idx = _maskColors.indexOf(_focusMaskColor);
+    final nextIdx = (idx + 1) % _maskColors.length;
+    setState(() {
+      _focusMaskColor = _maskColors[nextIdx];
+    });
   }
 
   Future<void> _toggleFocusMask() async {
@@ -144,6 +180,11 @@ class _LoupeScreenState extends State<LoupeScreen> {
                 : Icon(_showFocusMask ? Icons.blur_off : Icons.blur_on),
           ),
           if (_showFocusMask) ...[
+            IconButton(
+              tooltip: 'マスクの色を変更',
+              icon: Icon(Icons.color_lens, color: _focusMaskColor),
+              onPressed: _cycleMaskColor,
+            ),
             const SizedBox(width: 8),
             SizedBox(
               width: 100,
@@ -205,11 +246,20 @@ class _LoupeScreenState extends State<LoupeScreen> {
                 maskColor: _focusMaskColor,
                 maskOpacity: _focusMaskOpacity,
                 title: 'Photo ${i + 1}',
-                exif: widget.exifTexts[i],
+                exif: widget.items[i].exifText,
                 score: widget.scores[i],
                 histogram: widget.items[i].histogram,
                 controller: _controllers[i],
                 onInteractionUpdate: () => _onInteractionUpdate(i),
+                itemKey: widget.items[i].key,
+                isBest: widget.isBests[i],
+                selectedForDelete: widget.initialSelectedForDelete?.contains(widget.items[i].key) ?? false,
+                onToggleDelete: widget.onToggleDelete != null
+                    ? (val) => widget.onToggleDelete!(widget.items[i].key, val)
+                    : null,
+                onSetBest: widget.onSetBest != null
+                    ? () => widget.onSetBest!(widget.items[i].key)
+                    : null,
               ),
             ),
           ],
@@ -253,11 +303,20 @@ class _LoupeScreenState extends State<LoupeScreen> {
       maskColor: _focusMaskColor,
       maskOpacity: _focusMaskOpacity,
       title: 'Photo ${index + 1}',
-      exif: widget.exifTexts[index],
+      exif: widget.items[index].exifText,
       score: widget.scores[index],
       histogram: widget.items[index].histogram,
       controller: _controllers[index],
       onInteractionUpdate: () => _onInteractionUpdate(index),
+      itemKey: key,
+      isBest: widget.isBests[index],
+      selectedForDelete: widget.initialSelectedForDelete?.contains(key) ?? false,
+      onToggleDelete: widget.onToggleDelete != null
+          ? (val) => widget.onToggleDelete!(key, val)
+          : null,
+      onSetBest: widget.onSetBest != null
+          ? () => widget.onSetBest!(key)
+          : null,
     );
   }
 }
@@ -275,6 +334,11 @@ class _ZoomPane extends StatelessWidget {
     required this.histogram,
     required this.controller,
     required this.onInteractionUpdate,
+    required this.itemKey,
+    required this.isBest,
+    required this.selectedForDelete,
+    required this.onToggleDelete,
+    required this.onSetBest,
   });
 
   final Uint8List bytes;
@@ -288,6 +352,11 @@ class _ZoomPane extends StatelessWidget {
   final Uint8List histogram;
   final TransformationController controller;
   final VoidCallback onInteractionUpdate;
+  final String itemKey;
+  final bool isBest;
+  final bool selectedForDelete;
+  final ValueChanged<bool>? onToggleDelete;
+  final VoidCallback? onSetBest;
 
   @override
   Widget build(BuildContext context) {
@@ -386,7 +455,77 @@ class _ZoomPane extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: Colors.white10),
                   ),
-                  child: CustomPaint(painter: _HistogramPainter(histogram)),
+                  child: CustomPaint(
+                    painter: _HistogramPainter(
+                      histogram,
+                      barColor: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ),
+              ),
+              // Operations Floating Bar (Bottom Center)
+              Positioned(
+                bottom: 12,
+                left: 12,
+                right: 12,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      color: Colors.black.withOpacity(0.55),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          // Delete candidate checkbox
+                          Row(
+                            children: [
+                              SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: Checkbox(
+                                  value: selectedForDelete,
+                                  onChanged: onToggleDelete != null
+                                      ? (v) => onToggleDelete!(v ?? false)
+                                      : null,
+                                  activeColor: Colors.red,
+                                  side: const BorderSide(color: Colors.white70),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              const Text(
+                                '削除候補',
+                                style: TextStyle(color: Colors.white, fontSize: 11),
+                              ),
+                            ],
+                          ),
+                          // Best button
+                          TextButton.icon(
+                            onPressed: onSetBest,
+                            icon: Icon(
+                              isBest ? Icons.star : Icons.star_border,
+                              color: isBest ? Colors.amber : Colors.white70,
+                              size: 16,
+                            ),
+                            label: Text(
+                              isBest ? 'Best画像' : 'Bestに設定',
+                              style: TextStyle(
+                                color: isBest ? Colors.amber : Colors.white,
+                                fontSize: 11,
+                                fontWeight: isBest ? FontWeight.bold : FontWeight.normal,
+                              ),
+                            ),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -398,14 +537,25 @@ class _ZoomPane extends StatelessWidget {
 }
 
 class _HistogramPainter extends CustomPainter {
-  _HistogramPainter(this.data);
+  _HistogramPainter(this.data, {required this.barColor});
   final Uint8List data;
+  final Color barColor;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (data.isEmpty) return;
+    
+    final rect = Offset.zero & size;
+    final gradient = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        barColor.withOpacity(0.85),
+        barColor.withOpacity(0.2),
+      ],
+    );
     final barPaint = Paint()
-      ..color = Colors.white.withOpacity(0.85)
+      ..shader = gradient.createShader(rect)
       ..style = PaintingStyle.fill
       ..isAntiAlias = false;
 
@@ -422,5 +572,5 @@ class _HistogramPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_HistogramPainter old) => old.data != data;
+  bool shouldRepaint(_HistogramPainter old) => old.data != data || old.barColor != barColor;
 }

@@ -24,6 +24,7 @@ class _ImportScreenState extends State<ImportScreen> {
   double? _progress; // null => indeterminate
   String _stage = '';
   DetectionMode _detectionMode = DetectionMode.standard;
+  int _maxCount = 200;
   /// 連写ウィンドウ（1秒〜60分）。UIは分・秒で編集、初期 00分15秒。
   int _burstMinutes = 0;
   int _burstSeconds = 15;
@@ -320,6 +321,32 @@ class _ImportScreenState extends State<ImportScreen> {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 12),
+                        Text(
+                          '最大インポート件数',
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<int>(
+                          initialValue: _maxCount,
+                          decoration: const InputDecoration(
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 50, child: Text('50枚')),
+                            DropdownMenuItem(value: 100, child: Text('100枚')),
+                            DropdownMenuItem(value: 200, child: Text('200枚')),
+                            DropdownMenuItem(value: 500, child: Text('500枚')),
+                            DropdownMenuItem(value: 1000, child: Text('1000枚')),
+                          ],
+                          onChanged: _busy
+                              ? null
+                              : (v) {
+                                  if (v == null) return;
+                                  setState(() => _maxCount = v);
+                                },
+                        ),
                       ],
                     ),
                   ),
@@ -330,31 +357,43 @@ class _ImportScreenState extends State<ImportScreen> {
                     onPressed: _busy
                         ? null
                         : () => _runImportAndAnalyze(
-                              (onProgress) => ImportService.pickFromFolderWindows(onProgress: onProgress),
+                              (onProgress) => ImportService.pickFromFolderWindows(
+                                maxCount: _maxCount,
+                                onProgress: onProgress,
+                              ),
                             ),
                     icon: const Icon(Icons.folder_open),
                     label: const Text('フォルダからインポート（Windows）'),
                   )
-                else if (isAndroid)
+                else ...[
                   FilledButton.icon(
                     onPressed: _busy
                         ? null
                         : () => _runImportAndAnalyze(
-                              (onProgress) => ImportService.pickFromFolderAndroid(onProgress: onProgress),
-                            ),
-                    icon: const Icon(Icons.folder_open),
-                    label: const Text('フォルダからインポート（Android）'),
-                  )
-                else
-                  FilledButton.icon(
-                    onPressed: _busy
-                        ? null
-                        : () => _runImportAndAnalyze(
-                              (onProgress) => ImportService.pickFromDeviceGallery(onProgress: onProgress),
+                              (onProgress) => ImportService.pickFromDeviceGallery(
+                                maxCount: _maxCount,
+                                onProgress: onProgress,
+                              ),
                             ),
                     icon: const Icon(Icons.photo_library),
-                    label: const Text('写真を選択（Android/iOS）'),
+                    label: const Text('写真を選択（Android/iOSギャラリー）'),
                   ),
+                  if (isAndroid) ...[
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: _busy
+                          ? null
+                          : () => _runImportAndAnalyze(
+                                (onProgress) => ImportService.pickFromFolderAndroid(
+                                  maxCount: _maxCount,
+                                  onProgress: onProgress,
+                                ),
+                              ),
+                      icon: const Icon(Icons.folder_open),
+                      label: const Text('フォルダからインポート（Android SAF）'),
+                    ),
+                  ],
+                ],
                 const SizedBox(height: 12),
                 if (_busy && _stage.isNotEmpty)
                   Text(

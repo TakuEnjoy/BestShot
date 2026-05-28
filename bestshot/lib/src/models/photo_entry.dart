@@ -113,6 +113,25 @@ class PhotoEntry {
 
   DateTime? get capturedAt => exif?.capturedAt;
 
+  String get exifText {
+    final e = exif;
+    if (e == null) return '';
+    final parts = <String>[];
+
+    // Add captured time if available
+    if (e.capturedAt != null) {
+      final t = e.capturedAt!;
+      final timeStr =
+          '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
+      parts.add(timeStr);
+    }
+
+    if (e.fNumber != null && e.fNumber!.isNotEmpty) parts.add('F${e.fNumber}');
+    if (e.shutter != null && e.shutter!.isNotEmpty) parts.add(e.shutter!);
+    if (e.iso != null && e.iso!.isNotEmpty) parts.add('ISO${e.iso}');
+    return parts.join('  ');
+  }
+
   PhotoEntry copyWith({
     String? key,
     PhotoOrigin? origin,

@@ -212,6 +212,29 @@ class AnalyzerIsolate {
     message.sendPort.send({'type': 'done'});
   }
 
+  static AnalyzeOutput _emptyOutput(String key) {
+    return AnalyzeOutput(
+      key: key,
+      pHashHex: '0000000000000000',
+      sharpness: 0,
+      exposureScore: 0,
+      orbRows: 0,
+      orbCols: 0,
+      orbBytes: Uint8List(0),
+      histogram: Uint8List(256),
+      hasFace: false,
+      faceX: 0,
+      faceY: 0,
+      faceW: 0,
+      faceH: 0,
+      faceSharpness: 0,
+      eyeOpenAvg: -1,
+      eyesClosed: false,
+      bothEyesDetected: false,
+      eyeSharpness: -1,
+    );
+  }
+
   static Future<AnalyzeOutput> _analyzeOne(
     String key,
     Uint8List? displayBytes, {
@@ -230,26 +253,7 @@ class AnalyzerIsolate {
     }
 
     if (rawBytes.isEmpty) {
-      return AnalyzeOutput(
-        key: key,
-        pHashHex: '0000000000000000',
-        sharpness: 0,
-        exposureScore: 0,
-        orbRows: 0,
-        orbCols: 0,
-        orbBytes: Uint8List(0),
-        histogram: Uint8List(256),
-        hasFace: false,
-        faceX: 0,
-        faceY: 0,
-        faceW: 0,
-        faceH: 0,
-        faceSharpness: 0,
-        eyeOpenAvg: -1,
-        eyesClosed: false,
-        bothEyesDetected: false,
-        eyeSharpness: -1,
-      );
+      return _emptyOutput(key);
     }
 
     cv.Mat? mat;
@@ -259,26 +263,7 @@ class AnalyzerIsolate {
     try {
       mat = cv.imdecode(rawBytes, cv.IMREAD_COLOR);
       if (mat.isEmpty) {
-        return AnalyzeOutput(
-          key: key,
-          pHashHex: '0000000000000000',
-          sharpness: 0,
-          exposureScore: 0,
-          orbRows: 0,
-          orbCols: 0,
-          orbBytes: Uint8List(0),
-          histogram: Uint8List(256),
-          hasFace: false,
-          faceX: 0,
-          faceY: 0,
-          faceW: 0,
-          faceH: 0,
-          faceSharpness: 0,
-          eyeOpenAvg: -1,
-          eyesClosed: false,
-          bothEyesDetected: false,
-          eyeSharpness: -1,
-        );
+        return _emptyOutput(key);
       }
 
       // Resize for analysis (speed & accuracy)
@@ -388,26 +373,7 @@ class AnalyzerIsolate {
         eyeSharpness: eyeSharpness,
       );
     } catch (_) {
-      return AnalyzeOutput(
-        key: key,
-        pHashHex: '0000000000000000',
-        sharpness: 0,
-        exposureScore: 0,
-        orbRows: 0,
-        orbCols: 0,
-        orbBytes: Uint8List(0),
-        histogram: Uint8List(256),
-        hasFace: false,
-        faceX: 0,
-        faceY: 0,
-        faceW: 0,
-        faceH: 0,
-        faceSharpness: 0,
-        eyeOpenAvg: -1,
-        eyesClosed: false,
-        bothEyesDetected: false,
-        eyeSharpness: -1,
-      );
+      return _emptyOutput(key);
     } finally {
       mat?.dispose();
       work?.dispose();

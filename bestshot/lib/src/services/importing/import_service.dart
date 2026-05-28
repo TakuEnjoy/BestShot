@@ -76,16 +76,129 @@ class ImportService {
       );
       if (thumb == null || thumb.isEmpty) continue;
 
+      // EXIFの読み込み試行
+      ExifSummary? exifSummary;
+      try {
+        final file = await asset.file;
+        if (file != null) {
+          exifSummary = await _readExifSummary(file);
+        }
+      } catch (_) {}
+
+      // EXIFがない、または撮影日時が入っていない場合は AssetEntity の createDateTime をフォールバック
+      if (exifSummary == null) {
+        exifSummary = ExifSummary(
+          fNumber: null,
+          shutter: null,
+          iso: null,
+          capturedAt: asset.createDateTime,
+        );
+      } else if (exifSummary.capturedAt == null) {
+        exifSummary = ExifSummary(
+          fNumber: exifSummary.fNumber,
+          shutter: exifSummary.shutter,
+          iso: exifSummary.iso,
+          capturedAt: asset.createDateTime,
+        );
+      }
+
       out.add(
         ImportedItem(
           key: 'asset:${asset.id}',
           origin: PhotoOrigin.deviceAsset,
           displayBytes: thumb,
           assetId: asset.id,
+          exifSummary: exifSummary,
         ),
       );
       done++;
       onProgress?.call(done, assets.length);
+    }
+    return out;
+  }
+
+  static Future<List<ImportedItem>> _processDirectory(
+    String dir, {
+    required int maxCount,
+    required int thumbnailMaxEdge,
+    void Function(int done, int total)? onProgress,
+  }) async {
+    final directory = Directory(dir);
+    if (!await directory.exists()) return [];
+
+    final exts = <String>{
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.tif',
+      '.tiff',
+      '.webp',
+      '.heic',
+      '.heif',
+      '.dng',
+      '.arw',
+      '.nef',
+      '.cr2',
+      '.cr3',
+      '.raf',
+      '.rw2',
+      '.orf',
+    };
+    final rawExts = <String>{
+      '.dng',
+      '.arw',
+      '.nef',
+      '.cr2',
+      '.cr3',
+      '.raf',
+      '.rw2',
+      '.orf',
+    };
+
+    final files = <File>[];
+    await for (final entity in directory.list(
+      recursive: true,
+      followLinks: false,
+    )) {
+      if (entity is! File) continue;
+      final ext = p.extension(entity.path).toLowerCase();
+      if (!exts.contains(ext)) continue;
+      files.add(entity);
+      if (files.length >= maxCount) break;
+    }
+
+    final out = <ImportedItem>[];
+    var done = 0;
+    for (final f in files) {
+      try {
+        final ext = p.extension(f.path).toLowerCase();
+        final bytes = await f.readAsBytes();
+        final decodeSource = rawExts.contains(ext)
+            ? (_extractEmbeddedJpeg(bytes) ?? bytes)
+            : bytes;
+        final decoded = img.decodeImage(decodeSource);
+        if (decoded == null) continue;
+        final upright = img.bakeOrientation(decoded);
+
+        final resized = _resizeKeepingAspect(upright, thumbnailMaxEdge);
+        final jpg = Uint8List.fromList(img.encodeJpg(resized, quality: 85));
+        final exifSummary = await _readExifSummary(f);
+
+        out.add(
+          ImportedItem(
+            key: 'file:${f.path}',
+            origin: PhotoOrigin.filePath,
+            displayBytes: jpg,
+            filePath: f.path,
+            exifSummary: exifSummary,
+          ),
+        );
+      } catch (_) {
+        // Skip
+      } finally {
+        done++;
+        onProgress?.call(done, files.length);
+      }
     }
     return out;
   }
@@ -97,85 +210,12 @@ class ImportService {
   }) async {
     final dir = FolderPickerWindows.pickFolder();
     if (dir == null || dir.isEmpty) return [];
-
-    final directory = Directory(dir);
-    if (!await directory.exists()) return [];
-
-    final exts = <String>{
-      '.jpg',
-      '.jpeg',
-      '.png',
-      '.tif',
-      '.tiff',
-      '.webp',
-      '.heic',
-      '.heif',
-      // RAW (Windows側はサムネ抽出が難しいので、現状はスキップ扱い)
-      '.dng',
-      '.arw',
-      '.nef',
-      '.cr2',
-      '.cr3',
-      '.raf',
-      '.rw2',
-      '.orf',
-    };
-    final rawExts = <String>{
-      '.dng',
-      '.arw',
-      '.nef',
-      '.cr2',
-      '.cr3',
-      '.raf',
-      '.rw2',
-      '.orf',
-    };
-
-    final files = <File>[];
-    await for (final entity in directory.list(
-      recursive: true,
-      followLinks: false,
-    )) {
-      if (entity is! File) continue;
-      final ext = p.extension(entity.path).toLowerCase();
-      if (!exts.contains(ext)) continue;
-      files.add(entity);
-      if (files.length >= maxCount) break;
-    }
-
-    final out = <ImportedItem>[];
-    var done = 0;
-    for (final f in files) {
-      try {
-        final ext = p.extension(f.path).toLowerCase();
-        final bytes = await f.readAsBytes();
-        final decodeSource = rawExts.contains(ext)
-            ? (_extractEmbeddedJpeg(bytes) ?? bytes)
-            : bytes;
-        final decoded = img.decodeImage(decodeSource);
-        if (decoded == null) continue;
-        final upright = img.bakeOrientation(decoded);
-        final resized = _resizeKeepingAspect(upright, thumbnailMaxEdge);
-        final jpg = Uint8List.fromList(img.encodeJpg(resized, quality: 85));
-        final exifSummary = await _readExifSummary(f);
-
-        out.add(
-          ImportedItem(
-            key: 'file:${f.path}',
-            origin: PhotoOrigin.filePath,
-            displayBytes: jpg,
-            filePath: f.path,
-            exifSummary: exifSummary,
-          ),
-        );
-      } catch (_) {
-        // Skip unreadable/unsupported files and keep going.
-      } finally {
-        done++;
-        onProgress?.call(done, files.length);
-      }
-    }
-    return out;
+    return _processDirectory(
+      dir,
+      maxCount: maxCount,
+      thumbnailMaxEdge: thumbnailMaxEdge,
+      onProgress: onProgress,
+    );
   }
 
   static Future<List<ImportedItem>> pickFromFolderAndroid({
@@ -183,92 +223,14 @@ class ImportService {
     int maxCount = 200,
     void Function(int done, int total)? onProgress,
   }) async {
-    // Android 11+ (API 30+) での広範なストレージアクセス権限要求を廃止。
-    // 代わりに PhotoManager を使用したギャラリーアクセス、または
-    // SAF (Storage Access Framework) を介した限定的なディレクトリ選択を利用します。
-
     final dir = await FilePicker.platform.getDirectoryPath();
     if (dir == null || dir.isEmpty) return [];
-
-    final directory = Directory(dir);
-    if (!await directory.exists()) return [];
-
-    final exts = <String>{
-      '.jpg',
-      '.jpeg',
-      '.png',
-      '.tif',
-      '.tiff',
-      '.webp',
-      '.heic',
-      '.heif',
-      '.dng',
-      '.arw',
-      '.nef',
-      '.cr2',
-      '.cr3',
-      '.raf',
-      '.rw2',
-      '.orf',
-    };
-    final rawExts = <String>{
-      '.dng',
-      '.arw',
-      '.nef',
-      '.cr2',
-      '.cr3',
-      '.raf',
-      '.rw2',
-      '.orf',
-    };
-
-    final files = <File>[];
-    await for (final entity in directory.list(
-      recursive: true,
-      followLinks: false,
-    )) {
-      if (entity is! File) continue;
-      final ext = p.extension(entity.path).toLowerCase();
-      if (!exts.contains(ext)) continue;
-      files.add(entity);
-      if (files.length >= maxCount) break;
-    }
-
-    final out = <ImportedItem>[];
-    var done = 0;
-    for (final f in files) {
-      try {
-        final ext = p.extension(f.path).toLowerCase();
-        final bytes = await f.readAsBytes();
-        final decodeSource = rawExts.contains(ext)
-            ? (_extractEmbeddedJpeg(bytes) ?? bytes)
-            : bytes;
-        final decoded = img.decodeImage(decodeSource);
-        if (decoded == null) continue;
-        final upright = img.bakeOrientation(decoded);
-
-        final resized = _resizeKeepingAspect(upright, thumbnailMaxEdge);
-        final jpg = Uint8List.fromList(img.encodeJpg(resized, quality: 85));
-        final exifSummary = await _readExifSummary(f);
-
-        out.add(
-          ImportedItem(
-            key: 'file:${f.path}',
-            origin: PhotoOrigin.filePath,
-            displayBytes: jpg,
-            filePath: f.path,
-            exifSummary: exifSummary,
-          ),
-        );
-      } catch (_) {
-        // Skip unreadable/unsupported files and keep going.
-      } finally {
-        done++;
-        onProgress?.call(done, files.length);
-      }
-    }
-
-    return out;
+    return _processDirectory(
+      dir,
+      maxCount: maxCount,
+      thumbnailMaxEdge: thumbnailMaxEdge,
+      onProgress: onProgress,
+    );
   }
 
   static img.Image _resizeKeepingAspect(img.Image src, int maxEdge) {

@@ -11,7 +11,7 @@ class PhotoGroup {
 
   final String id;
   final List<PhotoEntry> items;
-  final String bestKey;
+  String bestKey; // Made mutable to allow changing best key from loupe preview
   final Set<String> deleteCandidateKeys;
   final bool isBurst;
 }
