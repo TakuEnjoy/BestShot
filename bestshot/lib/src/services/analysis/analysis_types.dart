@@ -34,6 +34,7 @@ class AnalyzeOutput {
     required this.eyesClosed,
     required this.bothEyesDetected,
     required this.eyeSharpness,
+    this.debugGridSharps,
   });
 
   final String key;
@@ -68,5 +69,8 @@ class AnalyzeOutput {
 
   /// Laplacian variance within eye ROIs (0..1 or absolute variance, -1 if none).
   final double eyeSharpness;
+
+  /// Grid sharpness values (4x4, 16 elements).
+  final List<double>? debugGridSharps;
 }
 

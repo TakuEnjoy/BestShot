@@ -48,6 +48,7 @@ class PhotoEntry {
     this.portraitFaceW = 0,
     this.portraitFaceH = 0,
     this.portraitFaceSharpness = 0,
+    this.debugGridSharps,
   });
 
   /// Unique key across all imported items.
@@ -111,6 +112,9 @@ class PhotoEntry {
   /// Portrait-mode: Laplacian variance within face ROI.
   final double portraitFaceSharpness;
 
+  /// Debug info: Laplacian variance for each of the 4x4 grid cells.
+  final List<double>? debugGridSharps;
+
   DateTime? get capturedAt => exif?.capturedAt;
 
   String get exifText {
@@ -157,6 +161,7 @@ class PhotoEntry {
     int? portraitFaceW,
     int? portraitFaceH,
     double? portraitFaceSharpness,
+    List<double>? debugGridSharps,
   }) {
     return PhotoEntry(
       key: key ?? this.key,
@@ -183,6 +188,7 @@ class PhotoEntry {
       portraitFaceW: portraitFaceW ?? this.portraitFaceW,
       portraitFaceH: portraitFaceH ?? this.portraitFaceH,
       portraitFaceSharpness: portraitFaceSharpness ?? this.portraitFaceSharpness,
+      debugGridSharps: debugGridSharps ?? this.debugGridSharps,
     );
   }
 }

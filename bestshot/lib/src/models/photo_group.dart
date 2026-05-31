@@ -7,6 +7,7 @@ class PhotoGroup {
     required this.bestKey,
     required this.deleteCandidateKeys,
     required this.isBurst,
+    required this.isAllBlur,
   });
 
   final String id;
@@ -14,5 +15,6 @@ class PhotoGroup {
   String bestKey; // Made mutable to allow changing best key from loupe preview
   final Set<String> deleteCandidateKeys;
   final bool isBurst;
+  final bool isAllBlur;
 }
 

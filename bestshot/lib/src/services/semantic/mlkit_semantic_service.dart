@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 import 'package:image/image.dart' as img;
+import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -78,7 +79,61 @@ class MlKitSemanticService {
       final faces = await _faceDetector.processImage(input);
       final faceScore = _faceQualityScore(faces);
 
-      return e.copyWith(semanticObjects: semantic, faceQualityScore: faceScore);
+      var updatedSharpness = e.sharpness;
+      if (objects.isNotEmpty) {
+        DetectedObject? mainObj;
+        double maxArea = 0;
+        for (final o in objects) {
+          final area = o.boundingBox.width * o.boundingBox.height;
+          if (area > maxArea) {
+            maxArea = area.toDouble();
+            mainObj = o;
+          }
+        }
+
+        if (mainObj != null) {
+          final mlImage = img.decodeImage(resizedBytes);
+          if (mlImage != null) {
+            final mlW = mlImage.width;
+            final mlH = mlImage.height;
+
+            cv.Mat? mat;
+            try {
+              if (e.filePath != null && await File(e.filePath!).exists()) {
+                mat = cv.imread(e.filePath!);
+              } else {
+                mat = cv.imdecode(e.displayBytes, cv.IMREAD_COLOR);
+              }
+
+              if (!mat.isEmpty && mlW > 0 && mlH > 0) {
+                final origW = mat.cols;
+                final origH = mat.rows;
+                final bb = mainObj.boundingBox;
+
+                final rx = (bb.left / mlW * origW).round().clamp(0, origW - 1);
+                final ry = (bb.top / mlH * origH).round().clamp(0, origH - 1);
+                final rw = (bb.width / mlW * origW).round().clamp(1, origW - rx);
+                final rh = (bb.height / mlH * origH).round().clamp(1, origH - ry);
+
+                final objSharpness = _calcLaplacianVarianceInRoi(mat, cv.Rect(rx, ry, rw, rh));
+                if (objSharpness > 0) {
+                  updatedSharpness = objSharpness;
+                }
+              }
+            } catch (_) {
+              // Keep original sharpness
+            } finally {
+              mat?.dispose();
+            }
+          }
+        }
+      }
+
+      return e.copyWith(
+        semanticObjects: semantic,
+        faceQualityScore: faceScore,
+        sharpness: updatedSharpness,
+      );
     } catch (_) {
       return e;
     }
@@ -140,5 +195,37 @@ class MlKitSemanticService {
       if (avg > best) best = avg;
     }
     return best.clamp(0.0, 1.0);
+  }
+
+  static double _calcLaplacianVarianceInRoi(cv.Mat bgr, cv.Rect roi) {
+    cv.Mat? sub;
+    cv.Mat? gray;
+    cv.Mat? lap;
+    try {
+      if (bgr.isEmpty) return 0;
+      final x1 = roi.x.clamp(0, bgr.cols - 1);
+      final y1 = roi.y.clamp(0, bgr.rows - 1);
+      final x2 = (roi.x + roi.width).clamp(0, bgr.cols);
+      final y2 = (roi.y + roi.height).clamp(0, bgr.rows);
+      final w = x2 - x1;
+      final h = y2 - y1;
+
+      if (w <= 0 || h <= 0) return 0;
+      final safe = cv.Rect(x1, y1, w, h);
+      sub = bgr.region(safe);
+      if (sub.isEmpty) return 0;
+
+      gray = cv.cvtColor(sub, cv.COLOR_BGR2GRAY);
+      lap = cv.laplacian(gray, cv.MatType.CV_64F);
+      final (_, stddev) = cv.meanStdDev(lap);
+      final v = stddev.val1 * stddev.val1;
+      return v.isFinite ? v : 0;
+    } catch (_) {
+      return 0;
+    } finally {
+      sub?.dispose();
+      gray?.dispose();
+      lap?.dispose();
+    }
   }
 }

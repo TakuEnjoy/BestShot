@@ -2,13 +2,10 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:exif/exif.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
-import 'package:photo_manager/photo_manager.dart';
 
 import '../../models/photo_entry.dart';
-import '../../platform/folder_picker_windows.dart';
 import '../analysis/analysis_types.dart';
 
 class ImportedItem {
@@ -47,115 +44,34 @@ class ExifSummary {
 }
 
 class ImportService {
-  static Future<List<ImportedItem>> pickFromDeviceGallery({
-    int thumbnailSize = 512,
-    int maxCount = 200,
-    void Function(int done, int total)? onProgress,
-  }) async {
-    final permission = await PhotoManager.requestPermissionExtend();
-    if (!permission.isAuth) {
-      return [];
+
+
+  static img.Image _resizeKeepingAspect(img.Image src, int maxEdge) {
+    final w = src.width;
+    final h = src.height;
+    if (w <= maxEdge && h <= maxEdge) return src;
+    if (w >= h) {
+      final newW = maxEdge;
+      final newH = (h * (maxEdge / w)).round();
+      return img.copyResize(src, width: newW, height: newH);
+    } else {
+      final newH = maxEdge;
+      final newW = (w * (maxEdge / h)).round();
+      return img.copyResize(src, width: newW, height: newH);
     }
-
-    final paths = await PhotoManager.getAssetPathList(
-      type: RequestType.image,
-      onlyAll: true,
-    );
-    if (paths.isEmpty) return [];
-
-    final path = paths.first;
-    final count = minInt(await path.assetCountAsync, maxCount);
-    final assets = await path.getAssetListRange(start: 0, end: count);
-
-    final out = <ImportedItem>[];
-    var done = 0;
-    for (final asset in assets) {
-      final thumb = await asset.thumbnailDataWithSize(
-        ThumbnailSize(thumbnailSize, thumbnailSize),
-        quality: 85,
-      );
-      if (thumb == null || thumb.isEmpty) continue;
-
-      // EXIFの読み込み試行
-      ExifSummary? exifSummary;
-      try {
-        final file = await asset.file;
-        if (file != null) {
-          exifSummary = await _readExifSummary(file);
-        }
-      } catch (_) {}
-
-      // EXIFがない、または撮影日時が入っていない場合は AssetEntity の createDateTime をフォールバック
-      if (exifSummary == null) {
-        exifSummary = ExifSummary(
-          fNumber: null,
-          shutter: null,
-          iso: null,
-          capturedAt: asset.createDateTime,
-        );
-      } else if (exifSummary.capturedAt == null) {
-        exifSummary = ExifSummary(
-          fNumber: exifSummary.fNumber,
-          shutter: exifSummary.shutter,
-          iso: exifSummary.iso,
-          capturedAt: asset.createDateTime,
-        );
-      }
-
-      out.add(
-        ImportedItem(
-          key: 'asset:${asset.id}',
-          origin: PhotoOrigin.deviceAsset,
-          displayBytes: thumb,
-          assetId: asset.id,
-          exifSummary: exifSummary,
-        ),
-      );
-      done++;
-      onProgress?.call(done, assets.length);
-    }
-    return out;
   }
 
-  static Future<List<ImportedItem>> _processDirectory(
-    String dir, {
-    required int maxCount,
-    required int thumbnailMaxEdge,
-    void Function(int done, int total)? onProgress,
-  }) async {
+  static Future<FolderScanResult?> scanFolder(String dir) async {
     final directory = Directory(dir);
-    if (!await directory.exists()) return [];
+    if (!await directory.exists()) return null;
 
     final exts = <String>{
-      '.jpg',
-      '.jpeg',
-      '.png',
-      '.tif',
-      '.tiff',
-      '.webp',
-      '.heic',
-      '.heif',
-      '.dng',
-      '.arw',
-      '.nef',
-      '.cr2',
-      '.cr3',
-      '.raf',
-      '.rw2',
-      '.orf',
-    };
-    final rawExts = <String>{
-      '.dng',
-      '.arw',
-      '.nef',
-      '.cr2',
-      '.cr3',
-      '.raf',
-      '.rw2',
-      '.orf',
+      '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.heic', '.heif',
+      '.dng', '.arw', '.nef', '.cr2', '.cr3', '.raf', '.rw2', '.orf',
     };
 
-    final files = <File>[];
+    final filesByDate = <DateTime, List<File>>{};
+
     await for (final entity in directory.list(
       recursive: true,
       followLinks: false,
@@ -163,9 +79,35 @@ class ImportService {
       if (entity is! File) continue;
       final ext = p.extension(entity.path).toLowerCase();
       if (!exts.contains(ext)) continue;
-      files.add(entity);
-      if (files.length >= maxCount) break;
+
+      try {
+        final stat = await entity.stat();
+        final modDate = stat.modified;
+        final dateOnly = DateTime(modDate.year, modDate.month, modDate.day);
+
+        if (!filesByDate.containsKey(dateOnly)) {
+          filesByDate[dateOnly] = [];
+        }
+        filesByDate[dateOnly]!.add(entity);
+      } catch (_) {
+        // Skip files that fail to stat
+      }
     }
+
+    return FolderScanResult(
+      folderPath: dir,
+      filesByDate: filesByDate,
+    );
+  }
+
+  static Future<List<ImportedItem>> importSelectedFiles(
+    List<File> files, {
+    required int thumbnailMaxEdge,
+    void Function(int done, int total)? onProgress,
+  }) async {
+    final rawExts = <String>{
+      '.dng', '.arw', '.nef', '.cr2', '.cr3', '.raf', '.rw2', '.orf',
+    };
 
     final out = <ImportedItem>[];
     var done = 0;
@@ -202,51 +144,16 @@ class ImportService {
     }
     return out;
   }
+}
 
-  static Future<List<ImportedItem>> pickFromFolderWindows({
-    int thumbnailMaxEdge = 512,
-    int maxCount = 200,
-    void Function(int done, int total)? onProgress,
-  }) async {
-    final dir = FolderPickerWindows.pickFolder();
-    if (dir == null || dir.isEmpty) return [];
-    return _processDirectory(
-      dir,
-      maxCount: maxCount,
-      thumbnailMaxEdge: thumbnailMaxEdge,
-      onProgress: onProgress,
-    );
-  }
+class FolderScanResult {
+  FolderScanResult({
+    required this.folderPath,
+    required this.filesByDate,
+  });
 
-  static Future<List<ImportedItem>> pickFromFolderAndroid({
-    int thumbnailMaxEdge = 512,
-    int maxCount = 200,
-    void Function(int done, int total)? onProgress,
-  }) async {
-    final dir = await FilePicker.platform.getDirectoryPath();
-    if (dir == null || dir.isEmpty) return [];
-    return _processDirectory(
-      dir,
-      maxCount: maxCount,
-      thumbnailMaxEdge: thumbnailMaxEdge,
-      onProgress: onProgress,
-    );
-  }
-
-  static img.Image _resizeKeepingAspect(img.Image src, int maxEdge) {
-    final w = src.width;
-    final h = src.height;
-    if (w <= maxEdge && h <= maxEdge) return src;
-    if (w >= h) {
-      final newW = maxEdge;
-      final newH = (h * (maxEdge / w)).round();
-      return img.copyResize(src, width: newW, height: newH);
-    } else {
-      final newH = maxEdge;
-      final newW = (w * (maxEdge / h)).round();
-      return img.copyResize(src, width: newW, height: newH);
-    }
-  }
+  final String folderPath;
+  final Map<DateTime, List<File>> filesByDate;
 }
 
 Uint8List? _extractEmbeddedJpeg(Uint8List bytes) {

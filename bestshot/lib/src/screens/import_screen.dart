@@ -9,6 +9,8 @@ import '../services/analysis/analysis_types.dart';
 import '../services/grouping/grouping.dart';
 import '../services/importing/import_service.dart';
 import '../services/semantic/mlkit_semantic_service.dart';
+import 'package:file_picker/file_picker.dart';
+import '../platform/folder_picker_windows.dart';
 import 'groups_screen.dart';
 
 class ImportScreen extends StatefulWidget {
@@ -136,6 +138,7 @@ class _ImportScreenState extends State<ImportScreen> {
             portraitFaceW: a.faceW,
             portraitFaceH: a.faceH,
             portraitFaceSharpness: a.faceSharpness,
+            debugGridSharps: a.debugGridSharps,
           ),
         );
       }
@@ -197,6 +200,275 @@ class _ImportScreenState extends State<ImportScreen> {
         _progress = null;
       });
     }
+  }
+
+  Future<void> _runFolderImportAndAnalyze(bool isAndroidSAF) async {
+    if (_busy) return;
+
+    // フォルダパスの取得
+    String? dir;
+    try {
+      if (isAndroidSAF) {
+        dir = await FilePicker.platform.getDirectoryPath();
+      } else {
+        dir = FolderPickerWindows.pickFolder();
+      }
+    } catch (e) {
+      setState(() {
+        _status = 'フォルダ選択エラー: $e';
+      });
+      return;
+    }
+
+    if (dir == null || dir.isEmpty) return;
+
+    setState(() {
+      _busy = true;
+      _stage = 'スキャン';
+      _status = 'フォルダ内の写真を高速スキャン中...';
+      _progress = null;
+    });
+
+    try {
+      final scanResult = await ImportService.scanFolder(dir);
+      if (!mounted) return;
+
+      if (scanResult == null || scanResult.filesByDate.isEmpty) {
+        setState(() {
+          _busy = false;
+          _status = '対象となる画像ファイルが見つかりませんでした';
+          _stage = '';
+        });
+        return;
+      }
+
+      // 日付選択ダイアログの表示
+      final selectedFiles = await _showDateSelectionDialog(scanResult);
+      if (selectedFiles == null || selectedFiles.isEmpty) {
+        setState(() {
+          _busy = false;
+          _status = 'インポートがキャンセルされました';
+          _stage = '';
+        });
+        return;
+      }
+
+      // 本解析処理の実行
+      await _runImportAndAnalyze(
+        (onProgress) => ImportService.importSelectedFiles(
+          selectedFiles,
+          thumbnailMaxEdge: 512,
+          onProgress: onProgress,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _status = 'スキャンエラー: $e';
+        _stage = '';
+      });
+    }
+  }
+
+  Future<List<File>?> _showDateSelectionDialog(FolderScanResult scanResult) async {
+    final filesByDate = scanResult.filesByDate;
+    final allDates = filesByDate.keys.toList()..sort((a, b) => b.compareTo(a)); // 初期降順
+
+    final selectedDates = <DateTime>{...allDates}; // デフォルト全選択
+    bool descending = true;
+
+    return showDialog<List<File>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            // 表示用のソート済み日付リスト
+            final sortedDates = allDates.toList()
+              ..sort((a, b) => descending ? b.compareTo(a) : a.compareTo(b));
+
+            // 現在選択されている写真の合計枚数
+            int totalSelected = 0;
+            final selectedFilesList = <File>[];
+            for (final d in selectedDates) {
+              final files = filesByDate[d];
+              if (files != null) {
+                totalSelected += files.length;
+                selectedFilesList.addAll(files);
+              }
+            }
+
+            final isOverLimit = totalSelected > _maxCount;
+
+            return AlertDialog(
+              title: const Text('撮影日（日付）で絞り込み'),
+              content: SizedBox(
+                width: 480,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'フォルダ: ${scanResult.folderPath}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 12),
+                    // クイックコントロール行
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            TextButton(
+                              onPressed: () {
+                                setState(() {
+                                  selectedDates.addAll(allDates);
+                                });
+                              },
+                              child: const Text('すべて選択'),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                setState(() {
+                                  selectedDates.clear();
+                                });
+                              },
+                              child: const Text('クリア'),
+                            ),
+                          ],
+                        ),
+                        // 期間で選択
+                        TextButton.icon(
+                          onPressed: () async {
+                            final range = await showDateRangePicker(
+                              context: context,
+                              firstDate: DateTime(2000),
+                              lastDate: DateTime.now().add(const Duration(days: 365)),
+                            );
+                            if (range != null) {
+                              setState(() {
+                                selectedDates.clear();
+                                for (final d in allDates) {
+                                  if (d.isAfter(range.start.subtract(const Duration(seconds: 1))) &&
+                                      d.isBefore(range.end.add(const Duration(days: 1)))) {
+                                    selectedDates.add(d);
+                                  }
+                                }
+                              });
+                            }
+                          },
+                          icon: const Icon(Icons.date_range, size: 16),
+                          label: const Text('期間で選択'),
+                        ),
+                        // ソートトグル
+                        IconButton(
+                          tooltip: descending ? '新しい順' : '古い順',
+                          icon: Icon(descending ? Icons.arrow_downward : Icons.arrow_upward),
+                          onPressed: () {
+                            setState(() {
+                              descending = !descending;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                    const Divider(),
+                    // 日付リスト
+                    Flexible(
+                      child: Container(
+                        height: 240,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.black12),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: sortedDates.length,
+                          itemBuilder: (context, index) {
+                            final date = sortedDates[index];
+                            final count = filesByDate[date]?.length ?? 0;
+                            final dateStr = '${date.year}/${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
+                            final isChecked = selectedDates.contains(date);
+
+                            return CheckboxListTile(
+                              title: Text('$dateStr ($count 枚)'),
+                              value: isChecked,
+                              dense: true,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              onChanged: (val) {
+                                setState(() {
+                                  if (val == true) {
+                                    selectedDates.add(date);
+                                  } else {
+                                    selectedDates.remove(date);
+                                  }
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    // 選択枚数表示と警告
+                    Text(
+                      '選択中: $totalSelected 枚',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        color: isOverLimit ? Colors.orange : null,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    if (isOverLimit)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          '※ 最大インポート件数（$_maxCount枚）を超えています。上位 $_maxCount枚のみインポートされます。',
+                          style: TextStyle(
+                            color: Colors.orange.shade800,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(null),
+                  child: const Text('キャンセル'),
+                ),
+                FilledButton(
+                  onPressed: selectedDates.isEmpty
+                      ? null
+                      : () {
+                          final sortedSelectedDates = selectedDates.toList()
+                            ..sort((a, b) => b.compareTo(a));
+
+                          final filesToImport = <File>[];
+                          for (final d in sortedSelectedDates) {
+                            final files = filesByDate[d];
+                            if (files != null) {
+                              filesToImport.addAll(files);
+                            }
+                          }
+
+                          final finalFiles = filesToImport.length > _maxCount
+                              ? filesToImport.sublist(0, _maxCount)
+                              : filesToImport;
+
+                          Navigator.of(context).pop(finalFiles);
+                        },
+                  child: const Text('選択してインポート'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -356,44 +628,18 @@ class _ImportScreenState extends State<ImportScreen> {
                   FilledButton.icon(
                     onPressed: _busy
                         ? null
-                        : () => _runImportAndAnalyze(
-                              (onProgress) => ImportService.pickFromFolderWindows(
-                                maxCount: _maxCount,
-                                onProgress: onProgress,
-                              ),
-                            ),
+                        : () => _runFolderImportAndAnalyze(false),
                     icon: const Icon(Icons.folder_open),
                     label: const Text('フォルダからインポート（Windows）'),
                   )
-                else ...[
+                else
                   FilledButton.icon(
                     onPressed: _busy
                         ? null
-                        : () => _runImportAndAnalyze(
-                              (onProgress) => ImportService.pickFromDeviceGallery(
-                                maxCount: _maxCount,
-                                onProgress: onProgress,
-                              ),
-                            ),
-                    icon: const Icon(Icons.photo_library),
-                    label: const Text('写真を選択（Android/iOSギャラリー）'),
+                        : () => _runFolderImportAndAnalyze(true),
+                    icon: const Icon(Icons.folder_open),
+                    label: const Text('フォルダからインポート（モバイル）'),
                   ),
-                  if (isAndroid) ...[
-                    const SizedBox(height: 12),
-                    FilledButton.icon(
-                      onPressed: _busy
-                          ? null
-                          : () => _runImportAndAnalyze(
-                                (onProgress) => ImportService.pickFromFolderAndroid(
-                                  maxCount: _maxCount,
-                                  onProgress: onProgress,
-                                ),
-                              ),
-                      icon: const Icon(Icons.folder_open),
-                      label: const Text('フォルダからインポート（Android SAF）'),
-                    ),
-                  ],
-                ],
                 const SizedBox(height: 12),
                 if (_busy && _stage.isNotEmpty)
                   Text(

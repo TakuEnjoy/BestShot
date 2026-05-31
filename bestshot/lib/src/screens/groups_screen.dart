@@ -1,6 +1,9 @@
-import 'dart:typed_data';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/photo_entry.dart';
 import '../models/photo_group.dart';
@@ -28,9 +31,24 @@ class _GroupsScreenState extends State<GroupsScreen> {
   bool _deleting = false;
   final List<String> _loupeSelection = [];
 
+  // Keyboard focus management
+  late final FocusNode _focusNode;
+  late final ScrollController _scrollController;
+  int _keyboardGroupIndex = 0;
+  String? _keyboardPhotoKey;
+  int _keyboardPortraitIndex = 0;
+
   @override
   void initState() {
     super.initState();
+    _focusNode = FocusNode();
+    _scrollController = ScrollController();
+
+    // Request focus after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusNode.requestFocus();
+    });
+
     _entryByKey = {
       for (final g in widget.groups)
         for (final e in g.items) e.key: e,
@@ -38,9 +56,107 @@ class _GroupsScreenState extends State<GroupsScreen> {
     _selectedForDelete = {
       for (final g in widget.groups) ...g.deleteCandidateKeys,
     };
+
+    // Initialize keyboard photo focus to the first bestKey
+    if (widget.groups.isNotEmpty) {
+      _keyboardPhotoKey = widget.groups.first.bestKey;
+    }
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   int get _selectedCount => _selectedForDelete.length;
+
+  Future<void> _exportBestShots() async {
+    final selectedDirectory = await FilePicker.platform.getDirectoryPath();
+    if (selectedDirectory == null) return; // Cancelled
+
+    setState(() {
+      _deleting = true;
+    });
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return const PopScope(
+          canPop: false,
+          child: AlertDialog(
+            content: Row(
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(width: 20),
+                Text("ベストショットをエクスポート中..."),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    try {
+      int count = 0;
+      for (final group in widget.groups) {
+        if (group.items.isEmpty) continue;
+        final bestItem = group.items.firstWhere(
+          (item) => item.key == group.bestKey,
+          orElse: () => group.items.first,
+        );
+
+        final sourcePath = bestItem.filePath;
+        if (sourcePath == null) continue;
+        final file = File(sourcePath);
+        if (await file.exists()) {
+          final filename = p.basename(sourcePath);
+          final destPath = p.join(selectedDirectory, filename);
+
+          var finalDestPath = destPath;
+          var suffix = 1;
+          final nameWithoutExt = p.basenameWithoutExtension(sourcePath);
+          final ext = p.extension(sourcePath);
+          while (await File(finalDestPath).exists()) {
+            finalDestPath = p.join(selectedDirectory, '${nameWithoutExt}_$suffix$ext');
+            suffix++;
+          }
+
+          await file.copy(finalDestPath);
+          count++;
+        }
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop(); // Close dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$count 枚のベストショットをエクスポートしました。'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop(); // Close dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('エクスポート中にエラーが発生しました: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _deleting = false;
+        });
+      }
+    }
+  }
 
   Future<void> _reviewAndDelete() async {
     if (_selectedForDelete.isEmpty || _deleting) return;
@@ -81,6 +197,153 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
+  void _scrollToActiveGroup(bool isPortrait) {
+    if (!_scrollController.hasClients) return;
+    if (isPortrait) {
+      final targetOffset = _keyboardPortraitIndex * 130.0;
+      final currentOffset = _scrollController.offset;
+      final viewHeight = MediaQuery.of(context).size.height;
+      if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 200) {
+        _scrollController.animateTo(
+          targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeInOut,
+        );
+      }
+    } else {
+      final targetOffset = _keyboardGroupIndex * 220.0;
+      final currentOffset = _scrollController.offset;
+      final viewHeight = MediaQuery.of(context).size.height;
+      if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 300) {
+        _scrollController.animateTo(
+          targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeInOut,
+        );
+      }
+    }
+  }
+
+  KeyEventResult _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    final key = event.logicalKey;
+    final isPortrait = widget.detectionMode == DetectionMode.portrait;
+    final portraitItems = isPortrait ? _entryByKey.values.toList() : const <PhotoEntry>[];
+    
+    if (isPortrait) {
+      portraitItems.sort((a, b) {
+        final fa = a.hasPortraitFace ? 0 : 1;
+        final fb = b.hasPortraitFace ? 0 : 1;
+        final faceCmp = fa.compareTo(fb);
+        if (faceCmp != 0) return faceCmp;
+        final ta = a.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final tb = b.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return ta.compareTo(tb);
+      });
+    }
+
+    if (key == LogicalKeyboardKey.arrowDown) {
+      setState(() {
+        if (isPortrait) {
+          if (portraitItems.isNotEmpty && _keyboardPortraitIndex < portraitItems.length - 1) {
+            _keyboardPortraitIndex++;
+            _scrollToActiveGroup(true);
+          }
+        } else {
+          if (widget.groups.isNotEmpty && _keyboardGroupIndex < widget.groups.length - 1) {
+            _keyboardGroupIndex++;
+            final g = widget.groups[_keyboardGroupIndex];
+            if (g.items.isNotEmpty) {
+              _keyboardPhotoKey = g.bestKey;
+            }
+            _scrollToActiveGroup(false);
+          }
+        }
+      });
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.arrowUp) {
+      setState(() {
+        if (isPortrait) {
+          if (_keyboardPortraitIndex > 0) {
+            _keyboardPortraitIndex--;
+            _scrollToActiveGroup(true);
+          }
+        } else {
+          if (_keyboardGroupIndex > 0) {
+            _keyboardGroupIndex--;
+            final g = widget.groups[_keyboardGroupIndex];
+            if (g.items.isNotEmpty) {
+              _keyboardPhotoKey = g.bestKey;
+            }
+            _scrollToActiveGroup(false);
+          }
+        }
+      });
+      return KeyEventResult.handled;
+    }
+
+    if (!isPortrait && widget.groups.isNotEmpty) {
+      final g = widget.groups[_keyboardGroupIndex];
+      final items = g.items;
+      final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
+
+      if (key == LogicalKeyboardKey.arrowRight) {
+        if (currentIndex != -1 && currentIndex < items.length - 1) {
+          setState(() {
+            _keyboardPhotoKey = items[currentIndex + 1].key;
+          });
+        }
+        return KeyEventResult.handled;
+      }
+
+      if (key == LogicalKeyboardKey.arrowLeft) {
+        if (currentIndex > 0) {
+          setState(() {
+            _keyboardPhotoKey = items[currentIndex - 1].key;
+          });
+        }
+        return KeyEventResult.handled;
+      }
+
+      if (key == LogicalKeyboardKey.keyB ||
+          key == LogicalKeyboardKey.enter ||
+          key == LogicalKeyboardKey.numpadEnter) {
+        if (_keyboardPhotoKey != null) {
+          setState(() {
+            g.bestKey = _keyboardPhotoKey!;
+          });
+        }
+        return KeyEventResult.handled;
+      }
+    }
+
+    if (key == LogicalKeyboardKey.space) {
+      final targetKey = isPortrait
+          ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
+          : _keyboardPhotoKey;
+      if (targetKey != null) {
+        setState(() {
+          if (_selectedForDelete.contains(targetKey)) {
+            _selectedForDelete.remove(targetKey);
+          } else {
+            _selectedForDelete.add(targetKey);
+          }
+        });
+      }
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.delete) {
+      _reviewAndDelete();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -99,286 +362,329 @@ class _GroupsScreenState extends State<GroupsScreen> {
       });
     }
 
-    return Scaffold(
-      backgroundColor: colorScheme.surfaceContainer.withOpacity(0.3),
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('整理・比較'),
-            Text(
-              isPortrait
-                  ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.hasPortraitFace).length} / 削除候補: $_selectedCount'
-                  : 'グループ: ${widget.groups.length} / 削除候補: $_selectedCount',
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.normal,
+    return Focus(
+      focusNode: _focusNode,
+      autofocus: true,
+      onKeyEvent: (node, event) => _handleKeyEvent(event),
+      child: Scaffold(
+        backgroundColor: colorScheme.surfaceContainer.withOpacity(0.3),
+        appBar: AppBar(
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('整理・比較'),
+              Text(
+                isPortrait
+                    ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.hasPortraitFace).length} / 削除候補: $_selectedCount'
+                    : 'グループ: ${widget.groups.length} / 削除候補: $_selectedCount',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.normal,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            if (!isPortrait)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: FilledButton.icon(
+                  onPressed: _deleting ? null : _exportBestShots,
+                  icon: const Icon(Icons.folder_shared, size: 20),
+                  label: const Text('Bestのみ保存'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: colorScheme.primaryContainer,
+                    foregroundColor: colorScheme.onPrimaryContainer,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                  ),
+                ),
+              ),
+            IconButton(
+              tooltip: 'ルーペ選択を解除',
+              onPressed: _loupeSelection.isEmpty
+                  ? null
+                  : () => setState(_loupeSelection.clear),
+              icon: const Icon(Icons.deselect),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: FilledButton.icon(
+                onPressed: _loupeSelection.isNotEmpty
+                    ? () {
+                        final items = _loupeSelection
+                            .map((k) => _entryByKey[k])
+                            .whereType<PhotoEntry>()
+                            .toList();
+                        if (items.isEmpty) return;
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => LoupeScreen(
+                              items: items,
+                              scores: _loupeSelection
+                                  .map((k) => _entryByKey[k])
+                                  .whereType<PhotoEntry>()
+                                  .map((e) => e.sharpness)
+                                  .toList(),
+                              isBests: _loupeSelection
+                                  .map((k) => _entryByKey[k])
+                                  .whereType<PhotoEntry>()
+                                  .map((e) {
+                                    for (final g in widget.groups) {
+                                      if (g.items.any((item) => item.key == e.key)) {
+                                        return e.key == g.bestKey;
+                                      }
+                                    }
+                                    return false;
+                                  })
+                                  .toList(),
+                              initialSelectedForDelete: _selectedForDelete,
+                              onToggleDelete: (key, val) {
+                                setState(() {
+                                  if (val) {
+                                    _selectedForDelete.add(key);
+                                  } else {
+                                    _selectedForDelete.remove(key);
+                                  }
+                                });
+                              },
+                              onSetBest: (key) {
+                                setState(() {
+                                  for (final g in widget.groups) {
+                                    if (g.items.any((item) => item.key == key)) {
+                                      g.bestKey = key;
+                                      break;
+                                    }
+                                  }
+                                });
+                              },
+                            ),
+                          ),
+                        );
+                      }
+                    : null,
+                icon: const Icon(Icons.zoom_in, size: 20),
+                label: Text('ルーペ (${_loupeSelection.length}/4)'),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: FilledButton.icon(
+                onPressed: (_selectedForDelete.isEmpty || _deleting)
+                    ? null
+                    : _reviewAndDelete,
+                icon: const Icon(Icons.delete_outline, size: 20),
+                label: const Text('ゴミ箱へ'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: colorScheme.error,
+                  foregroundColor: colorScheme.onError,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                ),
               ),
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: 'ルーペ選択を解除',
-            onPressed: _loupeSelection.isEmpty
-                ? null
-                : () => setState(_loupeSelection.clear),
-            icon: const Icon(Icons.deselect),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: FilledButton.icon(
-              onPressed: _loupeSelection.isNotEmpty
-                  ? () {
-                      final items = _loupeSelection
-                          .map((k) => _entryByKey[k])
-                          .whereType<PhotoEntry>()
-                          .toList();
-                      if (items.isEmpty) return;
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => LoupeScreen(
-                            items: items,
-                            scores: _loupeSelection
-                                .map((k) => _entryByKey[k])
-                                .whereType<PhotoEntry>()
-                                .map((e) => e.sharpness)
-                                .toList(),
-                            isBests: _loupeSelection
-                                .map((k) => _entryByKey[k])
-                                .whereType<PhotoEntry>()
-                                .map((e) {
-                                  for (final g in widget.groups) {
-                                    if (g.items.any((item) => item.key == e.key)) {
-                                      return e.key == g.bestKey;
-                                    }
-                                  }
-                                  return false;
-                                })
-                                .toList(),
-                            initialSelectedForDelete: _selectedForDelete,
-                            onToggleDelete: (key, val) {
-                              setState(() {
-                                if (val) {
-                                  _selectedForDelete.add(key);
-                                } else {
-                                  _selectedForDelete.remove(key);
-                                }
-                              });
-                            },
-                            onSetBest: (key) {
-                              setState(() {
-                                for (final g in widget.groups) {
-                                  if (g.items.any((item) => item.key == key)) {
-                                    g.bestKey = key;
-                                    break;
-                                  }
-                                }
-                              });
-                            },
-                          ),
-                        ),
-                      );
-                    }
-                  : null,
-              icon: const Icon(Icons.zoom_in, size: 20),
-              label: Text('ルーペ (${_loupeSelection.length}/4)'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: FilledButton.icon(
-              onPressed: (_selectedForDelete.isEmpty || _deleting)
-                  ? null
-                  : _reviewAndDelete,
-              icon: const Icon(Icons.delete_outline, size: 20),
-              label: const Text('ゴミ箱へ'),
-              style: FilledButton.styleFrom(
-                backgroundColor: colorScheme.error,
-                foregroundColor: colorScheme.onError,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: isPortrait
-          ? ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              itemCount: portraitItems.length,
-              itemBuilder: (context, index) {
-                final e = portraitItems[index];
-                final t = e.capturedAt;
-                final timeStr = t == null
-                    ? ''
-                    : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
+        body: isPortrait
+            ? ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                itemCount: portraitItems.length,
+                itemBuilder: (context, index) {
+                  final e = portraitItems[index];
+                  final t = e.capturedAt;
+                  final timeStr = t == null
+                      ? ''
+                      : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
 
-                final eyeText = e.portraitBothEyesDetected
-                    ? '目閉じなし'
-                    : (e.portraitEyesClosed ? '目閉じ' : '');
+                  final eyeText = e.portraitBothEyesDetected
+                      ? '目閉じなし'
+                      : (e.portraitEyesClosed ? '目閉じ' : '');
 
-                final loupeSelected = _loupeSelection.contains(e.key);
+                  final loupeSelected = _loupeSelection.contains(e.key);
+                  final isKeyboardFocused = index == _keyboardPortraitIndex;
 
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: InkWell(
-                    onTap: () {
-                      setState(() {
-                        if (loupeSelected) {
-                          _loupeSelection.remove(e.key);
-                        } else {
-                          if (_loupeSelection.length >= 4) {
-                            _loupeSelection.removeAt(0);
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: InkWell(
+                      onTap: () {
+                        setState(() {
+                          _keyboardPortraitIndex = index;
+                          if (loupeSelected) {
+                            _loupeSelection.remove(e.key);
+                          } else {
+                            if (_loupeSelection.length >= 4) {
+                              _loupeSelection.removeAt(0);
+                            }
+                            _loupeSelection.add(e.key);
                           }
-                          _loupeSelection.add(e.key);
-                        }
-                      });
-                    },
-                    borderRadius: BorderRadius.circular(16),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surface,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: loupeSelected
-                              ? Theme.of(context).colorScheme.primary
-                              : Theme.of(context).dividerColor.withOpacity(0.12),
-                          width: loupeSelected ? 2 : 1,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          ClipRRect(
-                            borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
-                            child: Stack(
-                              children: [
-                                Image.memory(
-                                  e.displayBytes,
-                                  width: 120,
-                                  height: 120,
-                                  fit: BoxFit.cover,
-                                  gaplessPlayback: true,
-                                ),
-                                if (loupeSelected)
-                                  Positioned(
-                                    top: 8,
-                                    left: 8,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(6),
-                                      decoration: BoxDecoration(
-                                        color: Theme.of(context).colorScheme.primary,
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Text(
-                                        '${_loupeSelection.indexOf(e.key) + 1}',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
+                        });
+                      },
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surface,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: isKeyboardFocused
+                                ? Theme.of(context).colorScheme.primary
+                                : (loupeSelected
+                                    ? Theme.of(context).colorScheme.primary.withOpacity(0.5)
+                                    : Theme.of(context).dividerColor.withOpacity(0.12)),
+                            width: isKeyboardFocused ? 2.5 : (loupeSelected ? 2 : 1),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                          boxShadow: isKeyboardFocused
+                              ? [
+                                  BoxShadow(
+                                    color: Theme.of(context).colorScheme.primary.withOpacity(0.25),
+                                    blurRadius: 8,
+                                    spreadRadius: 1,
+                                  )
+                                ]
+                              : null,
+                        ),
+                        child: Row(
+                          children: [
+                            ClipRRect(
+                              borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
+                              child: Stack(
                                 children: [
-                                  Text(
-                                    timeStr.isEmpty ? '（時刻不明）' : timeStr,
-                                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                          fontWeight: FontWeight.w700,
+                                  Image.memory(
+                                    e.displayBytes,
+                                    width: 120,
+                                    height: 120,
+                                    fit: BoxFit.cover,
+                                    gaplessPlayback: true,
+                                  ),
+                                  if (loupeSelected)
+                                    Positioned(
+                                      top: 8,
+                                      left: 8,
+                                      child: Container(
+                                        padding: const EdgeInsets.all(6),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context).colorScheme.primary,
+                                          shape: BoxShape.circle,
                                         ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '鮮明度: ${e.sharpness.toStringAsFixed(0)}（顔ROI: ${e.portraitFaceSharpness.toStringAsFixed(0)}）',
-                                    style: Theme.of(context).textTheme.bodySmall,
-                                  ),
-                                  if (eyeText.isNotEmpty) ...[
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      eyeText,
-                                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                            color: e.portraitBothEyesDetected
-                                                ? const Color(0xFF16A34A)
-                                                : const Color(0xFFDC2626),
+                                        child: Text(
+                                          '${_loupeSelection.indexOf(e.key) + 1}',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
                                           ),
+                                        ),
+                                      ),
                                     ),
-                                  ],
-                                  if (e.portraitEyeOpenAvg >= 0) ...[
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '目開き平均: ${e.portraitEyeOpenAvg.toStringAsFixed(2)}',
-                                      style: Theme.of(context).textTheme.bodySmall,
-                                    ),
-                                  ],
                                 ],
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                        ],
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      timeStr.isEmpty ? '（時刻不明）' : timeStr,
+                                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '鮮明度: ${e.sharpness.toStringAsFixed(0)}（顔ROI: ${e.portraitFaceSharpness.toStringAsFixed(0)}）',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                    if (eyeText.isNotEmpty) ...[
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        eyeText,
+                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                              fontWeight: FontWeight.w700,
+                                              color: e.portraitBothEyesDetected
+                                                  ? const Color(0xFF16A34A)
+                                                  : const Color(0xFFDC2626),
+                                            ),
+                                      ),
+                                    ],
+                                    if (e.portraitEyeOpenAvg >= 0) ...[
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        '目開き平均: ${e.portraitEyeOpenAvg.toStringAsFixed(2)}',
+                                        style: Theme.of(context).textTheme.bodySmall,
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                );
-              },
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              itemCount: widget.groups.length,
-              itemBuilder: (context, index) {
-                final g = widget.groups[index];
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _ExpandableGroupCard(
-                    group: g,
-                    selectedForDelete: _selectedForDelete,
-                    onToggleDelete: (key, v) {
-                      setState(() {
-                        if (v) {
-                          _selectedForDelete.add(key);
-                        } else {
-                          _selectedForDelete.remove(key);
-                        }
-                      });
-                    },
-                    loupeSelection: _loupeSelection,
-                    onToggleLoupe: (key) {
-                      setState(() {
-                        if (_loupeSelection.contains(key)) {
-                          _loupeSelection.remove(key);
-                        } else {
-                          if (_loupeSelection.length >= 4) {
-                            _loupeSelection.removeAt(0);
+                  );
+                },
+              )
+            : ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                itemCount: widget.groups.length,
+                itemBuilder: (context, index) {
+                  final g = widget.groups[index];
+                  final isKeyboardGroupFocused = index == _keyboardGroupIndex;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _ExpandableGroupCard(
+                      group: g,
+                      selectedForDelete: _selectedForDelete,
+                      onToggleDelete: (key, v) {
+                        setState(() {
+                          if (v) {
+                            _selectedForDelete.add(key);
+                          } else {
+                            _selectedForDelete.remove(key);
                           }
-                          _loupeSelection.add(key);
-                        }
-                      });
-                    },
-                    onSelectBestOnly: () {
-                      setState(() {
-                        for (final item in g.items) {
-                          if (item.key != g.bestKey) {
-                            _selectedForDelete.add(item.key);
+                        });
+                      },
+                      loupeSelection: _loupeSelection,
+                      onToggleLoupe: (key) {
+                        setState(() {
+                          if (_loupeSelection.contains(key)) {
+                            _loupeSelection.remove(key);
+                          } else {
+                            if (_loupeSelection.length >= 4) {
+                              _loupeSelection.removeAt(0);
+                            }
+                            _loupeSelection.add(key);
                           }
-                        }
-                      });
-                    },
-                  ),
-                );
-              },
-            ),
+                        });
+                      },
+                      onSelectBestOnly: () {
+                        setState(() {
+                          for (final item in g.items) {
+                            if (item.key != g.bestKey) {
+                              _selectedForDelete.add(item.key);
+                            }
+                          }
+                        });
+                      },
+                      isKeyboardGroupFocused: isKeyboardGroupFocused,
+                      keyboardPhotoKey: isKeyboardGroupFocused ? _keyboardPhotoKey : null,
+                      onPhotoTileFocused: (key) {
+                        setState(() {
+                          _keyboardGroupIndex = index;
+                          _keyboardPhotoKey = key;
+                        });
+                      },
+                    ),
+                  );
+                },
+              ),
+      ),
     );
   }
 }
@@ -391,6 +697,9 @@ class _ExpandableGroupCard extends StatelessWidget {
     required this.loupeSelection,
     required this.onToggleLoupe,
     required this.onSelectBestOnly,
+    required this.isKeyboardGroupFocused,
+    required this.keyboardPhotoKey,
+    required this.onPhotoTileFocused,
   });
 
   final PhotoGroup group;
@@ -399,6 +708,9 @@ class _ExpandableGroupCard extends StatelessWidget {
   final List<String> loupeSelection;
   final void Function(String key) onToggleLoupe;
   final VoidCallback onSelectBestOnly;
+  final bool isKeyboardGroupFocused;
+  final String? keyboardPhotoKey;
+  final ValueChanged<String> onPhotoTileFocused;
 
   @override
   Widget build(BuildContext context) {
@@ -410,9 +722,16 @@ class _ExpandableGroupCard extends StatelessWidget {
 
     return Material(
       color: theme.colorScheme.surface,
+      elevation: isKeyboardGroupFocused ? 4 : 0,
+      shadowColor: isKeyboardGroupFocused ? theme.colorScheme.primary.withOpacity(0.3) : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: theme.dividerColor.withOpacity(0.12)),
+        side: BorderSide(
+          color: isKeyboardGroupFocused
+              ? theme.colorScheme.primary
+              : theme.dividerColor.withOpacity(0.12),
+          width: isKeyboardGroupFocused ? 2 : 1,
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: Padding(
@@ -425,13 +744,17 @@ class _ExpandableGroupCard extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.secondaryContainer,
+                    color: isKeyboardGroupFocused
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.secondaryContainer,
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
                     group.id,
                     style: TextStyle(
-                      color: theme.colorScheme.onSecondaryContainer,
+                      color: isKeyboardGroupFocused
+                          ? theme.colorScheme.onPrimary
+                          : theme.colorScheme.onSecondaryContainer,
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
                     ),
@@ -459,6 +782,30 @@ class _ExpandableGroupCard extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (group.isAllBlur) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.warning_amber_rounded, size: 14, color: theme.colorScheme.error),
+                        const SizedBox(width: 4),
+                        Text(
+                          '全て手ブレ/ピンボケの可能性あり',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.error,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 if (group.isBurst) ...[
                   const Icon(Icons.bolt, size: 14, color: Colors.orange),
                   const SizedBox(width: 4),
@@ -495,9 +842,16 @@ class _ExpandableGroupCard extends StatelessWidget {
                           exifText: e.exifText,
                           isBest: e.key == group.bestKey,
                           selectedForDelete: selectedForDelete.contains(e.key),
-                          onChanged: (v) => onToggleDelete(e.key, v),
+                          onChanged: (v) {
+                            onPhotoTileFocused(e.key);
+                            onToggleDelete(e.key, v);
+                          },
                           loupeSelected: loupeSelection.contains(e.key),
-                          onToggleLoupe: () => onToggleLoupe(e.key),
+                          onToggleLoupe: () {
+                            onPhotoTileFocused(e.key);
+                            onToggleLoupe(e.key);
+                          },
+                          isKeyboardFocused: e.key == keyboardPhotoKey,
                         ),
                       ),
                       if (e != group.items.last) const SizedBox(width: 10),
@@ -753,6 +1107,7 @@ class _PhotoTile extends StatelessWidget {
     required this.onChanged,
     required this.loupeSelected,
     required this.onToggleLoupe,
+    required this.isKeyboardFocused,
   });
 
   final Uint8List bytes;
@@ -765,6 +1120,7 @@ class _PhotoTile extends StatelessWidget {
   final ValueChanged<bool> onChanged;
   final bool loupeSelected;
   final VoidCallback onToggleLoupe;
+  final bool isKeyboardFocused;
 
   @override
   Widget build(BuildContext context) {
@@ -801,26 +1157,36 @@ class _PhotoTile extends StatelessWidget {
           Positioned.fill(
             child: IgnorePointer(
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
+                duration: const Duration(milliseconds: 150),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(16),
-                  border: selectedForDelete
-                      ? Border.all(color: colorScheme.error, width: 3)
-                      : (isBest
-                          ? Border.all(color: const Color(0xFF22C55E), width: 2.5)
-                          : Border.all(
-                              color: Colors.white.withOpacity(0.1),
-                              width: 1,
-                            )),
-                  boxShadow: isBest
+                  border: isKeyboardFocused
+                      ? Border.all(color: colorScheme.primary, width: 3)
+                      : (selectedForDelete
+                          ? Border.all(color: colorScheme.error, width: 3)
+                          : (isBest
+                              ? Border.all(color: const Color(0xFF22C55E), width: 2.5)
+                              : Border.all(
+                                  color: Colors.white.withOpacity(0.1),
+                                  width: 1,
+                                ))),
+                  boxShadow: isKeyboardFocused
                       ? [
                           BoxShadow(
-                            color: const Color(0xFF22C55E).withOpacity(0.4),
-                            blurRadius: 8,
-                            spreadRadius: 1,
+                            color: colorScheme.primary.withOpacity(0.5),
+                            blurRadius: 10,
+                            spreadRadius: 1.5,
                           )
                         ]
-                      : null,
+                      : (isBest
+                          ? [
+                              BoxShadow(
+                                color: const Color(0xFF22C55E).withOpacity(0.4),
+                                blurRadius: 8,
+                                spreadRadius: 1,
+                              )
+                            ]
+                          : null),
                   color: selectedForDelete
                       ? colorScheme.error.withOpacity(0.1)
                       : Colors.transparent,

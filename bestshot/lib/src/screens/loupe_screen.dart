@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/photo_entry.dart';
 import '../services/analysis/focus_mask_service.dart';
@@ -43,6 +44,11 @@ class _LoupeScreenState extends State<LoupeScreen> {
   Color _focusMaskColor = Colors.white; // Non-final to allow color cycle
   double _focusMaskOpacity = 0.8;
 
+  // Keyboard focus management
+  late final FocusNode _focusNode;
+  int _activePaneIndex = 0;
+  bool _showDebugOverlay = false;
+
   bool _syncEnabled = false; // Changed: Default to false
   final List<TransformationController> _controllers = [];
 
@@ -52,14 +58,20 @@ class _LoupeScreenState extends State<LoupeScreen> {
   @override
   void initState() {
     super.initState();
+    _focusNode = FocusNode();
     for (var i = 0; i < widget.items.length; i++) {
       _controllers.add(TransformationController());
     }
     _loadAll();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusNode.requestFocus();
+    });
   }
 
   @override
   void dispose() {
+    _focusNode.dispose();
     for (final c in _controllers) {
       c.dispose();
     }
@@ -162,62 +174,127 @@ class _LoupeScreenState extends State<LoupeScreen> {
     return e.displayBytes;
   }
 
+  KeyEventResult _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    final key = event.logicalKey;
+    final count = widget.items.length;
+
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      if (_activePaneIndex > 0) {
+        setState(() {
+          _activePaneIndex--;
+        });
+      }
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.arrowRight) {
+      if (_activePaneIndex < count - 1) {
+        setState(() {
+          _activePaneIndex++;
+        });
+      }
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.space) {
+      if (_activePaneIndex >= 0 && _activePaneIndex < count) {
+        final itemKey = widget.items[_activePaneIndex].key;
+        final currentlySelected = widget.initialSelectedForDelete?.contains(itemKey) ?? false;
+        widget.onToggleDelete?.call(itemKey, !currentlySelected);
+        setState(() {});
+      }
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.keyB ||
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      if (_activePaneIndex >= 0 && _activePaneIndex < count) {
+        final itemKey = widget.items[_activePaneIndex].key;
+        widget.onSetBest?.call(itemKey);
+        setState(() {
+          for (var i = 0; i < widget.isBests.length; i++) {
+            widget.isBests[i] = (widget.items[i].key == itemKey);
+          }
+        });
+      }
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('ルーペモード'),
-        actions: [
-          IconButton(
-            tooltip: _showFocusMask ? 'フォーカスマスクを隠す' : 'フォーカスマスクを表示',
-            onPressed: _loading || _error != null ? null : _toggleFocusMask,
-            icon: _focusMaskBusy
-                ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(_showFocusMask ? Icons.blur_off : Icons.blur_on),
-          ),
-          if (_showFocusMask) ...[
+    return Focus(
+      focusNode: _focusNode,
+      autofocus: true,
+      onKeyEvent: (node, event) => _handleKeyEvent(event),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('ルーペモード'),
+          actions: [
             IconButton(
-              tooltip: 'マスクの色を変更',
-              icon: Icon(Icons.color_lens, color: _focusMaskColor),
-              onPressed: _cycleMaskColor,
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 100,
-              child: Slider(
-                value: _focusMaskOpacity,
-                onChanged: (v) => setState(() => _focusMaskOpacity = v),
+              tooltip: 'デバッグ表示を切り替え',
+              onPressed: () => setState(() => _showDebugOverlay = !_showDebugOverlay),
+              icon: Icon(
+                _showDebugOverlay ? Icons.bug_report : Icons.bug_report_outlined,
+                color: _showDebugOverlay ? Colors.redAccent : null,
               ),
             ),
-          ],
-          Row(
-            children: [
-              const Text('連動拡大'),
-              Switch(
-                value: _syncEnabled,
-                onChanged: (v) {
-                  setState(() {
-                    _syncEnabled = v;
-                    if (_syncEnabled) {
-                      // Snapshot current positions as initial
-                      _initialMatrices.clear();
-                      for (final c in _controllers) {
-                        _initialMatrices.add(c.value.clone());
-                      }
-                    }
-                  });
-                },
+            IconButton(
+              tooltip: _showFocusMask ? 'フォーカスマスクを隠す' : 'フォーカスマスクを表示',
+              onPressed: _loading || _error != null ? null : _toggleFocusMask,
+              icon: _focusMaskBusy
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(_showFocusMask ? Icons.blur_off : Icons.blur_on),
+            ),
+            if (_showFocusMask) ...[
+              IconButton(
+                tooltip: 'マスクの色を変更',
+                icon: Icon(Icons.color_lens, color: _focusMaskColor),
+                onPressed: _cycleMaskColor,
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 100,
+                child: Slider(
+                  value: _focusMaskOpacity,
+                  onChanged: (v) => setState(() => _focusMaskOpacity = v),
+                ),
               ),
             ],
-          ),
-          const SizedBox(width: 16),
-        ],
+            Row(
+              children: [
+                const Text('連動拡大'),
+                Switch(
+                  value: _syncEnabled,
+                  onChanged: (v) {
+                    setState(() {
+                      _syncEnabled = v;
+                      if (_syncEnabled) {
+                        // Snapshot current positions as initial
+                        _initialMatrices.clear();
+                        for (final c in _controllers) {
+                          _initialMatrices.add(c.value.clone());
+                        }
+                      }
+                    });
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(width: 16),
+          ],
+        ),
+        body: _buildBody(),
       ),
-      body: _buildBody(),
     );
   }
 
@@ -232,39 +309,34 @@ class _LoupeScreenState extends State<LoupeScreen> {
       return const Center(child: Text('画像が読み込めませんでした'));
     }
 
+    final size = MediaQuery.of(context).size;
+    final isPortrait = size.height > size.width;
+
     final count = widget.items.length;
     if (count <= 3) {
-      return Row(
-        children: [
-          for (int i = 0; i < count; i++) ...[
-            if (i > 0) const VerticalDivider(width: 1),
-            Expanded(
-              child: _ZoomPane(
-                bytes: _loadedBytes[widget.items[i].key]!,
-                maskPng: _focusMaskPngByKey[widget.items[i].key],
-                showFocusMask: _showFocusMask,
-                maskColor: _focusMaskColor,
-                maskOpacity: _focusMaskOpacity,
-                title: 'Photo ${i + 1}',
-                exif: widget.items[i].exifText,
-                score: widget.scores[i],
-                histogram: widget.items[i].histogram,
-                controller: _controllers[i],
-                onInteractionUpdate: () => _onInteractionUpdate(i),
-                itemKey: widget.items[i].key,
-                isBest: widget.isBests[i],
-                selectedForDelete: widget.initialSelectedForDelete?.contains(widget.items[i].key) ?? false,
-                onToggleDelete: widget.onToggleDelete != null
-                    ? (val) => widget.onToggleDelete!(widget.items[i].key, val)
-                    : null,
-                onSetBest: widget.onSetBest != null
-                    ? () => widget.onSetBest!(widget.items[i].key)
-                    : null,
+      if (isPortrait) {
+        return Column(
+          children: [
+            for (int i = 0; i < count; i++) ...[
+              if (i > 0) const Divider(height: 1),
+              Expanded(
+                child: _buildPane(i),
               ),
-            ),
+            ],
           ],
-        ],
-      );
+        );
+      } else {
+        return Row(
+          children: [
+            for (int i = 0; i < count; i++) ...[
+              if (i > 0) const VerticalDivider(width: 1),
+              Expanded(
+                child: _buildPane(i),
+              ),
+            ],
+          ],
+        );
+      }
     } else {
       // 4 items: 2x2 grid
       return Column(
@@ -315,13 +387,35 @@ class _LoupeScreenState extends State<LoupeScreen> {
           ? (val) => widget.onToggleDelete!(key, val)
           : null,
       onSetBest: widget.onSetBest != null
-          ? () => widget.onSetBest!(key)
+          ? () {
+              widget.onSetBest!(key);
+              setState(() {
+                for (var j = 0; j < widget.isBests.length; j++) {
+                  widget.isBests[j] = (j == index);
+                }
+              });
+            }
           : null,
+      isFocused: index == _activePaneIndex,
+      onTap: () {
+        setState(() {
+          _activePaneIndex = index;
+        });
+      },
+      showDebugOverlay: _showDebugOverlay,
+      debugGridSharps: widget.items[index].debugGridSharps,
+      semanticObjects: widget.items[index].semanticObjects,
+      faceX: widget.items[index].portraitFaceX,
+      faceY: widget.items[index].portraitFaceY,
+      faceW: widget.items[index].portraitFaceW,
+      faceH: widget.items[index].portraitFaceH,
+      faceScore: widget.items[index].faceQualityScore,
+      exposureScore: widget.items[index].exposureScore,
     );
   }
 }
 
-class _ZoomPane extends StatelessWidget {
+class _ZoomPane extends StatefulWidget {
   const _ZoomPane({
     required this.bytes,
     required this.maskPng,
@@ -339,6 +433,17 @@ class _ZoomPane extends StatelessWidget {
     required this.selectedForDelete,
     required this.onToggleDelete,
     required this.onSetBest,
+    required this.isFocused,
+    required this.onTap,
+    required this.showDebugOverlay,
+    this.debugGridSharps,
+    this.semanticObjects,
+    this.faceX,
+    this.faceY,
+    this.faceW,
+    this.faceH,
+    this.faceScore,
+    this.exposureScore,
   });
 
   final Uint8List bytes;
@@ -357,173 +462,160 @@ class _ZoomPane extends StatelessWidget {
   final bool selectedForDelete;
   final ValueChanged<bool>? onToggleDelete;
   final VoidCallback? onSetBest;
+  final bool isFocused;
+  final VoidCallback onTap;
+
+  final bool showDebugOverlay;
+  final List<double>? debugGridSharps;
+  final List<SemanticObject>? semanticObjects;
+  final int? faceX;
+  final int? faceY;
+  final int? faceW;
+  final int? faceH;
+  final double? faceScore;
+  final double? exposureScore;
 
   @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          color: Colors.black12,
-          child: Text(title, style: Theme.of(context).textTheme.labelSmall),
-        ),
-        Expanded(
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: InteractiveViewer(
-                  transformationController: controller,
-                  minScale: 1,
-                  maxScale: 12,
-                  onInteractionUpdate: (_) => onInteractionUpdate(),
-                  child: Center(
-                    child: Stack(
-                      alignment: Alignment.center,
-                      fit: StackFit.passthrough,
-                      children: [
-                        Image.memory(bytes, filterQuality: FilterQuality.high),
-                        if (showFocusMask && maskPng != null)
-                          Opacity(
-                            opacity: maskOpacity,
-                            child: Image.memory(
-                              maskPng!,
-                              filterQuality: FilterQuality.low,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
+  State<_ZoomPane> createState() => _ZoomPaneState();
+}
+
+class _ZoomPaneState extends State<_ZoomPane> {
+  int? _imageWidth;
+  int? _imageHeight;
+  ImageStream? _imageStream;
+  ImageStreamListener? _imageListener;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolveImageSize();
+  }
+
+  @override
+  void didUpdateWidget(_ZoomPane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.bytes != widget.bytes) {
+      _resolveImageSize();
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_imageStream != null && _imageListener != null) {
+      _imageStream!.removeListener(_imageListener!);
+    }
+    super.dispose();
+  }
+
+  void _resolveImageSize() {
+    if (_imageStream != null && _imageListener != null) {
+      _imageStream!.removeListener(_imageListener!);
+    }
+    final provider = MemoryImage(widget.bytes);
+    _imageStream = provider.resolve(ImageConfiguration.empty);
+    _imageListener = ImageStreamListener((ImageInfo info, bool _) {
+      if (mounted) {
+        setState(() {
+          _imageWidth = info.image.width;
+          _imageHeight = info.image.height;
+        });
+      }
+    });
+    _imageStream!.addListener(_imageListener!);
+  }
+
+  List<Widget> _buildGridOverlay(double w, double h) {
+    final sharps = widget.debugGridSharps!;
+    if (sharps.length != 16) return [];
+
+    final indexValues = List.generate(16, (i) => MapEntry(i, sharps[i]));
+    indexValues.sort((a, b) => b.value.compareTo(a.value));
+    final top4Indices = indexValues.take(4).map((e) => e.key).toSet();
+
+    final cellW = w / 4.0;
+    final cellH = h / 4.0;
+    final widgets = <Widget>[];
+
+    for (int y = 0; y < 4; y++) {
+      for (int x = 0; x < 4; x++) {
+        final idx = y * 4 + x;
+        final val = sharps[idx];
+        final isTop4 = top4Indices.contains(idx);
+
+        widgets.add(
+          Positioned(
+            left: x * cellW,
+            top: y * cellH,
+            width: cellW,
+            height: cellH,
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: isTop4 ? Colors.green.withOpacity(0.6) : Colors.white24,
+                  width: isTop4 ? 2.0 : 0.8,
                 ),
+                color: isTop4 ? Colors.green.withOpacity(0.08) : Colors.transparent,
               ),
-              // Overlay Info (Top Left)
-              Positioned(
-                left: 12,
-                top: 12,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.4),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.white10),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (exif.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 2),
-                              child: Text(
-                                exif,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          Text(
-                            '鮮明度: ${score.toStringAsFixed(0)}',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.9),
-                              fontSize: 10,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              // Histogram (Top Right)
-              Positioned(
-                right: 12,
-                top: 12,
+              child: Center(
                 child: Container(
-                  width: 100,
-                  height: 60,
-                  padding: const EdgeInsets.all(4),
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.4),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.white10),
+                    color: Colors.black.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(4),
                   ),
-                  child: CustomPaint(
-                    painter: _HistogramPainter(
-                      histogram,
-                      barColor: Theme.of(context).colorScheme.primary,
+                  child: Text(
+                    val.toStringAsFixed(0),
+                    style: TextStyle(
+                      color: isTop4 ? Colors.greenAccent : Colors.white70,
+                      fontSize: 9,
+                      fontWeight: isTop4 ? FontWeight.bold : FontWeight.normal,
                     ),
                   ),
                 ),
               ),
-              // Operations Floating Bar (Bottom Center)
+            ),
+          ),
+        );
+      }
+    }
+    return widgets;
+  }
+
+  List<Widget> _buildObjectsOverlay(double w, double h) {
+    final list = widget.semanticObjects!;
+    return list.map((obj) {
+      final left = obj.x * w;
+      final top = obj.y * h;
+      final width = obj.w * w;
+      final height = obj.h * h;
+
+      return Positioned(
+        left: left,
+        top: top,
+        width: width,
+        height: height,
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: Colors.cyanAccent,
+              width: 2.0,
+            ),
+          ),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
               Positioned(
-                bottom: 12,
-                left: 12,
-                right: 12,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                      color: Colors.black.withOpacity(0.55),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // Delete candidate checkbox
-                          Row(
-                            children: [
-                              SizedBox(
-                                width: 24,
-                                height: 24,
-                                child: Checkbox(
-                                  value: selectedForDelete,
-                                  onChanged: onToggleDelete != null
-                                      ? (v) => onToggleDelete!(v ?? false)
-                                      : null,
-                                  activeColor: Colors.red,
-                                  side: const BorderSide(color: Colors.white70),
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              const Text(
-                                '削除候補',
-                                style: TextStyle(color: Colors.white, fontSize: 11),
-                              ),
-                            ],
-                          ),
-                          // Best button
-                          TextButton.icon(
-                            onPressed: onSetBest,
-                            icon: Icon(
-                              isBest ? Icons.star : Icons.star_border,
-                              color: isBest ? Colors.amber : Colors.white70,
-                              size: 16,
-                            ),
-                            label: Text(
-                              isBest ? 'Best画像' : 'Bestに設定',
-                              style: TextStyle(
-                                color: isBest ? Colors.amber : Colors.white,
-                                fontSize: 11,
-                                fontWeight: isBest ? FontWeight.bold : FontWeight.normal,
-                              ),
-                            ),
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              minimumSize: Size.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                          ),
-                        ],
-                      ),
+                left: 0,
+                top: -16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  color: Colors.cyanAccent.withOpacity(0.85),
+                  child: Text(
+                    obj.label,
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
@@ -531,7 +623,315 @@ class _ZoomPane extends StatelessWidget {
             ],
           ),
         ),
-      ],
+      );
+    }).toList();
+  }
+
+  Widget _buildFaceOverlay(double w, double h) {
+    final imgW = _imageWidth!;
+    final imgH = _imageHeight!;
+    final fx = widget.faceX! / imgW * w;
+    final fy = widget.faceY! / imgH * h;
+    final fw = widget.faceW! / imgW * w;
+    final fh = widget.faceH! / imgH * h;
+
+    return Positioned(
+      left: fx,
+      top: fy,
+      width: fw,
+      height: fh,
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: Colors.orangeAccent,
+            width: 2.0,
+          ),
+        ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 0,
+              top: -16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                color: Colors.orangeAccent.withOpacity(0.85),
+                child: const Text(
+                  'FACE',
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: widget.isFocused ? colorScheme.primary : Colors.transparent,
+            width: 2.5,
+          ),
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              color: widget.isFocused ? colorScheme.primaryContainer : Colors.black12,
+              child: Text(
+                widget.title,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: widget.isFocused ? colorScheme.onPrimaryContainer : null,
+                  fontWeight: widget.isFocused ? FontWeight.bold : null,
+                ),
+              ),
+            ),
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: InteractiveViewer(
+                      transformationController: widget.controller,
+                      minScale: 1,
+                      maxScale: 12,
+                      onInteractionUpdate: (_) => widget.onInteractionUpdate(),
+                      child: Center(
+                        child: Stack(
+                          alignment: Alignment.center,
+                          fit: StackFit.passthrough,
+                          children: [
+                            Image.memory(widget.bytes, filterQuality: FilterQuality.high),
+                            if (widget.showFocusMask && widget.maskPng != null)
+                              Opacity(
+                                opacity: widget.maskOpacity,
+                                child: Image.memory(
+                                  widget.maskPng!,
+                                  filterQuality: FilterQuality.low,
+                                  color: widget.maskColor,
+                                  colorBlendMode: BlendMode.srcIn,
+                                ),
+                              ),
+                            if (widget.showDebugOverlay)
+                              Positioned.fill(
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final w = constraints.maxWidth;
+                                    final h = constraints.maxHeight;
+                                    if (w == 0 || h == 0) return const SizedBox.shrink();
+                                    return Stack(
+                                      children: [
+                                        if (widget.debugGridSharps != null && widget.debugGridSharps!.length == 16)
+                                          ..._buildGridOverlay(w, h),
+                                        if (widget.semanticObjects != null)
+                                          ..._buildObjectsOverlay(w, h),
+                                        if (widget.faceX != null &&
+                                            widget.faceY != null &&
+                                            widget.faceW != null &&
+                                            widget.faceH != null &&
+                                            widget.faceW! > 0 &&
+                                            widget.faceH! > 0 &&
+                                            _imageWidth != null &&
+                                            _imageHeight != null)
+                                          _buildFaceOverlay(w, h),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Overlay Info (Top Left)
+                  Positioned(
+                    left: 12,
+                    top: 12,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.4),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.white10),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (widget.exif.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 2),
+                                  child: Text(
+                                    widget.exif,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              Text(
+                                '鮮明度: ${widget.score.toStringAsFixed(0)}',
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(0.9),
+                                  fontSize: 10,
+                                ),
+                              ),
+                              if (widget.showDebugOverlay) ...[
+                                const SizedBox(height: 6),
+                                Container(
+                                  height: 1,
+                                  width: 120,
+                                  color: Colors.white24,
+                                ),
+                                const SizedBox(height: 4),
+                                const Text(
+                                  '【Debug Info】',
+                                  style: TextStyle(
+                                    color: Colors.amberAccent,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Text(
+                                  'ピント: ${widget.score.toStringAsFixed(1)}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 9),
+                                ),
+                                Text(
+                                  '露出: ${(widget.exposureScore ?? 0).toStringAsFixed(2)}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 9),
+                                ),
+                                Text(
+                                  '顔スコア: ${(widget.faceScore ?? 0).toStringAsFixed(2)}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 9),
+                                ),
+                                Text(
+                                  '解像度: ${_imageWidth ?? "?"} x ${_imageHeight ?? "?"}',
+                                  style: const TextStyle(color: Colors.white70, fontSize: 9),
+                                ),
+                                if (widget.semanticObjects != null && widget.semanticObjects!.isNotEmpty)
+                                  Text(
+                                    '検出数: ${widget.semanticObjects!.length} (例: ${widget.semanticObjects!.first.label})',
+                                    style: const TextStyle(color: Colors.white70, fontSize: 9),
+                                  ),
+                              ]
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Histogram (Top Right)
+                  Positioned(
+                    right: 12,
+                    top: 12,
+                    child: Container(
+                      width: 100,
+                      height: 60,
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.4),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.white10),
+                      ),
+                      child: CustomPaint(
+                        painter: _HistogramPainter(
+                          widget.histogram,
+                          barColor: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Operations Floating Bar (Bottom Center)
+                  Positioned(
+                    bottom: 12,
+                    left: 12,
+                    right: 12,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          color: Colors.black.withOpacity(0.55),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              // Delete candidate checkbox
+                              Row(
+                                children: [
+                                  SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: Checkbox(
+                                      value: widget.selectedForDelete,
+                                      onChanged: widget.onToggleDelete != null
+                                          ? (v) => widget.onToggleDelete!(v ?? false)
+                                          : null,
+                                      activeColor: Colors.red,
+                                      side: const BorderSide(color: Colors.white70),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Text(
+                                    '削除候補',
+                                    style: TextStyle(color: Colors.white, fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                              // Best button
+                              TextButton.icon(
+                                onPressed: widget.onSetBest,
+                                icon: Icon(
+                                  widget.isBest ? Icons.star : Icons.star_border,
+                                  color: widget.isBest ? Colors.amber : Colors.white70,
+                                  size: 16,
+                                ),
+                                label: Text(
+                                  widget.isBest ? 'Best画像' : 'Bestに設定',
+                                  style: TextStyle(
+                                    color: widget.isBest ? Colors.amber : Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: widget.isBest ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                ),
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

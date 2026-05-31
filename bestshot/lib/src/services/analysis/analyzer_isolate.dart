@@ -73,6 +73,7 @@ class AnalyzerIsolate {
             eyesClosed: (message['eyesClosed'] as bool?) ?? false,
             bothEyesDetected: (message['bothEyesDetected'] as bool?) ?? false,
             eyeSharpness: (message['eyeSharpness'] as num?)?.toDouble() ?? -1,
+            debugGridSharps: (message['debugGridSharps'] as List?)?.map((e) => (e as num).toDouble()).toList(),
           ),
         );
       }
@@ -197,6 +198,7 @@ class AnalyzerIsolate {
           'eyesClosed': out.eyesClosed,
           'bothEyesDetected': out.bothEyesDetected,
           'eyeSharpness': out.eyeSharpness,
+          'debugGridSharps': out.debugGridSharps,
         });
         done++;
         message.sendPort.send({
@@ -232,6 +234,7 @@ class AnalyzerIsolate {
       eyesClosed: false,
       bothEyesDetected: false,
       eyeSharpness: -1,
+      debugGridSharps: null,
     );
   }
 
@@ -287,7 +290,7 @@ class AnalyzerIsolate {
       workBytes = encodeRes.$2;
 
       final pHashHex = _calcEqualizedPHashHexFromMat(work);
-      final fullSharpness = _calcLaplacianVarianceFromMat(work, workBytes);
+      final (fullSharpness, debugGridSharps) = _calcLaplacianVarianceFromMat(work, workBytes);
       final (exposure, histogram) = _calcExposureAndHistogramFromMat(work);
       final orb = _calcOrbDescriptorsFromMat(work);
 
@@ -371,6 +374,7 @@ class AnalyzerIsolate {
         eyesClosed: eyesClosed,
         bothEyesDetected: bothEyesDetected,
         eyeSharpness: eyeSharpness,
+        debugGridSharps: debugGridSharps,
       );
     } catch (_) {
       return _emptyOutput(key);
@@ -404,24 +408,77 @@ class AnalyzerIsolate {
     }
   }
 
-  static double _calcLaplacianVarianceFromMat(cv.Mat bgr, Uint8List? bytes) {
+  static (double, List<double>) _calcLaplacianVarianceFromMat(cv.Mat bgr, Uint8List? bytes) {
     cv.Mat? gray;
-    cv.Mat? lap;
     try {
+      if (bgr.isEmpty) return (0.0, List.filled(16, 0.0));
       gray = cv.cvtColor(bgr, cv.COLOR_BGR2GRAY);
-      lap = cv.laplacian(gray, cv.MatType.CV_64F);
-      final (_, stddev) = cv.meanStdDev(lap);
-      final v = stddev.val1 * stddev.val1;
-      final out = (v.isFinite ? v : 0).toDouble();
-      if (out > 0) return out;
-      if (bytes != null) return _fallbackLaplacianVariance(bytes);
-      return 0;
+
+      final rows = gray.rows;
+      final cols = gray.cols;
+      final blockH = rows ~/ 4;
+      final blockW = cols ~/ 4;
+
+      if (blockH <= 0 || blockW <= 0) {
+        cv.Mat? lap;
+        try {
+          lap = cv.laplacian(gray, cv.MatType.CV_64F);
+          final (_, stddev) = cv.meanStdDev(lap);
+          final v = stddev.val1 * stddev.val1;
+          final out = (v.isFinite ? v : 0.0).toDouble();
+          return (out, List.filled(16, out));
+        } finally {
+          lap?.dispose();
+        }
+      }
+
+      final variances = <double>[];
+      for (var r = 0; r < 4; r++) {
+        for (var c = 0; c < 4; c++) {
+          final y = r * blockH;
+          final x = c * blockW;
+          final w = (c == 3) ? (cols - x) : blockW;
+          final h = (r == 3) ? (rows - y) : blockH;
+
+          cv.Mat? sub;
+          cv.Mat? lap;
+          try {
+            final rect = cv.Rect(x, y, w, h);
+            sub = gray.region(rect);
+            if (sub.isEmpty) {
+              variances.add(0.0);
+              continue;
+            }
+            lap = cv.laplacian(sub, cv.MatType.CV_64F);
+            final (_, stddev) = cv.meanStdDev(lap);
+            var v = stddev.val1 * stddev.val1;
+            if (!v.isFinite) v = 0.0;
+
+            // Apply center-weighted composition priority
+            if ((r == 1 || r == 2) && (c == 1 || c == 2)) {
+              v *= 1.15; // Center region focus
+            }
+
+            variances.add(v.toDouble());
+          } catch (_) {
+            variances.add(0.0);
+          } finally {
+            sub?.dispose();
+            lap?.dispose();
+          }
+        }
+      }
+
+      // Find top 4 blocks to calculate subject focused average sharpness
+      final sorted = List<double>.from(variances)..sort((a, b) => b.compareTo(a));
+      final topAvg = (sorted[0] + sorted[1] + sorted[2] + sorted[3]) / 4.0;
+
+      return (topAvg.isFinite ? topAvg : 0.0, variances);
     } catch (_) {
-      if (bytes != null) return _fallbackLaplacianVariance(bytes);
-      return 0;
+      final fb = bytes != null ? _fallbackLaplacianVariance(bytes) : 0.0;
+      return (fb, List.filled(16, fb));
     } finally {
       gray?.dispose();
-      lap?.dispose();
     }
   }
 
@@ -473,7 +530,8 @@ class AnalyzerIsolate {
       final meanVal = mean.val1;
       final meanPenalty = (meanVal - 127.0).abs() / 127.0;
 
-      final score = (1.0 - clip) * (1.0 - (meanPenalty * 0.35));
+      // 露出の偏りペナルティの重みを 0.35 ➔ 0.15 へ緩和（意図的なローキー・ハイキーの保護）
+      final score = (1.0 - clip) * (1.0 - (meanPenalty * 0.15));
       return (score.clamp(0.0, 1.0), normHist);
     } catch (_) {
       return (0.0, Uint8List(256));
@@ -556,7 +614,11 @@ class AnalyzerIsolate {
           minSize: (16, 16),
         );
         bothEyesDetected = eyes.length >= 2;
-        eyesClosed = eyes.isEmpty;
+        
+        // Windows環境での瞳検出の誤検知・検出漏れ対策
+        // 1) 顔がある程度大きく写っている（幅120px以上）ときだけ目閉じ判定を有効にする。
+        // 2) 横顔などの対策として、瞳が1つでも検出されていれば「目閉じではない」とする（eyes.isEmptyの時のみ判定）。
+        eyesClosed = eyes.isEmpty && best.width >= 120;
 
         if (eyes.isNotEmpty) {
           final eyeVariances = <double>[];
