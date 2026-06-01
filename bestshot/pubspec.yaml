@@ -121,7 +121,13 @@ msix_config:
   publisher_display_name: TakuEnjoy
   title: BestShot
   description: A helper app to select the best photos from burst shots.
-  generate_certificate: false
+  # ----------------------------------------------------
+  # 【デジタル署名設定】
+  # 独自の自己署名証明書（.pfx）で署名する場合は、以下のコメントを外してパスとパスワードを指定します。
+  # ※ .pfx ファイルは Git にコミットしないようご注意ください（.gitignore で除外済み）。
+  # certificate_path: bestshot.pfx
+  # certificate_password: your_password_here
+  # ----------------------------------------------------
   build_dir: build/windows/x64/runner/Release
   build_windows: false
   signtool_options: "/a /fd sha256"

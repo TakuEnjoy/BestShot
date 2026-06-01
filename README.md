@@ -50,3 +50,22 @@ flutter pub get
 
 # アプリの起動 (接続されたデバイスまたはエミュレータ)
 flutter run
+
+---
+
+## 🔑 デジタル署名とリリースビルド (Signing & Release Build)
+
+本アプリを独自にビルドして配布する際、悪意ある第三者による改変やなりすまし配布を防ぐためにデジタル署名を設定できます。
+具体的な署名手順については、以下の手順書を参照してください。
+
+*   **[デジタル署名セットアップ手順 (bestshot/SIGNING_SETUP.md)](bestshot/SIGNING_SETUP.md)**
+*   Windows環境における Smart App Control や SmartScreen 警告の回避策については、**[Windowsセキュリティ警告対策 (bestshot/WINDOWS_SETUP.md)](bestshot/WINDOWS_SETUP.md)** をご覧ください。
+
+---
+
+## 📄 ライセンス (License)
+
+このプロジェクトは **GNU GPL v3.0 (GNU General Public License v3.0)** の下でライセンスされています。
+詳細は [LICENSE](LICENSE) ファイルを参照してください。
+
+本コードを改変、または自作発言をして配布することを防ぐため、本リポジトリの改変および二次配布を行う際は、ソースコードを公開し、同じ GPL v3.0 ライセンスを適用することが義務付けられています。
