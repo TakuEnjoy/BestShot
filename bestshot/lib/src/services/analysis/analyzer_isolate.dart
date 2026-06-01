@@ -376,7 +376,8 @@ class AnalyzerIsolate {
         eyeSharpness: eyeSharpness,
         debugGridSharps: debugGridSharps,
       );
-    } catch (_) {
+    } catch (e, stack) {
+      print('Isolate analysis error for key $key: $e\n$stack');
       return _emptyOutput(key);
     } finally {
       mat?.dispose();

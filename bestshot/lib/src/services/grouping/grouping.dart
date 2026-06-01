@@ -112,68 +112,6 @@ class PhotoGrouper {
       _reorderAndMarkBest(groupItems, isBurstGroup, config);
       final best = groupItems.first;
 
-      // Determine if all photos in the group are blurry (below absolute threshold).
-      var maxEffectiveSharp = 0.0;
-      var hasSlowShutter = false;
-      var hasFastShutter = false;
-      var maxIso = 0;
-
-      double? minFNumber;
-      bool hasSubjectOrFace = false;
-
-      for (final e in groupItems) {
-        final iso = _parseIso(e.exif?.iso);
-        final shutter = _parseShutter(e.exif?.shutter);
-        final fNum = _parseFNumber(e.exif?.fNumber);
-
-        if (iso != null && iso > maxIso) maxIso = iso;
-        if (shutter != null) {
-          if (shutter >= 0.033) hasSlowShutter = true; // 1/30s or slower
-          if (shutter <= 0.002) hasFastShutter = true; // 1/500s or faster
-        }
-        if (fNum != null) {
-          if (minFNumber == null || fNum < minFNumber) {
-            minFNumber = fNum;
-          }
-        }
-        if (e.hasPortraitFace || e.semanticObjects.isNotEmpty) {
-          hasSubjectOrFace = true;
-        }
-
-        var eff = e.sharpness;
-        if (iso != null && iso > 800) {
-          eff = e.sharpness / (1.0 + (iso - 800) * 0.00015);
-        }
-        if (eff > maxEffectiveSharp) maxEffectiveSharp = eff;
-      }
-
-      // Dynamic threshold calculation based on EXIF exposure parameters
-      var threshold = 75.0;
-      if (hasSlowShutter) {
-        threshold = 85.0; // High handshake risk -> stricter threshold
-      } else if (hasFastShutter) {
-        threshold = 65.0; // Low handshake risk -> lenient threshold
-      }
-      if (maxIso > 800) {
-        // High ISO noise falsely inflates sharpness -> increase threshold to filter out noise
-        final noiseCorrection = (maxIso - 800) * 0.01;
-        threshold = (threshold + noiseCorrection).clamp(65.0, 110.0);
-      }
-
-      // 背景ボケ（浅い被写界深度）を考慮したしきい値緩和
-      if (hasSubjectOrFace) {
-        threshold = 40.0; // 顔や被写体が検出されている場合は40.0に緩和
-      } else if (minFNumber != null) {
-        if (minFNumber <= 2.8) {
-          threshold = threshold * 0.65; // F2.8以下 (大口径) -> 約35%緩和
-        } else if (minFNumber <= 4.0) {
-          threshold = threshold * 0.80; // F4.0以下 -> 約20%緩和
-        }
-        if (threshold < 30.0) threshold = 30.0;
-      }
-
-      final isAllBlur = maxEffectiveSharp < threshold;
-
       // Changed: Initial delete candidates are empty as requested.
       final deleteCandidates = <String>{};
 
@@ -184,7 +122,6 @@ class PhotoGrouper {
           bestKey: best.key,
           deleteCandidateKeys: deleteCandidates,
           isBurst: isBurstGroup,
-          isAllBlur: isAllBlur,
         ),
       );
     }
@@ -218,22 +155,6 @@ class PhotoGrouper {
     return groups;
   }
 
-  static double? _parseShutter(String? shutter) {
-    if (shutter == null) return null;
-    final s = shutter.trim();
-    if (s.contains('/')) {
-      final parts = s.split('/');
-      if (parts.length == 2) {
-        final num = double.tryParse(parts[0]);
-        final den = double.tryParse(parts[1]);
-        if (num != null && den != null && den != 0) {
-          return num / den;
-        }
-      }
-    }
-    return double.tryParse(s);
-  }
-
   static int? _parseIso(String? iso) {
     if (iso == null) return null;
     final m = RegExp(r'\d+').firstMatch(iso);
@@ -241,13 +162,6 @@ class PhotoGrouper {
       return int.tryParse(m.group(0)!);
     }
     return null;
-  }
-
-  static double? _parseFNumber(String? fNumber) {
-    if (fNumber == null) return null;
-    final fStr = fNumber.trim().toUpperCase();
-    final clean = fStr.replaceAll('F', '').replaceAll('/', '').trim();
-    return double.tryParse(clean);
   }
 
   static void _reorderAndMarkBest(

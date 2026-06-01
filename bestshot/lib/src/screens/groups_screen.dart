@@ -782,30 +782,7 @@ class _ExpandableGroupCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (group.isAllBlur) ...[
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.errorContainer,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.warning_amber_rounded, size: 14, color: theme.colorScheme.error),
-                        const SizedBox(width: 4),
-                        Text(
-                          '全て手ブレ/ピンボケの可能性あり',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: theme.colorScheme.error,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                ],
+
                 if (group.isBurst) ...[
                   const Icon(Icons.bolt, size: 14, color: Colors.orange),
                   const SizedBox(width: 4),

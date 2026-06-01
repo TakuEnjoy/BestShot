@@ -254,6 +254,9 @@ class _ImportScreenState extends State<ImportScreen> {
       }
 
       // 本解析処理の実行
+      setState(() {
+        _busy = false;
+      });
       await _runImportAndAnalyze(
         (onProgress) => ImportService.importSelectedFiles(
           selectedFiles,
@@ -475,48 +478,127 @@ class _ImportScreenState extends State<ImportScreen> {
   Widget build(BuildContext context) {
     final isWindows = Platform.isWindows;
     final isAndroid = Platform.isAndroid;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('BestShot'),
+        title: ShaderMask(
+          shaderCallback: (bounds) => const LinearGradient(
+            colors: [Color(0xFF818CF8), Color(0xFF34D399)], // Indigo to Emerald
+          ).createShader(bounds),
+          child: const Text(
+            'BestShot',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 24,
+              letterSpacing: 1.5,
+              color: Colors.white,
+            ),
+          ),
+        ),
       ),
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
+          constraints: const BoxConstraints(maxWidth: 580),
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  '一眼レフ/ミラーレスの連写・類似写真を、内容ベースでグループ化して「Best」を提案します。',
-                  style: Theme.of(context).textTheme.titleMedium,
+                // Premium Hero Header
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        colorScheme.primary.withOpacity(0.08),
+                        colorScheme.secondary.withOpacity(0.03),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: colorScheme.primary.withOpacity(0.15),
+                      width: 1,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.auto_awesome_motion_rounded,
+                        size: 40,
+                        color: colorScheme.primary,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        '最高の瞬間を、AIが提案します。',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white.withOpacity(0.95),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '一眼レフやミラーレスの連写・類似写真を、内容ベースで高速グループ化して「Best」を見つけ出します。',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.white.withOpacity(0.65),
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 20),
+
+                // Info Cards (Tech specs)
                 _InfoCard(),
-                const SizedBox(height: 12),
+                const SizedBox(height: 20),
+
+                // Parameters Card (Glassmorphism inspired)
                 Card(
+                  margin: EdgeInsets.zero,
                   child: Padding(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(20),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        Row(
+                          children: [
+                            Icon(Icons.tune_rounded, size: 20, color: colorScheme.primary),
+                            const SizedBox(width: 8),
+                            Text(
+                              '解析・グループ化設定',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
                         Text(
                           '検出モード',
-                          style: Theme.of(context).textTheme.labelLarge,
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: Colors.white.withOpacity(0.8),
+                          ),
                         ),
                         const SizedBox(height: 8),
                         DropdownButtonFormField<DetectionMode>(
                           initialValue: _detectionMode,
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
+                          decoration: InputDecoration(
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
                             isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                           ),
                           items: const [
                             DropdownMenuItem(
                               value: DetectionMode.standard,
-                              child: Text('標準（全体スコア）'),
+                              child: Text('標準（全体ピント・構図スコア）'),
                             ),
                             DropdownMenuItem(
                               value: DetectionMode.portrait,
@@ -527,7 +609,6 @@ class _ImportScreenState extends State<ImportScreen> {
                               ? null
                               : (v) {
                                   if (v == null) return;
-                                  // Portrait is supported only on Android/Windows in this build.
                                   if (v == DetectionMode.portrait && !(isWindows || isAndroid)) {
                                     setState(() => _detectionMode = DetectionMode.standard);
                                     return;
@@ -535,25 +616,31 @@ class _ImportScreenState extends State<ImportScreen> {
                                   setState(() => _detectionMode = v);
                                 },
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 16),
                         Text(
-                          '連写としてまとめる時間',
-                          style: Theme.of(context).textTheme.labelLarge,
+                          '連写としてまとめる時間窓',
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: Colors.white.withOpacity(0.8),
+                          ),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '合計: ${_formatBurstWindow(_burstWindowSeconds)}（1秒〜60分）',
-                          style: Theme.of(context).textTheme.bodySmall,
+                          '合計: ${_formatBurstWindow(_burstWindowSeconds)}（1秒〜60分以内を1グループ化）',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: Colors.white.withOpacity(0.5),
+                          ),
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 8),
                         Row(
                           children: [
                             Expanded(
                               child: DropdownButtonFormField<int>(
                                 initialValue: _burstMinutes.clamp(0, 60),
-                                decoration: const InputDecoration(
+                                decoration: InputDecoration(
                                   labelText: '分',
-                                  border: OutlineInputBorder(),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
                                   isDense: true,
                                 ),
                                 items: [
@@ -573,9 +660,11 @@ class _ImportScreenState extends State<ImportScreen> {
                             Expanded(
                               child: DropdownButtonFormField<int>(
                                 initialValue: _burstSeconds.clamp(0, 59),
-                                decoration: const InputDecoration(
+                                decoration: InputDecoration(
                                   labelText: '秒',
-                                  border: OutlineInputBorder(),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
                                   isDense: true,
                                 ),
                                 items: [
@@ -593,16 +682,20 @@ class _ImportScreenState extends State<ImportScreen> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 16),
                         Text(
                           '最大インポート件数',
-                          style: Theme.of(context).textTheme.labelLarge,
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: Colors.white.withOpacity(0.8),
+                          ),
                         ),
                         const SizedBox(height: 8),
                         DropdownButtonFormField<int>(
                           initialValue: _maxCount,
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
+                          decoration: InputDecoration(
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
                             isDense: true,
                           ),
                           items: const [
@@ -623,39 +716,178 @@ class _ImportScreenState extends State<ImportScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
-                if (isWindows)
-                  FilledButton.icon(
-                    onPressed: _busy
-                        ? null
-                        : () => _runFolderImportAndAnalyze(false),
-                    icon: const Icon(Icons.folder_open),
-                    label: const Text('フォルダからインポート（Windows）'),
-                  )
-                else
-                  FilledButton.icon(
-                    onPressed: _busy
-                        ? null
-                        : () => _runFolderImportAndAnalyze(true),
-                    icon: const Icon(Icons.folder_open),
-                    label: const Text('フォルダからインポート（モバイル）'),
+                const SizedBox(height: 24),
+
+                // Hero Import Button (Beautiful Gradient Action Box)
+                if (!_busy)
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF6366F1), Color(0xFF4F46E5)], // Indigo gradients
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF6366F1).withOpacity(0.3),
+                          blurRadius: 16,
+                          spreadRadius: 2,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () => _runFolderImportAndAnalyze(!isWindows),
+                        borderRadius: BorderRadius.circular(16),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.12),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.folder_open_rounded,
+                                  size: 32,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                isWindows ? 'フォルダを指定してインポート' : 'スキャンするフォルダを選択',
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'サブフォルダ内の画像も自動的に再帰スキャンされます',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white.withOpacity(0.7),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
-                const SizedBox(height: 12),
-                if (_busy && _stage.isNotEmpty)
-                  Text(
-                    '処理: $_stage',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.labelLarge,
+
+                // Status and Progress Display
+                if (_busy)
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: colorScheme.primary.withOpacity(0.2),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        const SizedBox(
+                          width: 40,
+                          height: 40,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3.5,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        if (_stage.isNotEmpty)
+                          Text(
+                            _stage,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: colorScheme.primary,
+                            ),
+                          ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _status,
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: Colors.white.withOpacity(0.85),
+                          ),
+                        ),
+                        if (_progress != null) ...[
+                          const SizedBox(height: 16),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: LinearProgressIndicator(
+                              value: _progress,
+                              minHeight: 8,
+                              backgroundColor: colorScheme.primary.withOpacity(0.1),
+                              valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            '${(_progress! * 100).toStringAsFixed(0)}%',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: colorScheme.primary,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
-                if (_status.isNotEmpty)
-                  Text(
-                    _status,
-                    textAlign: TextAlign.center,
+
+                // Non-busy error/info status
+                if (!_busy && _status.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: _status.contains('エラー')
+                            ? colorScheme.error.withOpacity(0.12)
+                            : colorScheme.secondary.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: _status.contains('エラー')
+                              ? colorScheme.error.withOpacity(0.3)
+                              : colorScheme.secondary.withOpacity(0.2),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _status.contains('エラー')
+                                ? Icons.error_outline_rounded
+                                : Icons.info_outline_rounded,
+                            color: _status.contains('エラー')
+                                ? colorScheme.error
+                                : colorScheme.secondary,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _status,
+                              style: TextStyle(
+                                color: _status.contains('エラー')
+                                    ? colorScheme.error
+                                    : Colors.white.withOpacity(0.9),
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                if (_busy) ...[
-                  const SizedBox(height: 12),
-                  LinearProgressIndicator(value: _progress),
-                ],
               ],
             ),
           ),
@@ -682,21 +914,52 @@ String _formatBurstWindow(int seconds) {
 class _InfoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    
     return Card(
+      margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: DefaultTextStyle(
-          style: Theme.of(context).textTheme.bodyMedium!,
-          child: const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('核となるロジック'),
-              SizedBox(height: 8),
-              Text('- 類似判定: pHash（image_compare / PerceptualHash）'),
-              Text('- ピント判定: Laplacian variance（opencv_dart）'),
-              Text('- メモリ節約: サムネ優先 + Isolate解析'),
-            ],
-          ),
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.analytics_rounded,
+              color: colorScheme.secondary,
+              size: 24,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'AI判定ロジックについて',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  DefaultTextStyle(
+                    style: theme.textTheme.bodySmall!.copyWith(
+                      color: Colors.white.withOpacity(0.65),
+                      height: 1.4,
+                    ),
+                    child: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('• 類似グルーピング: 高精度PerceptualHash (pHash) 解析'),
+                        Text('• ピント解像評価: OpenCV Laplacian分散 による輪郭抽出'),
+                        Text('• メモリ保護: 画像の軽量サムネイル化 ＆ 別Isolateでの並列解析'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

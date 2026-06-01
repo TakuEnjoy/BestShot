@@ -294,6 +294,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
           ],
         ),
         body: _buildBody(),
+        bottomNavigationBar: _buildBottomBar(),
       ),
     );
   }
@@ -365,6 +366,155 @@ class _LoupeScreenState extends State<LoupeScreen> {
     }
   }
 
+  Widget _buildBottomBar() {
+    if (_loading || _error != null || widget.items.isEmpty) return const SizedBox.shrink();
+    if (_activePaneIndex < 0 || _activePaneIndex >= widget.items.length) return const SizedBox.shrink();
+
+    final item = widget.items[_activePaneIndex];
+    final key = item.key;
+    final isBest = widget.isBests[_activePaneIndex];
+    final selectedForDelete = widget.initialSelectedForDelete?.contains(key) ?? false;
+
+    return SafeArea(
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF111827).withOpacity(0.92), // Deep Dark Card
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF1F2937), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.5),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            // Active photo indicator info
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '選択中: Photo ${_activePaneIndex + 1}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'ピント値: ${widget.scores[_activePaneIndex].toStringAsFixed(0)}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.white.withOpacity(0.6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+
+            // Toggle Delete button
+            InkWell(
+              onTap: () {
+                widget.onToggleDelete?.call(key, !selectedForDelete);
+                setState(() {});
+              },
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 100),
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: selectedForDelete ? Colors.red.withOpacity(0.15) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: selectedForDelete ? Colors.red : Colors.white30,
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      selectedForDelete ? Icons.delete_forever : Icons.delete_outline,
+                      color: selectedForDelete ? Colors.red : Colors.white70,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '削除候補',
+                      style: TextStyle(
+                        color: selectedForDelete ? Colors.redAccent : Colors.white70,
+                        fontSize: 12,
+                        fontWeight: selectedForDelete ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+
+            // Toggle Best button
+            InkWell(
+              onTap: () {
+                widget.onSetBest?.call(key);
+                setState(() {
+                  for (var j = 0; j < widget.isBests.length; j++) {
+                    widget.isBests[j] = (j == _activePaneIndex);
+                  }
+                });
+              },
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 100),
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: isBest ? Colors.amber.withOpacity(0.15) : Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isBest ? Colors.amber : Colors.white30,
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      isBest ? Icons.star : Icons.star_border,
+                      color: isBest ? Colors.amber : Colors.white70,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      isBest ? 'Best' : 'Bestに設定',
+                      style: TextStyle(
+                        color: isBest ? Colors.amber : Colors.white70,
+                        fontSize: 12,
+                        fontWeight: isBest ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildPane(int index) {
     if (index >= widget.items.length) return const SizedBox.shrink();
     final key = widget.items[index].key;
@@ -381,21 +531,6 @@ class _LoupeScreenState extends State<LoupeScreen> {
       controller: _controllers[index],
       onInteractionUpdate: () => _onInteractionUpdate(index),
       itemKey: key,
-      isBest: widget.isBests[index],
-      selectedForDelete: widget.initialSelectedForDelete?.contains(key) ?? false,
-      onToggleDelete: widget.onToggleDelete != null
-          ? (val) => widget.onToggleDelete!(key, val)
-          : null,
-      onSetBest: widget.onSetBest != null
-          ? () {
-              widget.onSetBest!(key);
-              setState(() {
-                for (var j = 0; j < widget.isBests.length; j++) {
-                  widget.isBests[j] = (j == index);
-                }
-              });
-            }
-          : null,
       isFocused: index == _activePaneIndex,
       onTap: () {
         setState(() {
@@ -429,10 +564,6 @@ class _ZoomPane extends StatefulWidget {
     required this.controller,
     required this.onInteractionUpdate,
     required this.itemKey,
-    required this.isBest,
-    required this.selectedForDelete,
-    required this.onToggleDelete,
-    required this.onSetBest,
     required this.isFocused,
     required this.onTap,
     required this.showDebugOverlay,
@@ -458,10 +589,6 @@ class _ZoomPane extends StatefulWidget {
   final TransformationController controller;
   final VoidCallback onInteractionUpdate;
   final String itemKey;
-  final bool isBest;
-  final bool selectedForDelete;
-  final ValueChanged<bool>? onToggleDelete;
-  final VoidCallback? onSetBest;
   final bool isFocused;
   final VoidCallback onTap;
 
@@ -861,71 +988,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
                       ),
                     ),
                   ),
-                  // Operations Floating Bar (Bottom Center)
-                  Positioned(
-                    bottom: 12,
-                    left: 12,
-                    right: 12,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                          color: Colors.black.withOpacity(0.55),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              // Delete candidate checkbox
-                              Row(
-                                children: [
-                                  SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: Checkbox(
-                                      value: widget.selectedForDelete,
-                                      onChanged: widget.onToggleDelete != null
-                                          ? (v) => widget.onToggleDelete!(v ?? false)
-                                          : null,
-                                      activeColor: Colors.red,
-                                      side: const BorderSide(color: Colors.white70),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  const Text(
-                                    '削除候補',
-                                    style: TextStyle(color: Colors.white, fontSize: 11),
-                                  ),
-                                ],
-                              ),
-                              // Best button
-                              TextButton.icon(
-                                onPressed: widget.onSetBest,
-                                icon: Icon(
-                                  widget.isBest ? Icons.star : Icons.star_border,
-                                  color: widget.isBest ? Colors.amber : Colors.white70,
-                                  size: 16,
-                                ),
-                                label: Text(
-                                  widget.isBest ? 'Best画像' : 'Bestに設定',
-                                  style: TextStyle(
-                                    color: widget.isBest ? Colors.amber : Colors.white,
-                                    fontSize: 11,
-                                    fontWeight: widget.isBest ? FontWeight.bold : FontWeight.normal,
-                                  ),
-                                ),
-                                style: TextButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  minimumSize: Size.zero,
-                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
+
                 ],
               ),
             ),
