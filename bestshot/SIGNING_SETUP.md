@@ -94,11 +94,18 @@ msix_config:
 以下のコマンドを実行して、ビルドとパッケージング、および自動デジタル署名を行います：
 
 ```bash
+# 1. msix パッケージを Dart のグローバルツールとして有効化 (初回のみ)
+flutter pub global activate msix
+
+# 2. 通常通り Windows アプリをリリースビルド
 flutter build windows
-flutter pub run msix:create
+
+# 3. グローバル版 msix を用いてインストーラーを生成・署名
+flutter pub global run msix:create
 ```
 
 ビルドが完了すると、`build/windows/x64/runner/Release/bestshot.msix` にデジタル署名済みのインストーラーが生成されます。
+（※ msix をプロジェクトの `pubspec.yaml` の依存関係に含めずグローバル実行することで、Flutter Windows ビルド時の C++ コンパイルエラー `'msix/none.h' not found` を回避しています）。
 
 ### 5. 配布先ユーザーの起動手順 / 証明書の信頼手順
 署名付き MSIX パッケージを他の PC にインストールして実行する具体的な手順（証明書の信頼方法や Smart App Control 回避策）については、プロジェクトのルート直下にある **`WINDOWS_SETUP.md`** に詳しくまとめておりますので、そちらをご参照ください。

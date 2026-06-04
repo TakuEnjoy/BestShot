@@ -54,7 +54,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  msix: any
+  # msix: any
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -128,7 +128,9 @@ msix_config:
   # certificate_path: bestshot.pfx
   # certificate_password: your_password_here
   # ----------------------------------------------------
-  build_dir: build/windows/x64/runner/Release
+  # パスのズレは SIGNING_SETUP.md に記載されたディレクトリジャンクション（シンボリックリンク）で解決するため、
+  # クリーンビルド時のクラッシュを防ぐために build_dir は指定しない（デフォルトのままにする）ことを推奨します。
+  # build_dir: build/windows/x64/runner/Release
   build_windows: false
   signtool_options: "/a /fd sha256"
   publisher: "CN=TakuEnjoy"

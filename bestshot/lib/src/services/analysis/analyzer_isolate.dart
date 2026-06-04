@@ -404,7 +404,8 @@ class AnalyzerIsolate {
       final dynamicPixelList = <dynamic>[...pixels];
       final hex = ic.PerceptualHash().calcPhash(dynamicPixelList);
       return hex.padLeft(16, '0');
-    } catch (_) {
+    } catch (e, s) {
+      print('Error in _calcEqualizedPHashHexFromMat: $e\n$s');
       return '0000000000000000';
     }
   }
@@ -461,7 +462,8 @@ class AnalyzerIsolate {
             }
 
             variances.add(v.toDouble());
-          } catch (_) {
+          } catch (e) {
+            print('Error in cell _calcLaplacianVarianceFromMat: $e');
             variances.add(0.0);
           } finally {
             sub?.dispose();
@@ -475,7 +477,8 @@ class AnalyzerIsolate {
       final topAvg = (sorted[0] + sorted[1] + sorted[2] + sorted[3]) / 4.0;
 
       return (topAvg.isFinite ? topAvg : 0.0, variances);
-    } catch (_) {
+    } catch (e, s) {
+      print('Error in _calcLaplacianVarianceFromMat: $e\n$s');
       final fb = bytes != null ? _fallbackLaplacianVariance(bytes) : 0.0;
       return (fb, List.filled(16, fb));
     } finally {
@@ -534,7 +537,8 @@ class AnalyzerIsolate {
       // 露出の偏りペナルティの重みを 0.35 ➔ 0.15 へ緩和（意図的なローキー・ハイキーの保護）
       final score = (1.0 - clip) * (1.0 - (meanPenalty * 0.15));
       return (score.clamp(0.0, 1.0), normHist);
-    } catch (_) {
+    } catch (e, s) {
+      print('Error in _calcExposureAndHistogramFromMat: $e\n$s');
       return (0.0, Uint8List(256));
     } finally {
       gray?.dispose();
@@ -562,7 +566,8 @@ class AnalyzerIsolate {
       if (all.length < bytesLen) return _OrbDesc.empty();
       final sliced = Uint8List.fromList(all.sublist(0, bytesLen));
       return _OrbDesc(rows: rows, cols: cols, bytes: sliced);
-    } catch (_) {
+    } catch (e, s) {
+      print('Error in _calcOrbDescriptorsFromMat: $e\n$s');
       return _OrbDesc.empty();
     } finally {
       gray?.dispose();
@@ -653,7 +658,8 @@ class AnalyzerIsolate {
         bothEyesDetected: bothEyesDetected,
         eyeSharpness: eyeSharpness,
       );
-    } catch (_) {
+    } catch (e, s) {
+      print('Error in _portraitAnalyzeWindowsFromMat: $e\n$s');
       return const _PortraitResult.none();
     } finally {
       gray?.dispose();
@@ -684,7 +690,8 @@ class AnalyzerIsolate {
       final (_, stddev) = cv.meanStdDev(lap);
       final v = stddev.val1 * stddev.val1;
       return v.isFinite ? v : 0;
-    } catch (_) {
+    } catch (e, s) {
+      print('Error in _calcLaplacianVarianceInRoi: $e\n$s');
       return 0;
     } finally {
       sub?.dispose();
@@ -757,7 +764,8 @@ class AnalyzerIsolate {
       meanSq /= n;
       final variance = (meanSq - (mean * mean));
       return variance.isFinite ? variance.abs() : 0;
-    } catch (_) {
+    } catch (e, s) {
+      print('Error in _fallbackLaplacianVariance: $e\n$s');
       return 0;
     }
   }

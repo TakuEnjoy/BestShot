@@ -1,4 +1,4 @@
-package com.example.bestshot
+package com.takuenjoy.bestshot
 
 import io.flutter.embedding.android.FlutterActivity
 
