@@ -306,8 +306,9 @@ class _ImportScreenState extends State<ImportScreen> {
 
             return AlertDialog(
               title: const Text('撮影日（日付）で絞り込み'),
-              content: SizedBox(
-                width: 480,
+              content: Container(
+                constraints: const BoxConstraints(maxWidth: 480),
+                width: MediaQuery.of(context).size.width * 0.9,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -319,11 +320,15 @@ class _ImportScreenState extends State<ImportScreen> {
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(height: 12),
-                    // クイックコントロール行
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    // クイックコントロール行（折り返し対応のWrap）
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Row(
+                        Wrap(
+                          spacing: 4,
                           children: [
                             TextButton(
                               onPressed: () {
@@ -343,38 +348,43 @@ class _ImportScreenState extends State<ImportScreen> {
                             ),
                           ],
                         ),
-                        // 期間で選択
-                        TextButton.icon(
-                          onPressed: () async {
-                            final range = await showDateRangePicker(
-                              context: context,
-                              firstDate: DateTime(2000),
-                              lastDate: DateTime.now().add(const Duration(days: 365)),
-                            );
-                            if (range != null) {
-                              setState(() {
-                                selectedDates.clear();
-                                for (final d in allDates) {
-                                  if (d.isAfter(range.start.subtract(const Duration(seconds: 1))) &&
-                                      d.isBefore(range.end.add(const Duration(days: 1)))) {
-                                    selectedDates.add(d);
-                                  }
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // 期間で選択
+                            TextButton.icon(
+                              onPressed: () async {
+                                final range = await showDateRangePicker(
+                                  context: context,
+                                  firstDate: DateTime(2000),
+                                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                                );
+                                if (range != null) {
+                                  setState(() {
+                                    selectedDates.clear();
+                                    for (final d in allDates) {
+                                      if (d.isAfter(range.start.subtract(const Duration(seconds: 1))) &&
+                                          d.isBefore(range.end.add(const Duration(days: 1)))) {
+                                        selectedDates.add(d);
+                                      }
+                                    }
+                                  });
                                 }
-                              });
-                            }
-                          },
-                          icon: const Icon(Icons.date_range, size: 16),
-                          label: const Text('期間で選択'),
-                        ),
-                        // ソートトグル
-                        IconButton(
-                          tooltip: descending ? '新しい順' : '古い順',
-                          icon: Icon(descending ? Icons.arrow_downward : Icons.arrow_upward),
-                          onPressed: () {
-                            setState(() {
-                              descending = !descending;
-                            });
-                          },
+                              },
+                              icon: const Icon(Icons.date_range, size: 16),
+                              label: const Text('期間で選択'),
+                            ),
+                            // ソートトグル
+                            IconButton(
+                              tooltip: descending ? '新しい順' : '古い順',
+                              icon: Icon(descending ? Icons.arrow_downward : Icons.arrow_upward),
+                              onPressed: () {
+                                setState(() {
+                                  descending = !descending;
+                                });
+                              },
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -480,6 +490,407 @@ class _ImportScreenState extends State<ImportScreen> {
     final isAndroid = Platform.isAndroid;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final size = MediaQuery.of(context).size;
+    final isWide = size.width >= 800;
+    final isSmallMobile = size.width < 600;
+
+    // 1. Premium Hero Header
+    final heroHeader = Container(
+      padding: EdgeInsets.all(isSmallMobile ? 12 : 20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            colorScheme.primary.withOpacity(0.08),
+            colorScheme.secondary.withOpacity(0.03),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: colorScheme.primary.withOpacity(0.15),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        children: [
+          Icon(
+            Icons.auto_awesome_motion_rounded,
+            size: isSmallMobile ? 28 : 40,
+            color: colorScheme.primary,
+          ),
+          SizedBox(height: isSmallMobile ? 8 : 12),
+          Text(
+            '最高の瞬間を、AIが提案します。',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+              fontSize: isSmallMobile ? 14 : null,
+              color: Colors.white.withOpacity(0.95),
+            ),
+          ),
+          SizedBox(height: isSmallMobile ? 4 : 6),
+          Text(
+            '一眼レフやミラーレス of 連写・類似写真を、内容ベースで高速グループ化して「Best」を見つけ出します。',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: Colors.white.withOpacity(0.65),
+              fontSize: isSmallMobile ? 10 : null,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    // 2. Info Card (Tech specs)
+    final infoCard = _InfoCard();
+
+    // 3. Parameters Card
+    final parametersCard = Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: EdgeInsets.all(isSmallMobile ? 12 : 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.tune_rounded, size: isSmallMobile ? 16 : 20, color: colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  '解析・グループ化設定',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    fontSize: isSmallMobile ? 14 : null,
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: isSmallMobile ? 10 : 16),
+            Text(
+              '検出モード',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: Colors.white.withOpacity(0.8),
+                fontSize: isSmallMobile ? 11 : null,
+              ),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<DetectionMode>(
+              isExpanded: true,
+              initialValue: _detectionMode,
+              decoration: InputDecoration(
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: isSmallMobile ? 8 : 12),
+              ),
+              items: [
+                const DropdownMenuItem(
+                  value: DetectionMode.standard,
+                  child: Text('標準（全体ピント・構図スコア）'),
+                ),
+                if (isAndroid)
+                  const DropdownMenuItem(
+                    value: DetectionMode.portrait,
+                    child: Text('ポートレート（顔優先・目閉じ判定）'),
+                  ),
+              ],
+              onChanged: _busy
+                  ? null
+                  : (v) {
+                      if (v == null) return;
+                      if (v == DetectionMode.portrait && !isAndroid) {
+                        setState(() => _detectionMode = DetectionMode.standard);
+                        return;
+                      }
+                      setState(() => _detectionMode = v);
+                    },
+            ),
+            SizedBox(height: isSmallMobile ? 10 : 16),
+            Text(
+              '連写としてまとめる時間窓',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: Colors.white.withOpacity(0.8),
+                fontSize: isSmallMobile ? 11 : null,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '合計: ${_formatBurstWindow(_burstWindowSeconds)}（1秒〜60分以内を1グループ化）',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: Colors.white.withOpacity(0.5),
+                fontSize: isSmallMobile ? 10 : null,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<int>(
+                    initialValue: _burstMinutes.clamp(0, 60),
+                    decoration: InputDecoration(
+                      labelText: '分',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      isDense: true,
+                      contentPadding: isSmallMobile ? const EdgeInsets.symmetric(horizontal: 8, vertical: 8) : null,
+                    ),
+                    items: [
+                      for (var i = 0; i <= 60; i++)
+                        DropdownMenuItem(value: i, child: Text(i.toString().padLeft(2, '0'))),
+                    ],
+                    onChanged: _busy
+                        ? null
+                        : (v) {
+                            if (v == null) return;
+                            setState(() => _burstMinutes = v);
+                            _normalizeBurstTotal();
+                          },
+                  ),
+                ),
+                SizedBox(width: isSmallMobile ? 8 : 12),
+                Expanded(
+                  child: DropdownButtonFormField<int>(
+                    initialValue: _burstSeconds.clamp(0, 59),
+                    decoration: InputDecoration(
+                      labelText: '秒',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      isDense: true,
+                      contentPadding: isSmallMobile ? const EdgeInsets.symmetric(horizontal: 8, vertical: 8) : null,
+                    ),
+                    items: [
+                      for (var i = 0; i < 60; i++)
+                        DropdownMenuItem(value: i, child: Text(i.toString().padLeft(2, '0'))),
+                    ],
+                    onChanged: _busy
+                        ? null
+                        : (v) {
+                            if (v == null) return;
+                            setState(() => _burstSeconds = v);
+                            _normalizeBurstTotal();
+                          },
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: isSmallMobile ? 10 : 16),
+            Text(
+              '最大インポート件数',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: Colors.white.withOpacity(0.8),
+                fontSize: isSmallMobile ? 11 : null,
+              ),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<int>(
+              initialValue: _maxCount,
+              decoration: InputDecoration(
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                isDense: true,
+                contentPadding: isSmallMobile ? const EdgeInsets.symmetric(horizontal: 16, vertical: 8) : null,
+              ),
+              items: const [
+                DropdownMenuItem(value: 50, child: Text('50枚')),
+                DropdownMenuItem(value: 100, child: Text('100枚')),
+                DropdownMenuItem(value: 200, child: Text('200枚')),
+                DropdownMenuItem(value: 500, child: Text('500枚')),
+                DropdownMenuItem(value: 1000, child: Text('1000枚')),
+              ],
+              onChanged: _busy
+                  ? null
+                  : (v) {
+                      if (v == null) return;
+                      setState(() => _maxCount = v);
+                    },
+            ),
+          ],
+        ),
+      ),
+    );
+
+    // 4. Hero Import Button (Beautiful Gradient Action Box)
+    Widget? importButton;
+    if (!_busy) {
+      importButton = Container(
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF6366F1), Color(0xFF4F46E5)], // Indigo gradients
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF6366F1).withOpacity(0.3),
+              blurRadius: 16,
+              spreadRadius: 2,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _runFolderImportAndAnalyze(!isWindows),
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: isSmallMobile ? 16 : 24, horizontal: 12),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(isSmallMobile ? 8 : 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.folder_open_rounded,
+                      size: isSmallMobile ? 24 : 32,
+                      color: Colors.white,
+                    ),
+                  ),
+                  SizedBox(height: isSmallMobile ? 8 : 12),
+                  Text(
+                    isWindows ? 'フォルダを指定してインポート' : 'スキャンするフォルダを選択',
+                    style: TextStyle(
+                      fontSize: isSmallMobile ? 14 : 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'サブフォルダ内の画像も自動的に再帰スキャンされます',
+                    style: TextStyle(
+                      fontSize: isSmallMobile ? 10 : 11,
+                      color: Colors.white.withOpacity(0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // 5. Status and Progress Display
+    Widget? progressDisplay;
+    if (_busy) {
+      progressDisplay = Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: colorScheme.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: colorScheme.primary.withOpacity(0.2),
+          ),
+        ),
+        child: Column(
+          children: [
+            const SizedBox(
+              width: 40,
+              height: 40,
+              child: CircularProgressIndicator(
+                strokeWidth: 3.5,
+              ),
+            ),
+            const SizedBox(height: 16),
+            if (_stage.isNotEmpty)
+              Text(
+                _stage,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: colorScheme.primary,
+                ),
+              ),
+            const SizedBox(height: 6),
+            Text(
+              _status,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: Colors.white.withOpacity(0.85),
+              ),
+            ),
+            if (_progress != null) ...[
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: _progress,
+                  minHeight: 8,
+                  backgroundColor: colorScheme.primary.withOpacity(0.1),
+                  valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${(_progress! * 100).toStringAsFixed(0)}%',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: colorScheme.primary,
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    // 6. Non-busy error/info status
+    Widget? errorDisplay;
+    if (!_busy && _status.isNotEmpty) {
+      errorDisplay = Padding(
+        padding: const EdgeInsets.only(top: 16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: _status.contains('エラー')
+                ? colorScheme.error.withOpacity(0.12)
+                : colorScheme.secondary.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: _status.contains('エラー')
+                  ? colorScheme.error.withOpacity(0.3)
+                  : colorScheme.secondary.withOpacity(0.2),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                _status.contains('エラー')
+                    ? Icons.error_outline_rounded
+                    : Icons.info_outline_rounded,
+                color: _status.contains('エラー')
+                    ? colorScheme.error
+                    : colorScheme.secondary,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _status,
+                  style: TextStyle(
+                    color: _status.contains('エラー')
+                        ? colorScheme.error
+                        : Colors.white.withOpacity(0.9),
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -500,396 +911,54 @@ class _ImportScreenState extends State<ImportScreen> {
       ),
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 580),
+          constraints: BoxConstraints(maxWidth: isWide ? 1150 : 580),
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Premium Hero Header
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        colorScheme.primary.withOpacity(0.08),
-                        colorScheme.secondary.withOpacity(0.03),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: colorScheme.primary.withOpacity(0.15),
-                      width: 1,
-                    ),
-                  ),
-                  child: Column(
+            padding: EdgeInsets.symmetric(
+              horizontal: isSmallMobile ? 16 : 24,
+              vertical: isSmallMobile ? 12 : 20,
+            ),
+            child: isWide
+                ? Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        Icons.auto_awesome_motion_rounded,
-                        size: 40,
-                        color: colorScheme.primary,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        '最高の瞬間を、AIが提案します。',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white.withOpacity(0.95),
+                      // 左カラム (説明、インポートボタン、進捗、InfoCard)
+                      Expanded(
+                        flex: 6,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            heroHeader,
+                            const SizedBox(height: 24),
+                            if (importButton != null) importButton,
+                            if (progressDisplay != null) progressDisplay,
+                            if (errorDisplay != null) errorDisplay,
+                            const SizedBox(height: 24),
+                            infoCard,
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '一眼レフやミラーレスの連写・類似写真を、内容ベースで高速グループ化して「Best」を見つけ出します。',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: Colors.white.withOpacity(0.65),
-                          height: 1.4,
-                        ),
+                      const SizedBox(width: 24),
+                      // 右カラム (設定パネル)
+                      Expanded(
+                        flex: 4,
+                        child: parametersCard,
                       ),
                     ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      heroHeader,
+                      SizedBox(height: isSmallMobile ? 12 : 20),
+                      infoCard,
+                      SizedBox(height: isSmallMobile ? 12 : 20),
+                      parametersCard,
+                      SizedBox(height: isSmallMobile ? 16 : 24),
+                      if (importButton != null) importButton,
+                      if (progressDisplay != null) progressDisplay,
+                      if (errorDisplay != null) errorDisplay,
+                    ],
                   ),
-                ),
-                const SizedBox(height: 20),
-
-                // Info Cards (Tech specs)
-                _InfoCard(),
-                const SizedBox(height: 20),
-
-                // Parameters Card (Glassmorphism inspired)
-                Card(
-                  margin: EdgeInsets.zero,
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.tune_rounded, size: 20, color: colorScheme.primary),
-                            const SizedBox(width: 8),
-                            Text(
-                              '解析・グループ化設定',
-                              style: theme.textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          '検出モード',
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: Colors.white.withOpacity(0.8),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        DropdownButtonFormField<DetectionMode>(
-                          initialValue: _detectionMode,
-                          decoration: InputDecoration(
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: DetectionMode.standard,
-                              child: Text('標準（全体ピント・構図スコア）'),
-                            ),
-                            DropdownMenuItem(
-                              value: DetectionMode.portrait,
-                              child: Text('ポートレート（顔優先・目閉じ判定）'),
-                            ),
-                          ],
-                          onChanged: _busy
-                              ? null
-                              : (v) {
-                                  if (v == null) return;
-                                  if (v == DetectionMode.portrait && !(isWindows || isAndroid)) {
-                                    setState(() => _detectionMode = DetectionMode.standard);
-                                    return;
-                                  }
-                                  setState(() => _detectionMode = v);
-                                },
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          '連写としてまとめる時間窓',
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: Colors.white.withOpacity(0.8),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '合計: ${_formatBurstWindow(_burstWindowSeconds)}（1秒〜60分以内を1グループ化）',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: Colors.white.withOpacity(0.5),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: DropdownButtonFormField<int>(
-                                initialValue: _burstMinutes.clamp(0, 60),
-                                decoration: InputDecoration(
-                                  labelText: '分',
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  isDense: true,
-                                ),
-                                items: [
-                                  for (var i = 0; i <= 60; i++)
-                                    DropdownMenuItem(value: i, child: Text(i.toString().padLeft(2, '0'))),
-                                ],
-                                onChanged: _busy
-                                    ? null
-                                    : (v) {
-                                        if (v == null) return;
-                                        setState(() => _burstMinutes = v);
-                                        _normalizeBurstTotal();
-                                      },
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: DropdownButtonFormField<int>(
-                                initialValue: _burstSeconds.clamp(0, 59),
-                                decoration: InputDecoration(
-                                  labelText: '秒',
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  isDense: true,
-                                ),
-                                items: [
-                                  for (var i = 0; i < 60; i++)
-                                    DropdownMenuItem(value: i, child: Text(i.toString().padLeft(2, '0'))),
-                                ],
-                                onChanged: _busy
-                                    ? null
-                                    : (v) {
-                                        if (v == null) return;
-                                        setState(() => _burstSeconds = v);
-                                        _normalizeBurstTotal();
-                                      },
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          '最大インポート件数',
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: Colors.white.withOpacity(0.8),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        DropdownButtonFormField<int>(
-                          initialValue: _maxCount,
-                          decoration: InputDecoration(
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            isDense: true,
-                          ),
-                          items: const [
-                            DropdownMenuItem(value: 50, child: Text('50枚')),
-                            DropdownMenuItem(value: 100, child: Text('100枚')),
-                            DropdownMenuItem(value: 200, child: Text('200枚')),
-                            DropdownMenuItem(value: 500, child: Text('500枚')),
-                            DropdownMenuItem(value: 1000, child: Text('1000枚')),
-                          ],
-                          onChanged: _busy
-                              ? null
-                              : (v) {
-                                  if (v == null) return;
-                                  setState(() => _maxCount = v);
-                                },
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                // Hero Import Button (Beautiful Gradient Action Box)
-                if (!_busy)
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF6366F1), Color(0xFF4F46E5)], // Indigo gradients
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFF6366F1).withOpacity(0.3),
-                          blurRadius: 16,
-                          spreadRadius: 2,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: () => _runFolderImportAndAnalyze(!isWindows),
-                        borderRadius: BorderRadius.circular(16),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.12),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.folder_open_rounded,
-                                  size: 32,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                isWindows ? 'フォルダを指定してインポート' : 'スキャンするフォルダを選択',
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'サブフォルダ内の画像も自動的に再帰スキャンされます',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.white.withOpacity(0.7),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-
-                // Status and Progress Display
-                if (_busy)
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surface,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: colorScheme.primary.withOpacity(0.2),
-                      ),
-                    ),
-                    child: Column(
-                      children: [
-                        const SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 3.5,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        if (_stage.isNotEmpty)
-                          Text(
-                            _stage,
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                              color: colorScheme.primary,
-                            ),
-                          ),
-                        const SizedBox(height: 6),
-                        Text(
-                          _status,
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: Colors.white.withOpacity(0.85),
-                          ),
-                        ),
-                        if (_progress != null) ...[
-                          const SizedBox(height: 16),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(6),
-                            child: LinearProgressIndicator(
-                              value: _progress,
-                              minHeight: 8,
-                              backgroundColor: colorScheme.primary.withOpacity(0.1),
-                              valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            '${(_progress! * 100).toStringAsFixed(0)}%',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              fontWeight: FontWeight.bold,
-                              color: colorScheme.primary,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-
-                // Non-busy error/info status
-                if (!_busy && _status.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 16),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: _status.contains('エラー')
-                            ? colorScheme.error.withOpacity(0.12)
-                            : colorScheme.secondary.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: _status.contains('エラー')
-                              ? colorScheme.error.withOpacity(0.3)
-                              : colorScheme.secondary.withOpacity(0.2),
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            _status.contains('エラー')
-                                ? Icons.error_outline_rounded
-                                : Icons.info_outline_rounded,
-                            color: _status.contains('エラー')
-                                ? colorScheme.error
-                                : colorScheme.secondary,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              _status,
-                              style: TextStyle(
-                                color: _status.contains('エラー')
-                                    ? colorScheme.error
-                                    : Colors.white.withOpacity(0.9),
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
           ),
         ),
       ),

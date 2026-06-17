@@ -210,7 +210,7 @@ Future<ExifSummary?> _readExifSummary(File f) async {
     final tags = await readExifFromBytes(bytes);
 
     String? getTag(String key) => tags[key]?.printable;
-    final fnum = getTag('EXIF FNumber') ?? getTag('FNumber');
+    final fnum = _parseFNumber(getTag('EXIF FNumber') ?? getTag('FNumber'));
     final expo = getTag('EXIF ExposureTime') ?? getTag('ExposureTime');
     final iso = getTag('EXIF ISOSpeedRatings') ?? getTag('ISOSpeedRatings');
     final dt =
@@ -228,6 +228,39 @@ Future<ExifSummary?> _readExifSummary(File f) async {
   } catch (_) {
     return null;
   }
+}
+
+String? _parseFNumber(String? raw) {
+  if (raw == null) return null;
+  raw = raw.trim();
+  if (raw.isEmpty) return null;
+
+  // もし "14/5" のような分数形式なら、浮動小数点数に変換する
+  final parts = raw.split('/');
+  if (parts.length == 2) {
+    final num = double.tryParse(parts[0].trim());
+    final den = double.tryParse(parts[1].trim());
+    if (num != null && den != null && den != 0) {
+      final val = num / den;
+      return _formatFValue(val);
+    }
+  }
+
+  // もし通常の数値（例: "2.8"）なら、パースしてフォーマット
+  final val = double.tryParse(raw);
+  if (val != null) {
+    return _formatFValue(val);
+  }
+
+  return raw;
+}
+
+String _formatFValue(double val) {
+  final rounded = (val * 10).round() / 10;
+  if (rounded == rounded.toInt()) {
+    return rounded.toInt().toString();
+  }
+  return rounded.toString();
 }
 
 DateTime? _parseExifDateTime(String? s) {

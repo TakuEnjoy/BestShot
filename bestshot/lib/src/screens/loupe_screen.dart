@@ -208,9 +208,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
       return KeyEventResult.handled;
     }
 
-    if (key == LogicalKeyboardKey.keyB ||
-        key == LogicalKeyboardKey.enter ||
-        key == LogicalKeyboardKey.numpadEnter) {
+    if (key == LogicalKeyboardKey.keyB) {
       if (_activePaneIndex >= 0 && _activePaneIndex < count) {
         final itemKey = widget.items[_activePaneIndex].key;
         widget.onSetBest?.call(itemKey);
@@ -220,6 +218,12 @@ class _LoupeScreenState extends State<LoupeScreen> {
           }
         });
       }
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      Navigator.of(context).pop();
       return KeyEventResult.handled;
     }
 

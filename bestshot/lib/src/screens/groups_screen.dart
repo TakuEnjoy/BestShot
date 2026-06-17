@@ -9,6 +9,7 @@ import '../models/photo_entry.dart';
 import '../models/photo_group.dart';
 import '../services/analysis/analysis_types.dart';
 import '../services/deleting/delete_service.dart';
+import '../services/sorting/sort_service.dart';
 import 'loupe_screen.dart';
 
 class GroupsScreen extends StatefulWidget {
@@ -30,6 +31,11 @@ class _GroupsScreenState extends State<GroupsScreen> {
   late final Set<String> _selectedForDelete;
   bool _deleting = false;
   final List<String> _loupeSelection = [];
+
+  // 仕分け用の状態変数
+  final Map<String, String> _selectedSortFolders = {};
+  final List<String> _customFolders = [];
+  bool _sorting = false;
 
   // Keyboard focus management
   late final FocusNode _focusNode;
@@ -182,7 +188,16 @@ class _GroupsScreenState extends State<GroupsScreen> {
             .toList();
         await DeleteService.moveToTrash(entries);
         if (!mounted) return;
-        setState(() => _selectedForDelete.clear());
+        setState(() {
+          for (final entry in entries) {
+            _entryByKey.remove(entry.key);
+            for (final g in widget.groups) {
+              g.items.removeWhere((item) => item.key == entry.key);
+            }
+          }
+          widget.groups.removeWhere((g) => g.items.isEmpty);
+          _selectedForDelete.clear();
+        });
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('ゴミ箱へ移動しました')));
@@ -199,11 +214,29 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   void _scrollToActiveGroup(bool isPortrait) {
     if (!_scrollController.hasClients) return;
+    final size = MediaQuery.of(context).size;
+    final isWide = size.width >= 800;
+    final isMobile = size.width < 600;
+    final crossAxisCount = size.width >= 1200 ? 3 : (size.width >= 800 ? 2 : 1);
+
     if (isPortrait) {
-      final targetOffset = _keyboardPortraitIndex * 130.0;
+      double targetOffset;
+      if (isWide) {
+        final itemWidth = (size.width - 32 - (crossAxisCount - 1) * 16) / crossAxisCount;
+        final itemHeight = itemWidth / 0.82 + 16;
+        final rowIndex = _keyboardPortraitIndex ~/ crossAxisCount;
+        targetOffset = rowIndex * itemHeight;
+      } else if (isMobile) {
+        final itemWidth = (size.width - 24 - 12) / 2;
+        final itemHeight = itemWidth / 0.82 + 12;
+        final rowIndex = _keyboardPortraitIndex ~/ 2;
+        targetOffset = rowIndex * itemHeight;
+      } else {
+        targetOffset = _keyboardPortraitIndex * 130.0;
+      }
       final currentOffset = _scrollController.offset;
-      final viewHeight = MediaQuery.of(context).size.height;
-      if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 200) {
+      final viewHeight = size.height;
+      if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 250) {
         _scrollController.animateTo(
           targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
           duration: const Duration(milliseconds: 150),
@@ -213,7 +246,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     } else {
       final targetOffset = _keyboardGroupIndex * 220.0;
       final currentOffset = _scrollController.offset;
-      final viewHeight = MediaQuery.of(context).size.height;
+      final viewHeight = size.height;
       if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 300) {
         _scrollController.animateTo(
           targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
@@ -308,9 +341,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         return KeyEventResult.handled;
       }
 
-      if (key == LogicalKeyboardKey.keyB ||
-          key == LogicalKeyboardKey.enter ||
-          key == LogicalKeyboardKey.numpadEnter) {
+      if (key == LogicalKeyboardKey.keyB) {
         if (_keyboardPhotoKey != null) {
           setState(() {
             g.bestKey = _keyboardPhotoKey!;
@@ -318,6 +349,80 @@ class _GroupsScreenState extends State<GroupsScreen> {
         }
         return KeyEventResult.handled;
       }
+    }
+
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      final activeKey = isPortrait
+          ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
+          : _keyboardPhotoKey;
+      if (activeKey != null) {
+        final targetKeys = _loupeSelection.isNotEmpty
+            ? _loupeSelection.toList()
+            : [activeKey];
+
+        final items = targetKeys
+            .map((k) => _entryByKey[k])
+            .whereType<PhotoEntry>()
+            .toList();
+        if (items.isNotEmpty) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => LoupeScreen(
+                items: items,
+                scores: items.map((e) => e.sharpness).toList(),
+                isBests: items.map((e) {
+                  for (final g in widget.groups) {
+                    if (g.items.any((item) => item.key == e.key)) {
+                      return e.key == g.bestKey;
+                    }
+                  }
+                  return false;
+                }).toList(),
+                initialSelectedForDelete: _selectedForDelete,
+                onToggleDelete: (k, val) {
+                  setState(() {
+                    if (val) {
+                      _selectedForDelete.add(k);
+                    } else {
+                      _selectedForDelete.remove(k);
+                    }
+                  });
+                },
+                onSetBest: (k) {
+                  setState(() {
+                    for (final g in widget.groups) {
+                      if (g.items.any((item) => item.key == k)) {
+                        g.bestKey = k;
+                        break;
+                      }
+                    }
+                  });
+                },
+              ),
+            ),
+          );
+        }
+      }
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.keyL) {
+      final targetKey = isPortrait
+          ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
+          : _keyboardPhotoKey;
+      if (targetKey != null) {
+        setState(() {
+          if (_loupeSelection.contains(targetKey)) {
+            _loupeSelection.remove(targetKey);
+          } else {
+            if (_loupeSelection.length < 4) {
+              _loupeSelection.add(targetKey);
+            }
+          }
+        });
+      }
+      return KeyEventResult.handled;
     }
 
     if (key == LogicalKeyboardKey.space) {
@@ -341,12 +446,1069 @@ class _GroupsScreenState extends State<GroupsScreen> {
       return KeyEventResult.handled;
     }
 
+    int? getFolderIndex(LogicalKeyboardKey key) {
+      if (key == LogicalKeyboardKey.digit1 || key == LogicalKeyboardKey.numpad1) return 0;
+      if (key == LogicalKeyboardKey.digit2 || key == LogicalKeyboardKey.numpad2) return 1;
+      if (key == LogicalKeyboardKey.digit3 || key == LogicalKeyboardKey.numpad3) return 2;
+      if (key == LogicalKeyboardKey.digit4 || key == LogicalKeyboardKey.numpad4) return 3;
+      if (key == LogicalKeyboardKey.digit5 || key == LogicalKeyboardKey.numpad5) return 4;
+      if (key == LogicalKeyboardKey.digit6 || key == LogicalKeyboardKey.numpad6) return 5;
+      if (key == LogicalKeyboardKey.digit7 || key == LogicalKeyboardKey.numpad7) return 6;
+      if (key == LogicalKeyboardKey.digit8 || key == LogicalKeyboardKey.numpad8) return 7;
+      if (key == LogicalKeyboardKey.digit9 || key == LogicalKeyboardKey.numpad9) return 8;
+      if (key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0) return 9;
+      return null;
+    }
+
+    final folderIndex = getFolderIndex(key);
+    if (folderIndex != null && folderIndex < _customFolders.length) {
+      final targetKey = isPortrait
+          ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
+          : _keyboardPhotoKey;
+      if (targetKey != null) {
+        setState(() {
+          final targetFolder = _customFolders[folderIndex];
+          if (_selectedSortFolders[targetKey] == targetFolder) {
+            _selectedSortFolders.remove(targetKey);
+          } else {
+            _selectedSortFolders[targetKey] = targetFolder;
+          }
+        });
+
+        // 爆速仕分けのために、割り当て完了後に自動で次の写真にフォーカスを移動する
+        if (isPortrait) {
+          if (_keyboardPortraitIndex < portraitItems.length - 1) {
+            setState(() {
+              _keyboardPortraitIndex++;
+              _scrollToActiveGroup(true);
+            });
+          }
+        } else {
+          final g = widget.groups[_keyboardGroupIndex];
+          final items = g.items;
+          final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
+          if (currentIndex != -1 && currentIndex < items.length - 1) {
+            setState(() {
+              _keyboardPhotoKey = items[currentIndex + 1].key;
+            });
+          }
+        }
+      }
+      return KeyEventResult.handled;
+    }
+
     return KeyEventResult.ignored;
+  }
+
+  Future<void> _runSortAndProcess() async {
+    if (_selectedSortFolders.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('仕分け先が設定されている写真がありません。')),
+      );
+      return;
+    }
+
+    final bool? isCopy = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('仕分け処理の実行'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('仕分け先が設定された ${_selectedSortFolders.length} 枚の写真に対して処理を実行します。'),
+              const SizedBox(height: 12),
+              const Text('処理方法を選択してください：'),
+              const SizedBox(height: 8),
+              const Text('• 移動：ファイルを新しいフォルダに移動します（元の場所からは削除されます）。', style: TextStyle(fontSize: 12)),
+              const Text('• コピー：ファイルを新しいフォルダに複製します（元の場所にも残ります）。', style: TextStyle(fontSize: 12)),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('キャンセル'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false), // 移動
+              child: const Text('移動する'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true), // コピー
+              child: const Text('コピーする'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (isCopy == null) return;
+
+    setState(() {
+      _sorting = true;
+    });
+
+    if (!mounted) return;
+
+    final progressNotifier = ValueNotifier<double>(0.0);
+    final statusNotifier = ValueNotifier<String>('処理を開始しています...');
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return PopScope(
+          canPop: false,
+          child: AlertDialog(
+            title: Text(isCopy ? 'ファイルをコピー中' : 'ファイルを移動中'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                ValueListenableBuilder<double>(
+                  valueListenable: progressNotifier,
+                  builder: (context, val, _) {
+                    return LinearProgressIndicator(value: val);
+                  },
+                ),
+                const SizedBox(height: 12),
+                ValueListenableBuilder<String>(
+                  valueListenable: statusNotifier,
+                  builder: (context, text, _) {
+                    return Text(text, style: const TextStyle(fontSize: 12));
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    try {
+      final result = await SortService.executeSort(
+        sortMap: _selectedSortFolders,
+        entries: _entryByKey.values.toList(),
+        isCopy: isCopy,
+        onProgress: (done, total) {
+          progressNotifier.value = total <= 0 ? 0.0 : done / total;
+          statusNotifier.value = '処理中... ($done / $total)';
+        },
+      );
+
+      if (mounted) {
+        Navigator.of(context).pop(); // Close progress dialog
+      }
+
+      setState(() {
+        _sorting = false;
+      });
+
+      final entryMapByPath = {for (final e in _entryByKey.values) e.filePath: e};
+      final failedKeys = result.failedFiles
+          .map((path) => entryMapByPath[path]?.key)
+          .whereType<String>()
+          .toSet();
+
+      final successKeys = _selectedSortFolders.keys
+          .where((key) => !failedKeys.contains(key))
+          .toSet();
+
+      if (!isCopy && successKeys.isNotEmpty) {
+        setState(() {
+          for (final key in successKeys) {
+            _entryByKey.remove(key);
+            for (final g in widget.groups) {
+              g.items.removeWhere((item) => item.key == key);
+            }
+          }
+          widget.groups.removeWhere((g) => g.items.isEmpty);
+        });
+      }
+
+      setState(() {
+        _selectedSortFolders.removeWhere((key, _) => successKeys.contains(key));
+      });
+
+      if (result.failedFiles.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${result.successCount} 枚の写真を${isCopy ? "コピー" : "移動"}しました。'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (context) {
+              return AlertDialog(
+                title: const Text('仕分け完了（一部失敗）'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${result.successCount} 枚の処理は成功しましたが、${result.failedFiles.length} 枚の処理に失敗しました。'),
+                    const SizedBox(height: 12),
+                    const Text('失敗した原因の例: ファイルのロック、容量不足、権限の喪失など。'),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('確認'),
+                  ),
+                ],
+              );
+            },
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+      setState(() {
+        _sorting = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('処理中にシステムエラーが発生しました: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _addNewFolder(BuildContext context, String key, bool isGrid) async {
+    if (_customFolders.length >= 10) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('フォルダは最大10個までしか作成できません。')),
+        );
+      }
+      return;
+    }
+
+    final textController = TextEditingController();
+    final newFolder = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('新規フォルダの作成'),
+          content: TextField(
+            controller: textController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'フォルダ名を入力してください',
+            ),
+            maxLength: 30,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final val = textController.text.trim();
+                if (val.isNotEmpty) {
+                  Navigator.of(context).pop(val);
+                }
+              },
+              child: const Text('作成'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (newFolder != null && newFolder.isNotEmpty) {
+      final RegExp invalidChars = RegExp(r'[<>:"/\\|?*]');
+      if (invalidChars.hasMatch(newFolder)) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('フォルダ名に使用できない文字が含まれています。')),
+          );
+        }
+        return;
+      }
+
+      if (_customFolders.contains(newFolder)) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('同名のフォルダが既に存在します。')),
+          );
+        }
+        return;
+      }
+
+      setState(() {
+        _customFolders.add(newFolder);
+        _selectedSortFolders[key] = newFolder;
+      });
+    }
+  }
+
+  Widget _buildSortFolderButtonForGrid(String key, ThemeData theme) {
+    final sortFolder = _selectedSortFolders[key];
+    final hasFolder = sortFolder != null;
+    return Material(
+      color: Colors.transparent,
+      child: PopupMenuButton<String?>(
+        tooltip: 'フォルダに仕分ける',
+        onSelected: (folder) {
+          if (folder == '__NEW_FOLDER__') {
+            _addNewFolder(context, key, true);
+          } else if (folder == null) {
+            setState(() {
+              _selectedSortFolders.remove(key);
+            });
+          } else {
+            setState(() {
+              _selectedSortFolders[key] = folder;
+            });
+          }
+        },
+        offset: const Offset(0, 30),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: hasFolder ? getFolderColor(sortFolder, _customFolders) : Colors.black.withOpacity(0.5),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white24),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                hasFolder ? Icons.folder : Icons.folder_open,
+                size: 16,
+                color: Colors.white,
+              ),
+              if (hasFolder) ...[
+                const SizedBox(width: 4),
+                Text(
+                  sortFolder,
+                  style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ],
+          ),
+        ),
+        itemBuilder: (context) {
+          return [
+            PopupMenuItem<String?>(
+              value: '__NEW_FOLDER__',
+              child: Row(
+                children: [
+                  Icon(Icons.create_new_folder, size: 16, color: theme.colorScheme.primary),
+                  const SizedBox(width: 8),
+                  const Text('新規フォルダを追加...'),
+                ],
+              ),
+            ),
+            PopupMenuItem<String?>(
+              value: null,
+              child: Row(
+                children: [
+                  Icon(Icons.folder_off, size: 16, color: theme.hintColor),
+                  const SizedBox(width: 8),
+                  const Text('仕分けを解除'),
+                ],
+              ),
+            ),
+            ..._customFolders.map((folder) {
+              return PopupMenuItem<String?>(
+                value: folder,
+                child: Row(
+                  children: [
+                    Icon(Icons.folder, size: 16, color: getFolderColor(folder, _customFolders)),
+                    const SizedBox(width: 8),
+                    Text(folder),
+                  ],
+                ),
+              );
+            }),
+          ];
+        },
+      ),
+    );
+  }
+
+  void _showKeyboardShortcutsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.keyboard_command_key_rounded, size: 24),
+              SizedBox(width: 8),
+              Text('キーボード操作ガイド'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('本画面およびルーペ画面は、キーボードで高速に操作可能です。'),
+              const SizedBox(height: 16),
+              _buildShortcutRow('← / →', '同じグループ内での写真選択の移動'),
+              _buildShortcutRow('↑ / ↓', 'グループ間の移動'),
+              _buildShortcutRow('Space', '選択中の写真を削除候補（ゴミ箱マーク）に設定 / 解除'),
+              _buildShortcutRow('Enter', '選択中の写真をルーペ（詳細比較）で表示'),
+              _buildShortcutRow('B', '選択中の写真をこのグループの「Best」に設定'),
+              _buildShortcutRow('L', '選択中の写真をルーペ比較対象に設定 / 解除（最大4枚）'),
+              _buildShortcutRow('S', '連動拡大のオン / オフ切り替え（ルーペ画面）'),
+              _buildShortcutRow('Esc', 'ルーペ画面を閉じる / 選択解除'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('閉じる'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildShortcutRow(String keyStroke, String description) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 80,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.white24, width: 1),
+            ),
+            child: Text(
+              keyStroke,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              description,
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPortraitBody(BuildContext context, List<PhotoEntry> portraitItems, bool isWide, double width, int crossAxisCount) {
+    Widget buildItem(int index) {
+      final e = portraitItems[index];
+      final t = e.capturedAt;
+      final timeStr = t == null
+          ? ''
+          : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
+      final eyeText = e.portraitBothEyesDetected
+          ? '目閉じなし'
+          : (e.portraitEyesClosed ? '目閉じ' : '');
+
+      final loupeSelected = _loupeSelection.contains(e.key);
+      final selectedForDelete = _selectedForDelete.contains(e.key);
+      final isKeyboardFocused = index == _keyboardPortraitIndex;
+      final theme = Theme.of(context);
+      final sortFolder = _selectedSortFolders[e.key];
+      final hasFolder = sortFolder != null;
+
+      return InkWell(
+        onTap: () {
+          setState(() {
+            _keyboardPortraitIndex = index;
+            if (selectedForDelete) {
+              _selectedForDelete.remove(e.key);
+            } else {
+              _selectedForDelete.add(e.key);
+            }
+          });
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          decoration: BoxDecoration(
+            color: selectedForDelete
+                ? theme.colorScheme.error.withOpacity(0.08)
+                : theme.colorScheme.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isKeyboardFocused
+                  ? theme.colorScheme.primary
+                  : (selectedForDelete
+                      ? theme.colorScheme.error
+                      : (hasFolder
+                          ? getFolderColor(sortFolder, _customFolders)
+                          : (loupeSelected
+                              ? theme.colorScheme.primary.withOpacity(0.5)
+                              : theme.dividerColor.withOpacity(0.12)))),
+              width: isKeyboardFocused ? 2.5 : (selectedForDelete || hasFolder || loupeSelected ? 2 : 1),
+            ),
+            boxShadow: isKeyboardFocused
+                ? [
+                    BoxShadow(
+                      color: theme.colorScheme.primary.withOpacity(0.25),
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    )
+                  ]
+                : null,
+          ),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
+                child: Stack(
+                  children: [
+                    Opacity(
+                      opacity: selectedForDelete ? 0.45 : 1.0,
+                      child: ColorFiltered(
+                        colorFilter: ColorFilter.mode(
+                          selectedForDelete ? Colors.grey : Colors.transparent,
+                          BlendMode.saturation,
+                        ),
+                        child: Image.memory(
+                          e.displayBytes,
+                          width: 120,
+                          height: 120,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                        ),
+                      ),
+                    ),
+                    if (loupeSelected)
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text(
+                            '${_loupeSelection.indexOf(e.key) + 1}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    // Checkbox (Top Right)
+                    Positioned(
+                      right: 4,
+                      top: 4,
+                      child: Checkbox(
+                        value: selectedForDelete,
+                        onChanged: (v) {
+                          setState(() {
+                            _keyboardPortraitIndex = index;
+                            if (v == true) {
+                              _selectedForDelete.add(e.key);
+                            } else {
+                              _selectedForDelete.remove(e.key);
+                            }
+                          });
+                        },
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        side: const BorderSide(color: Colors.white, width: 1.5),
+                      ),
+                    ),
+                    // Loupe Button (Bottom Right)
+                    Positioned(
+                      right: 4,
+                      bottom: 4,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            setState(() {
+                              _keyboardPortraitIndex = index;
+                              if (loupeSelected) {
+                                _loupeSelection.remove(e.key);
+                              } else {
+                                if (_loupeSelection.length >= 4) {
+                                  _loupeSelection.removeAt(0);
+                                }
+                                _loupeSelection.add(e.key);
+                              }
+                            });
+                          },
+                          borderRadius: BorderRadius.circular(20),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: loupeSelected
+                                  ? theme.colorScheme.primary
+                                  : Colors.black.withOpacity(0.5),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
+                              size: 16,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Folder Button (Bottom Left)
+                    Positioned(
+                      left: 4,
+                      bottom: 4,
+                      child: _buildSortFolderButtonForGrid(e.key, theme),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        timeStr.isEmpty ? '（時刻不明）' : timeStr,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '鮮明度: ${e.sharpness.toStringAsFixed(0)}（顔ROI: ${e.portraitFaceSharpness.toStringAsFixed(0)}）',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      if (eyeText.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          eyeText,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: e.portraitBothEyesDetected
+                                    ? const Color(0xFF16A34A)
+                                    : const Color(0xFFDC2626),
+                              ),
+                        ),
+                      ],
+                      if (e.portraitEyeOpenAvg >= 0) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          '目開き平均: ${e.portraitEyeOpenAvg.toStringAsFixed(2)}',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+            ],
+          ),
+        ),
+      );
+    }
+
+    Widget buildGridItem(int index) {
+      final e = portraitItems[index];
+      final t = e.capturedAt;
+      final timeStr = t == null
+          ? ''
+          : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
+      final eyeText = e.portraitBothEyesDetected
+          ? '目閉じなし'
+          : (e.portraitEyesClosed ? '目閉じ' : '');
+
+      final loupeSelected = _loupeSelection.contains(e.key);
+      final selectedForDelete = _selectedForDelete.contains(e.key);
+      final isKeyboardFocused = index == _keyboardPortraitIndex;
+      final theme = Theme.of(context);
+      final sortFolder = _selectedSortFolders[e.key];
+      final hasFolder = sortFolder != null;
+
+      return InkWell(
+        onTap: () {
+          setState(() {
+            _keyboardPortraitIndex = index;
+            if (selectedForDelete) {
+              _selectedForDelete.remove(e.key);
+            } else {
+              _selectedForDelete.add(e.key);
+            }
+          });
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          decoration: BoxDecoration(
+            color: selectedForDelete
+                ? theme.colorScheme.error.withOpacity(0.08)
+                : theme.colorScheme.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isKeyboardFocused
+                  ? theme.colorScheme.primary
+                  : (selectedForDelete
+                      ? theme.colorScheme.error
+                      : (hasFolder
+                          ? getFolderColor(sortFolder, _customFolders)
+                          : (loupeSelected
+                              ? theme.colorScheme.primary.withOpacity(0.5)
+                              : theme.dividerColor.withOpacity(0.12)))),
+              width: isKeyboardFocused ? 2.5 : (selectedForDelete || hasFolder || loupeSelected ? 2 : 1),
+            ),
+            boxShadow: isKeyboardFocused
+                ? [
+                    BoxShadow(
+                      color: theme.colorScheme.primary.withOpacity(0.25),
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    )
+                  ]
+                : null,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Opacity(
+                        opacity: selectedForDelete ? 0.45 : 1.0,
+                        child: ColorFiltered(
+                          colorFilter: ColorFilter.mode(
+                            selectedForDelete ? Colors.grey : Colors.transparent,
+                            BlendMode.saturation,
+                          ),
+                          child: Image.memory(
+                            e.displayBytes,
+                            fit: BoxFit.cover,
+                            gaplessPlayback: true,
+                          ),
+                        ),
+                      ),
+                      if (loupeSelected)
+                        Positioned(
+                          top: 8,
+                          left: 8,
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Text(
+                              '${_loupeSelection.indexOf(e.key) + 1}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      // Checkbox (Top Right)
+                      Positioned(
+                        right: 4,
+                        top: 4,
+                        child: Checkbox(
+                          value: selectedForDelete,
+                          onChanged: (v) {
+                            setState(() {
+                              _keyboardPortraitIndex = index;
+                              if (v == true) {
+                                _selectedForDelete.add(e.key);
+                              } else {
+                                _selectedForDelete.remove(e.key);
+                              }
+                            });
+                          },
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          side: const BorderSide(color: Colors.white, width: 1.5),
+                        ),
+                      ),
+                      // Loupe Button (Bottom Right)
+                      Positioned(
+                        right: 4,
+                        bottom: 4,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () {
+                              setState(() {
+                                _keyboardPortraitIndex = index;
+                                if (loupeSelected) {
+                                  _loupeSelection.remove(e.key);
+                                } else {
+                                  if (_loupeSelection.length >= 4) {
+                                    _loupeSelection.removeAt(0);
+                                  }
+                                  _loupeSelection.add(e.key);
+                                }
+                              });
+                            },
+                            borderRadius: BorderRadius.circular(20),
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: loupeSelected
+                                    ? theme.colorScheme.primary
+                                    : Colors.black.withOpacity(0.5),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
+                                size: 16,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Folder Button (Bottom Left)
+                      Positioned(
+                        left: 4,
+                        bottom: 4,
+                        child: _buildSortFolderButtonForGrid(e.key, theme),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          timeStr.isEmpty ? '（時刻不明）' : timeStr,
+                          style: theme.textTheme.labelMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                        ),
+                        Text(
+                          'S: ${e.sharpness.toStringAsFixed(0)}',
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '顔ROI: ${e.portraitFaceSharpness.toStringAsFixed(0)}',
+                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 10),
+                    ),
+                    if (eyeText.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        eyeText,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: e.portraitBothEyesDetected
+                                  ? const Color(0xFF16A34A)
+                                  : const Color(0xFFDC2626),
+                            ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final isMobile = width < 600;
+
+    if (isWide) {
+      final itemWidth = (width - 32 - (crossAxisCount - 1) * 16) / crossAxisCount;
+      return SingleChildScrollView(
+        controller: _scrollController,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Wrap(
+          spacing: 16,
+          runSpacing: 16,
+          children: [
+            for (int i = 0; i < portraitItems.length; i++)
+              SizedBox(
+                width: itemWidth,
+                height: itemWidth / 0.82,
+                child: buildGridItem(i),
+              ),
+          ],
+        ),
+      );
+    } else if (isMobile) {
+      return GridView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.all(12),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+          childAspectRatio: 0.82,
+        ),
+        itemCount: portraitItems.length,
+        itemBuilder: (context, index) {
+          return buildGridItem(index);
+        },
+      );
+    } else {
+      return ListView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        itemCount: portraitItems.length,
+        itemBuilder: (context, index) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: buildItem(index),
+          );
+        },
+      );
+    }
+  }
+
+  Widget _buildGroupBody(BuildContext context, bool isWide, double width, int crossAxisCount) {
+    Widget buildItem(int index) {
+      final g = widget.groups[index];
+      final isKeyboardGroupFocused = index == _keyboardGroupIndex;
+
+      return _ExpandableGroupCard(
+        group: g,
+        selectedForDelete: _selectedForDelete,
+        onToggleDelete: (key, v) {
+          setState(() {
+            if (v) {
+              _selectedForDelete.add(key);
+            } else {
+              _selectedForDelete.remove(key);
+            }
+          });
+        },
+        loupeSelection: _loupeSelection,
+        onToggleLoupe: (key) {
+          setState(() {
+            if (_loupeSelection.contains(key)) {
+              _loupeSelection.remove(key);
+            } else {
+              if (_loupeSelection.length >= 4) {
+                _loupeSelection.removeAt(0);
+              }
+              _loupeSelection.add(key);
+            }
+          });
+        },
+        onSelectBestOnly: () {
+          setState(() {
+            for (final item in g.items) {
+              if (item.key != g.bestKey) {
+                _selectedForDelete.add(item.key);
+              } else {
+                _selectedForDelete.remove(item.key);
+              }
+            }
+          });
+        },
+        isKeyboardGroupFocused: isKeyboardGroupFocused,
+        keyboardPhotoKey: isKeyboardGroupFocused ? _keyboardPhotoKey : null,
+        onPhotoTileFocused: (key) {
+          setState(() {
+            _keyboardGroupIndex = index;
+            _keyboardPhotoKey = key;
+          });
+        },
+        selectedSortFolders: _selectedSortFolders,
+        customFolders: _customFolders,
+        onSortFolderChanged: (key, folder) {
+          if (folder == '__NEW_FOLDER__') {
+            _addNewFolder(context, key, false);
+          } else {
+            setState(() {
+              if (folder == null) {
+                _selectedSortFolders.remove(key);
+              } else {
+                _selectedSortFolders[key] = folder;
+              }
+            });
+          }
+        },
+      );
+    }
+
+    if (isWide) {
+      final itemWidth = (width - 32 - (crossAxisCount - 1) * 16) / crossAxisCount;
+      return SingleChildScrollView(
+        controller: _scrollController,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Wrap(
+          spacing: 16,
+          runSpacing: 16,
+          children: [
+            for (int i = 0; i < widget.groups.length; i++)
+              SizedBox(
+                width: itemWidth,
+                child: buildItem(i),
+              ),
+          ],
+        ),
+      );
+    } else {
+      return ListView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        itemCount: widget.groups.length,
+        itemBuilder: (context, index) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: buildItem(index),
+          );
+        },
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final size = MediaQuery.of(context).size;
+    final isWide = size.width >= 800;
+    final isMobile = size.width < 600;
+    final crossAxisCount = size.width >= 1200 ? 3 : (size.width >= 800 ? 2 : 1);
 
     final isPortrait = widget.detectionMode == DetectionMode.portrait;
     final portraitItems = isPortrait ? _entryByKey.values.toList() : const <PhotoEntry>[];
@@ -369,321 +1531,258 @@ class _GroupsScreenState extends State<GroupsScreen> {
       child: Scaffold(
         backgroundColor: colorScheme.surfaceContainer.withOpacity(0.3),
         appBar: AppBar(
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('整理・比較'),
-              Text(
-                isPortrait
-                    ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.hasPortraitFace).length} / 削除候補: $_selectedCount'
-                    : 'グループ: ${widget.groups.length} / 削除候補: $_selectedCount',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.normal,
+          title: isMobile
+              ? const Text(
+                  '整理・比較',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('整理・比較'),
+                    Text(
+                      isPortrait
+                          ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.hasPortraitFace).length} / 削除候補: $_selectedCount'
+                          : 'グループ: ${widget.groups.length} / 削除候補: $_selectedCount',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.normal,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
           actions: [
+            if (!Platform.isAndroid && !Platform.isIOS)
+              IconButton(
+                tooltip: 'キーボード操作ガイド',
+                icon: const Icon(Icons.keyboard_command_key_rounded),
+                onPressed: () => _showKeyboardShortcutsDialog(context),
+              ),
             if (!isPortrait)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: FilledButton.icon(
-                  onPressed: _deleting ? null : _exportBestShots,
-                  icon: const Icon(Icons.folder_shared, size: 20),
-                  label: const Text('Bestのみ保存'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: colorScheme.primaryContainer,
-                    foregroundColor: colorScheme.onPrimaryContainer,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                  ),
-                ),
-              ),
-            IconButton(
-              tooltip: 'ルーペ選択を解除',
-              onPressed: _loupeSelection.isEmpty
-                  ? null
-                  : () => setState(_loupeSelection.clear),
-              icon: const Icon(Icons.deselect),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: FilledButton.icon(
-                onPressed: _loupeSelection.isNotEmpty
-                    ? () {
-                        final items = _loupeSelection
-                            .map((k) => _entryByKey[k])
-                            .whereType<PhotoEntry>()
-                            .toList();
-                        if (items.isEmpty) return;
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => LoupeScreen(
-                              items: items,
-                              scores: _loupeSelection
-                                  .map((k) => _entryByKey[k])
-                                  .whereType<PhotoEntry>()
-                                  .map((e) => e.sharpness)
-                                  .toList(),
-                              isBests: _loupeSelection
-                                  .map((k) => _entryByKey[k])
-                                  .whereType<PhotoEntry>()
-                                  .map((e) {
-                                    for (final g in widget.groups) {
-                                      if (g.items.any((item) => item.key == e.key)) {
-                                        return e.key == g.bestKey;
-                                      }
-                                    }
-                                    return false;
-                                  })
-                                  .toList(),
-                              initialSelectedForDelete: _selectedForDelete,
-                              onToggleDelete: (key, val) {
-                                setState(() {
-                                  if (val) {
-                                    _selectedForDelete.add(key);
-                                  } else {
-                                    _selectedForDelete.remove(key);
-                                  }
-                                });
-                              },
-                              onSetBest: (key) {
-                                setState(() {
-                                  for (final g in widget.groups) {
-                                    if (g.items.any((item) => item.key == key)) {
-                                      g.bestKey = key;
-                                      break;
-                                    }
-                                  }
-                                });
-                              },
-                            ),
-                          ),
-                        );
-                      }
-                    : null,
-                icon: const Icon(Icons.zoom_in, size: 20),
-                label: Text('ルーペ (${_loupeSelection.length}/4)'),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: FilledButton.icon(
-                onPressed: (_selectedForDelete.isEmpty || _deleting)
-                    ? null
-                    : _reviewAndDelete,
-                icon: const Icon(Icons.delete_outline, size: 20),
-                label: const Text('ゴミ箱へ'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: colorScheme.error,
-                  foregroundColor: colorScheme.onError,
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                ),
-              ),
-            ),
-          ],
-        ),
-        body: isPortrait
-            ? ListView.builder(
-                controller: _scrollController,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                itemCount: portraitItems.length,
-                itemBuilder: (context, index) {
-                  final e = portraitItems[index];
-                  final t = e.capturedAt;
-                  final timeStr = t == null
-                      ? ''
-                      : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
-
-                  final eyeText = e.portraitBothEyesDetected
-                      ? '目閉じなし'
-                      : (e.portraitEyesClosed ? '目閉じ' : '');
-
-                  final loupeSelected = _loupeSelection.contains(e.key);
-                  final isKeyboardFocused = index == _keyboardPortraitIndex;
-
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: InkWell(
-                      onTap: () {
-                        setState(() {
-                          _keyboardPortraitIndex = index;
-                          if (loupeSelected) {
-                            _loupeSelection.remove(e.key);
-                          } else {
-                            if (_loupeSelection.length >= 4) {
-                              _loupeSelection.removeAt(0);
-                            }
-                            _loupeSelection.add(e.key);
-                          }
-                        });
-                      },
-                      borderRadius: BorderRadius.circular(16),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.surface,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: isKeyboardFocused
-                                ? Theme.of(context).colorScheme.primary
-                                : (loupeSelected
-                                    ? Theme.of(context).colorScheme.primary.withOpacity(0.5)
-                                    : Theme.of(context).dividerColor.withOpacity(0.12)),
-                            width: isKeyboardFocused ? 2.5 : (loupeSelected ? 2 : 1),
-                          ),
-                          boxShadow: isKeyboardFocused
-                              ? [
-                                  BoxShadow(
-                                    color: Theme.of(context).colorScheme.primary.withOpacity(0.25),
-                                    blurRadius: 8,
-                                    spreadRadius: 1,
-                                  )
-                                ]
-                              : null,
-                        ),
-                        child: Row(
-                          children: [
-                            ClipRRect(
-                              borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
-                              child: Stack(
-                                children: [
-                                  Image.memory(
-                                    e.displayBytes,
-                                    width: 120,
-                                    height: 120,
-                                    fit: BoxFit.cover,
-                                    gaplessPlayback: true,
-                                  ),
-                                  if (loupeSelected)
-                                    Positioned(
-                                      top: 8,
-                                      left: 8,
-                                      child: Container(
-                                        padding: const EdgeInsets.all(6),
-                                        decoration: BoxDecoration(
-                                          color: Theme.of(context).colorScheme.primary,
-                                          shape: BoxShape.circle,
-                                        ),
-                                        child: Text(
-                                          '${_loupeSelection.indexOf(e.key) + 1}',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      timeStr.isEmpty ? '（時刻不明）' : timeStr,
-                                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      '鮮明度: ${e.sharpness.toStringAsFixed(0)}（顔ROI: ${e.portraitFaceSharpness.toStringAsFixed(0)}）',
-                                      style: Theme.of(context).textTheme.bodySmall,
-                                    ),
-                                    if (eyeText.isNotEmpty) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        eyeText,
-                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                              fontWeight: FontWeight.w700,
-                                              color: e.portraitBothEyesDetected
-                                                  ? const Color(0xFF16A34A)
-                                                  : const Color(0xFFDC2626),
-                                            ),
-                                      ),
-                                    ],
-                                    if (e.portraitEyeOpenAvg >= 0) ...[
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        '目開き平均: ${e.portraitEyeOpenAvg.toStringAsFixed(2)}',
-                                        style: Theme.of(context).textTheme.bodySmall,
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                          ],
+              isMobile
+                  ? IconButton(
+                      tooltip: 'Bestのみ保存',
+                      icon: const Icon(Icons.folder_shared),
+                      onPressed: _deleting ? null : _exportBestShots,
+                      color: colorScheme.primary,
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: FilledButton.icon(
+                        onPressed: _deleting ? null : _exportBestShots,
+                        icon: const Icon(Icons.folder_shared, size: 20),
+                        label: const Text('Bestのみ保存'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: colorScheme.primaryContainer,
+                          foregroundColor: colorScheme.onPrimaryContainer,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
                         ),
                       ),
                     ),
-                  );
-                },
-              )
-            : ListView.builder(
-                controller: _scrollController,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                itemCount: widget.groups.length,
-                itemBuilder: (context, index) {
-                  final g = widget.groups[index];
-                  final isKeyboardGroupFocused = index == _keyboardGroupIndex;
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _ExpandableGroupCard(
-                      group: g,
-                      selectedForDelete: _selectedForDelete,
-                      onToggleDelete: (key, v) {
-                        setState(() {
-                          if (v) {
-                            _selectedForDelete.add(key);
-                          } else {
-                            _selectedForDelete.remove(key);
-                          }
-                        });
-                      },
-                      loupeSelection: _loupeSelection,
-                      onToggleLoupe: (key) {
-                        setState(() {
-                          if (_loupeSelection.contains(key)) {
-                            _loupeSelection.remove(key);
-                          } else {
-                            if (_loupeSelection.length >= 4) {
-                              _loupeSelection.removeAt(0);
-                            }
-                            _loupeSelection.add(key);
-                          }
-                        });
-                      },
-                      onSelectBestOnly: () {
-                        setState(() {
-                          for (final item in g.items) {
-                            if (item.key != g.bestKey) {
-                              _selectedForDelete.add(item.key);
-                            }
-                          }
-                        });
-                      },
-                      isKeyboardGroupFocused: isKeyboardGroupFocused,
-                      keyboardPhotoKey: isKeyboardGroupFocused ? _keyboardPhotoKey : null,
-                      onPhotoTileFocused: (key) {
-                        setState(() {
-                          _keyboardGroupIndex = index;
-                          _keyboardPhotoKey = key;
-                        });
-                      },
+            isMobile
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Badge(
+                      label: Text('${_selectedSortFolders.length}'),
+                      isLabelVisible: _selectedSortFolders.isNotEmpty,
+                      child: IconButton(
+                        tooltip: '仕分け実行',
+                        icon: const Icon(Icons.folder_copy),
+                        onPressed: _selectedSortFolders.isEmpty || _sorting ? null : _runSortAndProcess,
+                      ),
                     ),
-                  );
-                },
+                  )
+                : Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Badge(
+                      label: Text('${_selectedSortFolders.length}'),
+                      isLabelVisible: _selectedSortFolders.isNotEmpty,
+                      child: FilledButton.icon(
+                        onPressed: _selectedSortFolders.isEmpty || _sorting ? null : _runSortAndProcess,
+                        icon: const Icon(Icons.folder_copy, size: 20),
+                        label: const Text('仕分け実行'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: colorScheme.primaryContainer,
+                          foregroundColor: colorScheme.onPrimaryContainer,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                        ),
+                      ),
+                    ),
+                  ),
+            if (_loupeSelection.isNotEmpty)
+              IconButton(
+                tooltip: 'ルーペ選択を解除',
+                onPressed: () => setState(_loupeSelection.clear),
+                icon: const Icon(Icons.deselect),
               ),
+            isMobile
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Badge(
+                      label: Text('${_loupeSelection.length}'),
+                      isLabelVisible: _loupeSelection.isNotEmpty,
+                      child: IconButton(
+                        tooltip: 'ルーペ比較',
+                        icon: const Icon(Icons.zoom_in),
+                        onPressed: _loupeSelection.isNotEmpty
+                            ? () {
+                                final items = _loupeSelection
+                                    .map((k) => _entryByKey[k])
+                                    .whereType<PhotoEntry>()
+                                    .toList();
+                                if (items.isEmpty) return;
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => LoupeScreen(
+                                      items: items,
+                                      scores: _loupeSelection
+                                          .map((k) => _entryByKey[k])
+                                          .whereType<PhotoEntry>()
+                                          .map((e) => e.sharpness)
+                                          .toList(),
+                                      isBests: _loupeSelection
+                                          .map((k) => _entryByKey[k])
+                                          .whereType<PhotoEntry>()
+                                          .map((e) {
+                                            for (final g in widget.groups) {
+                                              if (g.items.any((item) => item.key == e.key)) {
+                                                return e.key == g.bestKey;
+                                              }
+                                            }
+                                            return false;
+                                          })
+                                          .toList(),
+                                      initialSelectedForDelete: _selectedForDelete,
+                                      onToggleDelete: (key, val) {
+                                        setState(() {
+                                          if (val) {
+                                            _selectedForDelete.add(key);
+                                          } else {
+                                            _selectedForDelete.remove(key);
+                                          }
+                                        });
+                                      },
+                                      onSetBest: (key) {
+                                        setState(() {
+                                          for (final g in widget.groups) {
+                                            if (g.items.any((item) => item.key == key)) {
+                                              g.bestKey = key;
+                                              break;
+                                            }
+                                          }
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                );
+                              }
+                            : null,
+                      ),
+                    ),
+                  )
+                : Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: FilledButton.icon(
+                      onPressed: _loupeSelection.isNotEmpty
+                          ? () {
+                              final items = _loupeSelection
+                                  .map((k) => _entryByKey[k])
+                                  .whereType<PhotoEntry>()
+                                  .toList();
+                              if (items.isEmpty) return;
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => LoupeScreen(
+                                    items: items,
+                                    scores: _loupeSelection
+                                        .map((k) => _entryByKey[k])
+                                        .whereType<PhotoEntry>()
+                                        .map((e) => e.sharpness)
+                                        .toList(),
+                                    isBests: _loupeSelection
+                                        .map((k) => _entryByKey[k])
+                                        .whereType<PhotoEntry>()
+                                        .map((e) {
+                                          for (final g in widget.groups) {
+                                            if (g.items.any((item) => item.key == e.key)) {
+                                              return e.key == g.bestKey;
+                                            }
+                                          }
+                                          return false;
+                                        })
+                                        .toList(),
+                                    initialSelectedForDelete: _selectedForDelete,
+                                    onToggleDelete: (key, val) {
+                                      setState(() {
+                                        if (val) {
+                                          _selectedForDelete.add(key);
+                                        } else {
+                                          _selectedForDelete.remove(key);
+                                        }
+                                      });
+                                    },
+                                    onSetBest: (key) {
+                                      setState(() {
+                                        for (final g in widget.groups) {
+                                          if (g.items.any((item) => item.key == key)) {
+                                            g.bestKey = key;
+                                            break;
+                                          }
+                                        }
+                                      });
+                                    },
+                                  ),
+                                ),
+                              );
+                            }
+                          : null,
+                      icon: const Icon(Icons.zoom_in, size: 20),
+                      label: Text('ルーペ (${_loupeSelection.length}/4)'),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                      ),
+                    ),
+                  ),
+            isMobile
+                ? Padding(
+                    padding: const EdgeInsets.only(left: 8, right: 12),
+                    child: Badge(
+                      label: Text('$_selectedCount'),
+                      isLabelVisible: _selectedCount > 0,
+                      backgroundColor: colorScheme.error,
+                      textColor: colorScheme.onError,
+                      child: IconButton(
+                        tooltip: 'ゴミ箱へ',
+                        icon: Icon(
+                          Icons.delete_outline,
+                          color: _selectedCount > 0 ? colorScheme.error : null,
+                        ),
+                        onPressed: (_selectedForDelete.isEmpty || _deleting)
+                            ? null
+                            : _reviewAndDelete,
+                      ),
+                    ),
+                  )
+                : Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: FilledButton.icon(
+                      onPressed: (_selectedForDelete.isEmpty || _deleting)
+                          ? null
+                          : _reviewAndDelete,
+                      icon: const Icon(Icons.delete_outline, size: 20),
+                      label: const Text('ゴミ箱へ'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: colorScheme.error,
+                        foregroundColor: colorScheme.onError,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                      ),
+                    ),
+                  ),
+          ],
+        ),
+        body: isPortrait
+            ? _buildPortraitBody(context, portraitItems, isWide, size.width, crossAxisCount)
+            : _buildGroupBody(context, isWide, size.width, crossAxisCount),
       ),
     );
   }
@@ -700,6 +1799,9 @@ class _ExpandableGroupCard extends StatelessWidget {
     required this.isKeyboardGroupFocused,
     required this.keyboardPhotoKey,
     required this.onPhotoTileFocused,
+    required this.selectedSortFolders,
+    required this.onSortFolderChanged,
+    required this.customFolders,
   });
 
   final PhotoGroup group;
@@ -711,6 +1813,9 @@ class _ExpandableGroupCard extends StatelessWidget {
   final bool isKeyboardGroupFocused;
   final String? keyboardPhotoKey;
   final ValueChanged<String> onPhotoTileFocused;
+  final Map<String, String> selectedSortFolders;
+  final void Function(String key, String? folder) onSortFolderChanged;
+  final List<String> customFolders;
 
   @override
   Widget build(BuildContext context) {
@@ -829,6 +1934,12 @@ class _ExpandableGroupCard extends StatelessWidget {
                             onToggleLoupe(e.key);
                           },
                           isKeyboardFocused: e.key == keyboardPhotoKey,
+                          sortFolder: selectedSortFolders[e.key],
+                          customFolders: customFolders,
+                          onSortFolderChanged: (folder) {
+                            onPhotoTileFocused(e.key);
+                            onSortFolderChanged(e.key, folder);
+                          },
                         ),
                       ),
                       if (e != group.items.last) const SizedBox(width: 10),
@@ -1072,7 +2183,7 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
   }
 }
 
-class _PhotoTile extends StatelessWidget {
+class _PhotoTile extends StatefulWidget {
   const _PhotoTile({
     required this.bytes,
     required this.sharpness,
@@ -1085,6 +2196,9 @@ class _PhotoTile extends StatelessWidget {
     required this.loupeSelected,
     required this.onToggleLoupe,
     required this.isKeyboardFocused,
+    required this.sortFolder,
+    required this.customFolders,
+    required this.onSortFolderChanged,
   });
 
   final Uint8List bytes;
@@ -1098,172 +2212,280 @@ class _PhotoTile extends StatelessWidget {
   final bool loupeSelected;
   final VoidCallback onToggleLoupe;
   final bool isKeyboardFocused;
+  final String? sortFolder;
+  final List<String> customFolders;
+  final ValueChanged<String?> onSortFolderChanged;
+
+  @override
+  State<_PhotoTile> createState() => _PhotoTileState();
+}
+
+class _PhotoTileState extends State<_PhotoTile> {
+  bool _isHovered = false;
+
+  Widget _buildSortFolderButtonForTile(ThemeData theme) {
+    final sortFolder = widget.sortFolder;
+    final hasFolder = sortFolder != null;
+    return Material(
+      color: Colors.transparent,
+      child: PopupMenuButton<String?>(
+        tooltip: 'フォルダに仕分ける',
+        onSelected: (folder) {
+          if (folder == '__NEW_FOLDER__') {
+            widget.onSortFolderChanged(folder);
+          } else {
+            widget.onSortFolderChanged(folder);
+          }
+        },
+        offset: const Offset(0, 30),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: hasFolder ? getFolderColor(sortFolder, widget.customFolders) : Colors.black.withOpacity(0.5),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white24),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                hasFolder ? Icons.folder : Icons.folder_open,
+                size: 16,
+                color: Colors.white,
+              ),
+              if (hasFolder) ...[
+                const SizedBox(width: 4),
+                Text(
+                  sortFolder,
+                  style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ],
+          ),
+        ),
+        itemBuilder: (context) {
+          return [
+            PopupMenuItem<String?>(
+              value: '__NEW_FOLDER__',
+              child: Row(
+                children: [
+                  Icon(Icons.create_new_folder, size: 16, color: theme.colorScheme.primary),
+                  const SizedBox(width: 8),
+                  const Text('新規フォルダを追加...'),
+                ],
+              ),
+            ),
+            PopupMenuItem<String?>(
+              value: null,
+              child: Row(
+                children: [
+                  Icon(Icons.folder_off, size: 16, color: theme.hintColor),
+                  const SizedBox(width: 8),
+                  const Text('仕分けを解除'),
+                ],
+              ),
+            ),
+            ...widget.customFolders.map((folder) {
+              return PopupMenuItem<String?>(
+                value: folder,
+                child: Row(
+                  children: [
+                    Icon(Icons.folder, size: 16, color: getFolderColor(folder, widget.customFolders)),
+                    const SizedBox(width: 8),
+                    Text(folder),
+                  ],
+                ),
+              );
+            }),
+          ];
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    return InkWell(
-      onTap: () => onChanged(!selectedForDelete),
-      borderRadius: BorderRadius.circular(16),
-      child: Stack(
-        children: [
-          // Image and its clipping
-          Positioned.fill(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Opacity(
-                opacity: selectedForDelete ? 0.45 : 1.0,
-                child: ColorFiltered(
-                  colorFilter: ColorFilter.mode(
-                    selectedForDelete ? Colors.grey : Colors.transparent,
-                    BlendMode.saturation,
-                  ),
-                  child: Image.memory(
-                    bytes,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                  ),
-                ),
-              ),
-            ),
-          ),
-
-          // Selection Overlay (Border) - Placed outside ClipRRect to avoid clipping
-          Positioned.fill(
-            child: IgnorePointer(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  border: isKeyboardFocused
-                      ? Border.all(color: colorScheme.primary, width: 3)
-                      : (selectedForDelete
-                          ? Border.all(color: colorScheme.error, width: 3)
-                          : (isBest
-                              ? Border.all(color: const Color(0xFF22C55E), width: 2.5)
-                              : Border.all(
-                                  color: Colors.white.withOpacity(0.1),
-                                  width: 1,
-                                ))),
-                  boxShadow: isKeyboardFocused
-                      ? [
-                          BoxShadow(
-                            color: colorScheme.primary.withOpacity(0.5),
-                            blurRadius: 10,
-                            spreadRadius: 1.5,
-                          )
-                        ]
-                      : (isBest
-                          ? [
-                              BoxShadow(
-                                color: const Color(0xFF22C55E).withOpacity(0.4),
-                                blurRadius: 8,
-                                spreadRadius: 1,
-                              )
-                            ]
-                          : null),
-                  color: selectedForDelete
-                      ? colorScheme.error.withOpacity(0.1)
-                      : Colors.transparent,
-                ),
-              ),
-            ),
-          ),
-
-          // Badges (Top Left)
-          Positioned(
-            left: 8,
-            top: 8,
-            child: Row(
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: AnimatedScale(
+        scale: _isHovered ? 1.03 : 1.0,
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOutCubic,
+        child: AnimatedPhysicalModel(
+          shape: BoxShape.rectangle,
+          borderRadius: BorderRadius.circular(16),
+          elevation: _isHovered ? 6 : 1,
+          color: Colors.transparent,
+          shadowColor: Colors.black.withOpacity(0.3),
+          duration: const Duration(milliseconds: 150),
+          child: InkWell(
+            onTap: () => widget.onChanged(!widget.selectedForDelete),
+            borderRadius: BorderRadius.circular(16),
+            child: Stack(
               children: [
-                if (isBest)
-                  const _Badge(label: 'Best', color: Color(0xFF22C55E)),
-                if (!isBest)
-                  _Badge(
-                    label: sharpness.toStringAsFixed(0),
-                    color: Colors.black.withOpacity(0.6),
-                  ),
-              ],
-            ),
-          ),
-
-          // Checkbox (Top Right)
-          Positioned(
-            right: 4,
-            top: 4,
-            child: Checkbox(
-              value: selectedForDelete,
-              onChanged: (v) => onChanged(v ?? false),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(4),
-              ),
-              side: const BorderSide(color: Colors.white, width: 1.5),
-            ),
-          ),
-
-          // EXIF Overlay (Bottom)
-          if (exifText.isNotEmpty)
-            Positioned(
-              left: 6,
-              right: 6,
-              bottom: 6,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: BackdropFilter(
-                  filter: ColorFilter.mode(
-                    Colors.black.withOpacity(0.4),
-                    BlendMode.srcOver,
-                  ),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 3,
-                    ),
-                    child: Text(
-                      exifText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
+                // Image and its clipping
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Opacity(
+                      opacity: widget.selectedForDelete ? 0.45 : 1.0,
+                      child: ColorFiltered(
+                        colorFilter: ColorFilter.mode(
+                          widget.selectedForDelete ? Colors.grey : Colors.transparent,
+                          BlendMode.saturation,
+                        ),
+                        child: Image.memory(
+                          widget.bytes,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ),
 
-          // Loupe Button (Bottom Right)
-          Positioned(
-            right: 4,
-            bottom: 4,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: onToggleLoupe,
-                borderRadius: BorderRadius.circular(20),
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: loupeSelected
-                        ? colorScheme.primary
-                        : Colors.black.withOpacity(0.5),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
-                    size: 16,
-                    color: Colors.white,
+                // Selection Overlay (Border) - Placed outside ClipRRect to avoid clipping
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        border: widget.isKeyboardFocused
+                            ? Border.all(color: colorScheme.primary, width: 3)
+                            : (widget.selectedForDelete
+                                ? Border.all(color: colorScheme.error, width: 3)
+                                : (widget.sortFolder != null
+                                    ? Border.all(color: getFolderColor(widget.sortFolder!, widget.customFolders), width: 3)
+                                    : Border.all(
+                                        color: _isHovered
+                                            ? Colors.white.withOpacity(0.4)
+                                            : Colors.white.withOpacity(0.1),
+                                        width: _isHovered ? 1.5 : 1,
+                                      ))),
+                        boxShadow: widget.isKeyboardFocused
+                            ? [
+                                BoxShadow(
+                                  color: colorScheme.primary.withOpacity(0.5),
+                                  blurRadius: 10,
+                                  spreadRadius: 1.5,
+                                )
+                              ]
+                            : null,
+                        color: widget.selectedForDelete
+                            ? colorScheme.error.withOpacity(0.1)
+                            : Colors.transparent,
+                      ),
+                    ),
                   ),
                 ),
-              ),
+
+                // Badges (Top Left)
+                Positioned(
+                  left: 8,
+                  top: 8,
+                  child: Row(
+                    children: [
+                      if (widget.isBest)
+                        const _Badge(label: 'Best', color: Color(0xFF22C55E)),
+                      if (!widget.isBest)
+                        _Badge(
+                          label: widget.sharpness.toStringAsFixed(0),
+                          color: Colors.black.withOpacity(0.6),
+                        ),
+                    ],
+                  ),
+                ),
+
+                // Checkbox (Top Right)
+                Positioned(
+                  right: 4,
+                  top: 4,
+                  child: Checkbox(
+                    value: widget.selectedForDelete,
+                    onChanged: (v) => widget.onChanged(v ?? false),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    side: const BorderSide(color: Colors.white, width: 1.5),
+                  ),
+                ),
+
+                // EXIF Overlay (Bottom)
+                if (widget.exifText.isNotEmpty)
+                  Positioned(
+                    left: 6,
+                    right: 6,
+                    bottom: 34,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: BackdropFilter(
+                        filter: ColorFilter.mode(
+                          Colors.black.withOpacity(0.4),
+                          BlendMode.srcOver,
+                        ),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 3,
+                          ),
+                          child: Text(
+                            widget.exifText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Colors.white,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // Loupe Button (Bottom Right)
+                Positioned(
+                  right: 4,
+                  bottom: 4,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: widget.onToggleLoupe,
+                      borderRadius: BorderRadius.circular(20),
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: widget.loupeSelected
+                              ? colorScheme.primary
+                              : Colors.black.withOpacity(0.5),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          widget.loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Folder Button (Bottom Left)
+                Positioned(
+                  left: 4,
+                  bottom: 4,
+                  child: _buildSortFolderButtonForTile(theme),
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1289,4 +2511,25 @@ class _Badge extends StatelessWidget {
       ),
     );
   }
+}
+
+Color getFolderColor(String folder, List<String> customFolders) {
+  final index = customFolders.indexOf(folder);
+  if (index < 0) return Colors.grey;
+
+  // 10 distinct, pleasant colors for our folders
+  const colors = [
+    Color(0xFFEF4444), // Red
+    Color(0xFFF97316), // Orange
+    Color(0xFFFBBF24), // Amber/Yellow
+    Color(0xFF10B981), // Emerald/Green
+    Color(0xFF06B6D4), // Cyan
+    Color(0xFF3B82F6), // Blue
+    Color(0xFF6366F1), // Indigo
+    Color(0xFF8B5CF6), // Violet
+    Color(0xFFD946EF), // Magenta
+    Color(0xFF64748B), // Slate/Grey
+  ];
+
+  return colors[index % colors.length];
 }

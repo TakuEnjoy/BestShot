@@ -19,6 +19,22 @@ class AnalyzerIsolate {
     RootIsolateToken? rootIsolateToken,
     void Function(int done, int total)? onProgress,
   }) async {
+    if (mode == DetectionMode.portrait && Platform.isWindows) {
+      final support = await getApplicationSupportDirectory();
+      final cascadeDir = Directory(p.join(support.path, 'cascades'));
+      if (!await cascadeDir.exists()) {
+        await cascadeDir.create(recursive: true);
+      }
+      await _ensureAssetFile(
+        assetPath: 'assets/cascades/haarcascade_frontalface_default.xml',
+        outPath: p.join(cascadeDir.path, 'haarcascade_frontalface_default.xml'),
+      );
+      await _ensureAssetFile(
+        assetPath: 'assets/cascades/haarcascade_eye.xml',
+        outPath: p.join(cascadeDir.path, 'haarcascade_eye.xml'),
+      );
+    }
+
     final receivePort = ReceivePort();
     final errorPort = ReceivePort();
     final exitPort = ReceivePort();
@@ -150,17 +166,8 @@ class AnalyzerIsolate {
     if (message.mode == DetectionMode.portrait && isWindows) {
       final support = await getApplicationSupportDirectory();
       final cascadeDir = Directory(p.join(support.path, 'cascades'));
-      if (!await cascadeDir.exists()) {
-        await cascadeDir.create(recursive: true);
-      }
-      final facePath = await _ensureAssetFile(
-        assetPath: 'assets/cascades/haarcascade_frontalface_default.xml',
-        outPath: p.join(cascadeDir.path, 'haarcascade_frontalface_default.xml'),
-      );
-      final eyePath = await _ensureAssetFile(
-        assetPath: 'assets/cascades/haarcascade_eye.xml',
-        outPath: p.join(cascadeDir.path, 'haarcascade_eye.xml'),
-      );
+      final facePath = p.join(cascadeDir.path, 'haarcascade_frontalface_default.xml');
+      final eyePath = p.join(cascadeDir.path, 'haarcascade_eye.xml');
       faceCascade = cv.CascadeClassifier.fromFile(facePath);
       eyeCascade = cv.CascadeClassifier.fromFile(eyePath);
     }
@@ -582,7 +589,6 @@ class AnalyzerIsolate {
     required cv.CascadeClassifier eyeCascade,
   }) {
     cv.Mat? gray;
-    cv.Mat? faceGray;
     try {
       if (mat.isEmpty) return const _PortraitResult.none();
       gray = cv.cvtColor(mat, cv.COLOR_BGR2GRAY);
@@ -595,75 +601,113 @@ class AnalyzerIsolate {
       );
       if (faces.isEmpty) return const _PortraitResult.none();
 
-      cv.Rect best = faces[0];
-      var bestArea = best.width * best.height;
+      // Find largest area to determine threshold
+      double maxArea = 0;
       for (final r in faces) {
-        final area = r.width * r.height;
-        if (area > bestArea) {
-          best = r;
-          bestArea = area;
+        final area = (r.width * r.height).toDouble();
+        if (area > maxArea) {
+          maxArea = area;
         }
       }
 
-      final faceSharpness = _calcLaplacianVarianceInRoi(mat, best);
+      // Keep only faces that are at least 25% of the largest face area
+      final mainFaces = faces.where((r) {
+        final area = r.width * r.height;
+        return area >= (maxArea * 0.25);
+      }).toList();
 
-      faceGray = gray.region(best);
-      var eyesClosed = false;
-      var bothEyesDetected = false;
-      var eyeSharpness = -1.0;
-
-      if (!faceGray.isEmpty) {
-        final eyes = eyeCascade.detectMultiScale(
-          faceGray,
-          scaleFactor: 1.1,
-          minNeighbors: 3,
-          minSize: (16, 16),
-        );
-        bothEyesDetected = eyes.length >= 2;
-        
-        // Windows環境での瞳検出の誤検知・検出漏れ対策
-        // 1) 顔がある程度大きく写っている（幅120px以上）ときだけ目閉じ判定を有効にする。
-        // 2) 横顔などの対策として、瞳が1つでも検出されていれば「目閉じではない」とする（eyes.isEmptyの時のみ判定）。
-        eyesClosed = eyes.isEmpty && best.width >= 120;
-
-        if (eyes.isNotEmpty) {
-          final eyeVariances = <double>[];
-          for (final eyeRect in eyes) {
-            final absEyeRect = cv.Rect(
-              best.x + eyeRect.x,
-              best.y + eyeRect.y,
-              eyeRect.width,
-              eyeRect.height,
-            );
-            final v = _calcLaplacianVarianceInRoi(mat, absEyeRect);
-            if (v > 0) eyeVariances.add(v);
-          }
-          if (eyeVariances.isNotEmpty) {
-            final avgV =
-                eyeVariances.reduce((a, b) => a + b) / eyeVariances.length;
-            eyeSharpness = (avgV / 1000.0).clamp(0.0, 1.0);
-          }
+      // Primary face is the largest one
+      cv.Rect primaryFace = mainFaces.first;
+      var primaryArea = primaryFace.width * primaryFace.height;
+      for (final r in mainFaces.skip(1)) {
+        final area = r.width * r.height;
+        if (area > primaryArea) {
+          primaryFace = r;
+          primaryArea = area;
         }
+      }
+
+      double totalFaceSharpness = 0.0;
+      double totalEyeSharpness = 0.0;
+      int eyeSharpnessCount = 0;
+      var anyEyesClosed = false;
+      var allBothEyesDetected = true;
+
+      for (final faceRect in mainFaces) {
+        final fSharp = _calcLaplacianVarianceInRoi(mat, faceRect);
+        totalFaceSharpness += fSharp;
+
+        final faceGray = gray.region(faceRect);
+        var faceEyesClosed = false;
+        var faceBothEyesDetected = false;
+
+        try {
+          if (!faceGray.isEmpty) {
+            final eyes = eyeCascade.detectMultiScale(
+              faceGray,
+              scaleFactor: 1.1,
+              minNeighbors: 3,
+              minSize: (16, 16),
+            );
+            faceBothEyesDetected = eyes.length >= 2;
+
+            // Windows environment eye close detection threshold heuristics
+            faceEyesClosed = eyes.isEmpty && faceRect.width >= 120;
+
+            if (eyes.isNotEmpty) {
+              for (final eyeRect in eyes) {
+                final absEyeRect = cv.Rect(
+                  faceRect.x + eyeRect.x,
+                  faceRect.y + eyeRect.y,
+                  eyeRect.width,
+                  eyeRect.height,
+                );
+                final v = _calcLaplacianVarianceInRoi(mat, absEyeRect);
+                if (v > 0) {
+                  totalEyeSharpness += v;
+                  eyeSharpnessCount++;
+                }
+              }
+            }
+          } else {
+            faceBothEyesDetected = false;
+          }
+        } finally {
+          faceGray.dispose();
+        }
+
+        if (faceEyesClosed) {
+          anyEyesClosed = true;
+        }
+        if (!faceBothEyesDetected) {
+          allBothEyesDetected = false;
+        }
+      }
+
+      final avgFaceSharpness = totalFaceSharpness / mainFaces.length;
+      var avgEyeSharpness = -1.0;
+      if (eyeSharpnessCount > 0) {
+        final avgV = totalEyeSharpness / eyeSharpnessCount;
+        avgEyeSharpness = (avgV / 1000.0).clamp(0.0, 1.0);
       }
 
       return _PortraitResult(
         hasFace: true,
-        faceX: best.x,
-        faceY: best.y,
-        faceW: best.width,
-        faceH: best.height,
-        faceSharpness: faceSharpness,
+        faceX: primaryFace.x,
+        faceY: primaryFace.y,
+        faceW: primaryFace.width,
+        faceH: primaryFace.height,
+        faceSharpness: avgFaceSharpness,
         eyeOpenAvg: -1,
-        eyesClosed: eyesClosed,
-        bothEyesDetected: bothEyesDetected,
-        eyeSharpness: eyeSharpness,
+        eyesClosed: anyEyesClosed,
+        bothEyesDetected: allBothEyesDetected,
+        eyeSharpness: avgEyeSharpness,
       );
     } catch (e, s) {
       print('Error in _portraitAnalyzeWindowsFromMat: $e\n$s');
       return const _PortraitResult.none();
     } finally {
       gray?.dispose();
-      faceGray?.dispose();
     }
   }
 
@@ -801,113 +845,153 @@ class AnalyzerIsolate {
         return const _PortraitResult.none();
       }
 
-      // Find the "best" face (largest area).
-      Face best = faces.first;
-      var bestArea = best.boundingBox.width * best.boundingBox.height;
-      for (final f in faces.skip(1)) {
-        final bb = f.boundingBox;
-        final area = bb.width * bb.height;
-        if (area > bestArea) {
-          best = f;
-          bestArea = area;
+      // Find largest area to determine threshold
+      double maxArea = 0;
+      for (final f in faces) {
+        final area = (f.boundingBox.width * f.boundingBox.height).toDouble();
+        if (area > maxArea) {
+          maxArea = area;
         }
       }
 
-      final bb = best.boundingBox;
-      // Coordinates can be negative if face is partially out of frame.
-      final rx = bb.left.round();
-      final ry = bb.top.round();
-      final rw = bb.width.round();
-      final rh = bb.height.round();
+      // Keep only faces that are at least 25% of the largest face area
+      final mainFaces = faces.where((f) {
+        final area = f.boundingBox.width * f.boundingBox.height;
+        return area >= (maxArea * 0.25);
+      }).toList();
 
-      // Sharpness calculation in face ROI.
-      final roi = cv.Rect(rx, ry, rw, rh);
-      var faceSharpness = _calcLaplacianVarianceInRoi(mat, roi);
-      if (faceSharpness <= 0) {
-        faceSharpness = _fallbackLaplacianVariance(
-          bytes,
-          x: rx,
-          y: ry,
-          w: rw,
-          h: rh,
-        );
+      // Primary face is the largest one
+      Face primaryFace = mainFaces.first;
+      var primaryArea = primaryFace.boundingBox.width * primaryFace.boundingBox.height;
+      for (final f in mainFaces.skip(1)) {
+        final area = f.boundingBox.width * f.boundingBox.height;
+        if (area > primaryArea) {
+          primaryFace = f;
+          primaryArea = area;
+        }
       }
 
-      // Eye open probability (0.0 to 1.0).
-      final le = best.leftEyeOpenProbability;
-      final re = best.rightEyeOpenProbability;
-      var eyeAvg = -1.0;
-      var eyesClosed = false;
-      var bothEyesDetected = false;
+      double totalFaceSharpness = 0.0;
+      double totalEyeSharpness = 0.0;
+      int eyeSharpnessCount = 0;
+      double minEyeOpen = 1.0;
+      bool anyEyesClosed = false;
+      bool allBothEyesDetected = true;
+      bool anyBothEyesDetected = false;
 
-      if (le != null && re != null) {
-        eyeAvg = (le + re) / 2.0;
-        bothEyesDetected = true;
-        // Threshold for "eyes closed". 0.4 is often a good balance.
-        // If average is low, or either eye is very closed.
-        eyesClosed = (eyeAvg < 0.4) || (le < 0.2) || (re < 0.2);
-      } else if (le != null) {
-        eyeAvg = le;
-        eyesClosed = le < 0.4;
-      } else if (re != null) {
-        eyeAvg = re;
-        eyesClosed = re < 0.4;
+      for (final face in mainFaces) {
+        final bb = face.boundingBox;
+        final rx = bb.left.round();
+        final ry = bb.top.round();
+        final rw = bb.width.round();
+        final rh = bb.height.round();
+
+        // Sharpness calculation in face ROI
+        final roi = cv.Rect(rx, ry, rw, rh);
+        var fSharp = _calcLaplacianVarianceInRoi(mat, roi);
+        if (fSharp <= 0) {
+          fSharp = _fallbackLaplacianVariance(
+            bytes,
+            x: rx,
+            y: ry,
+            w: rw,
+            h: rh,
+          );
+        }
+        totalFaceSharpness += fSharp;
+
+        // Eye open probability (0.0 to 1.0)
+        final le = face.leftEyeOpenProbability;
+        final re = face.rightEyeOpenProbability;
+        var faceEyeAvg = -1.0;
+        var faceEyesClosed = false;
+
+        if (le != null && re != null) {
+          faceEyeAvg = (le + re) / 2.0;
+          anyBothEyesDetected = true;
+          faceEyesClosed = (faceEyeAvg < 0.4) || (le < 0.2) || (re < 0.2);
+        } else if (le != null) {
+          faceEyeAvg = le;
+          faceEyesClosed = le < 0.4;
+          allBothEyesDetected = false;
+        } else if (re != null) {
+          faceEyeAvg = re;
+          faceEyesClosed = re < 0.4;
+          allBothEyesDetected = false;
+        } else {
+          allBothEyesDetected = false;
+        }
+
+        if (faceEyeAvg >= 0) {
+          if (faceEyeAvg < minEyeOpen) {
+            minEyeOpen = faceEyeAvg;
+          }
+          if (faceEyesClosed) {
+            anyEyesClosed = true;
+          }
+        }
+
+        // Eye Sharpness (using landmarks)
+        final leftLandmark = face.landmarks[FaceLandmarkType.leftEye];
+        final rightLandmark = face.landmarks[FaceLandmarkType.rightEye];
+
+        if (leftLandmark != null) {
+          final ex = leftLandmark.position.x;
+          final ey = leftLandmark.position.y;
+          final ew = (rw * 0.15).round(); // Eye ROI size approx 15% of face width
+          final eroi = cv.Rect(
+            (ex - ew / 2).round(),
+            (ey - ew / 2).round(),
+            ew,
+            ew,
+          );
+          final v = _calcLaplacianVarianceInRoi(mat, eroi);
+          if (v > 0) {
+            totalEyeSharpness += v;
+            eyeSharpnessCount++;
+          }
+        }
+        if (rightLandmark != null) {
+          final ex = rightLandmark.position.x;
+          final ey = rightLandmark.position.y;
+          final ew = (rw * 0.15).round();
+          final eroi = cv.Rect(
+            (ex - ew / 2).round(),
+            (ey - ew / 2).round(),
+            ew,
+            ew,
+          );
+          final v = _calcLaplacianVarianceInRoi(mat, eroi);
+          if (v > 0) {
+            totalEyeSharpness += v;
+            eyeSharpnessCount++;
+          }
+        }
       }
 
-      // Eye Sharpness (using landmarks)
-      var eyeSharpness = -1.0;
-      final leftLandmark = best.landmarks[FaceLandmarkType.leftEye];
-      final rightLandmark = best.landmarks[FaceLandmarkType.rightEye];
-
-      final eyeVariances = <double>[];
-      if (leftLandmark != null) {
-        final ex = leftLandmark.position.x;
-        final ey = leftLandmark.position.y;
-        final ew = (rw * 0.15).round(); // Eye ROI size approx 15% of face width
-        final eroi = cv.Rect(
-          (ex - ew / 2).round(),
-          (ey - ew / 2).round(),
-          ew,
-          ew,
-        );
-        final v = _calcLaplacianVarianceInRoi(mat, eroi);
-        if (v > 0) eyeVariances.add(v);
-      }
-      if (rightLandmark != null) {
-        final ex = rightLandmark.position.x;
-        final ey = rightLandmark.position.y;
-        final ew = (rw * 0.15).round();
-        final eroi = cv.Rect(
-          (ex - ew / 2).round(),
-          (ey - ew / 2).round(),
-          ew,
-          ew,
-        );
-        final v = _calcLaplacianVarianceInRoi(mat, eroi);
-        if (v > 0) eyeVariances.add(v);
+      final avgFaceSharpness = totalFaceSharpness / mainFaces.length;
+      var avgEyeSharpness = -1.0;
+      if (eyeSharpnessCount > 0) {
+        final avgV = totalEyeSharpness / eyeSharpnessCount;
+        avgEyeSharpness = (avgV / 1000.0).clamp(0.0, 1.0);
       }
 
-      if (eyeVariances.isNotEmpty) {
-        final avgV = eyeVariances.reduce((a, b) => a + b) / eyeVariances.length;
-        // Normalize 0..1 using a sigmoid-like function or simple cap.
-        // Typical "sharp" variance can be 500-2000+.
-        eyeSharpness = (avgV / 1000.0).clamp(0.0, 1.0);
-      }
+      final finalEyeOpenAvg = (minEyeOpen == 1.0 && !anyBothEyesDetected) ? -1.0 : minEyeOpen;
 
+      final pBb = primaryFace.boundingBox;
       return _PortraitResult(
         hasFace: true,
-        faceX: rx,
-        faceY: ry,
-        faceW: rw,
-        faceH: rh,
-        faceSharpness: faceSharpness,
-        eyeOpenAvg: eyeAvg,
-        eyesClosed: eyesClosed,
-        bothEyesDetected: bothEyesDetected,
-        eyeSharpness: eyeSharpness,
+        faceX: pBb.left.round(),
+        faceY: pBb.top.round(),
+        faceW: pBb.width.round(),
+        faceH: pBb.height.round(),
+        faceSharpness: avgFaceSharpness,
+        eyeOpenAvg: finalEyeOpenAvg,
+        eyesClosed: anyEyesClosed,
+        bothEyesDetected: allBothEyesDetected,
+        eyeSharpness: avgEyeSharpness,
       );
     } catch (e) {
-      // In case of error, we can at least return something if we have a mat.
       return const _PortraitResult.none();
     } finally {
       mat?.dispose();
