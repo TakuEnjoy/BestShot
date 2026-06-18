@@ -619,13 +619,25 @@ class AnalyzerIsolate {
         ranges,
       );
 
-      // Filter out green colors (leaves and grass) H=35..85 in OpenCV HSV
+      // Filter out green colors (leaves and grass) only if green is not the dominant subject (green ratio < 80%)
       final rawData = hist.data;
       if (rawData.isNotEmpty) {
         final floatView = Float32List.sublistView(rawData);
-        for (var i = 35; i <= 85; i++) {
-          if (i >= 0 && i < floatView.length) {
-            floatView[i] = 0.0;
+        double total = 0.0;
+        double greenSum = 0.0;
+        for (var i = 0; i < floatView.length; i++) {
+          total += floatView[i];
+          if (i >= 35 && i <= 85) {
+            greenSum += floatView[i];
+          }
+        }
+        
+        final greenRatio = total > 0 ? (greenSum / total) : 0.0;
+        if (greenRatio < 0.80) {
+          for (var i = 35; i <= 85; i++) {
+            if (i >= 0 && i < floatView.length) {
+              floatView[i] = 0.0;
+            }
           }
         }
       }
