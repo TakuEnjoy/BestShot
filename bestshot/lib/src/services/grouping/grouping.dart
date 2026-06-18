@@ -15,7 +15,7 @@ class GroupingConfig {
     this.autoDeleteKeepTopN = 1,
     this.orbMinMatches = 30, // Much tighter from 15
     this.orbMaxHammingDist = 45, // Tighter from 55
-    this.maxColorBhattacharyyaDistance = 0.65,
+    this.maxColorBhattacharyyaDistance = 0.50,
   });
 
   /// If both photos have EXIF time and diff <= this value, force same group (burst).
@@ -405,11 +405,76 @@ class PhotoGrouper {
   static double _bhattacharyyaDistance(Float32List h1, Float32List h2) {
     if (h1.length != h2.length || h1.isEmpty) return 1.0;
 
+    // Backward compatibility for 1D Hue histograms (180 elements)
+    if (h1.length == 180) {
+      double sum = 0.0;
+      for (var i = 0; i < 180; i++) {
+        sum += math.sqrt(h1[i] * h2[i]);
+      }
+      final val = 1.0 - sum;
+      return val <= 0.0 ? 0.0 : math.sqrt(val);
+    }
+
+    // Combined H-S-V histograms (180 + 256 + 256 = 692 elements)
+    if (h1.length == 692) {
+      double calcSubDist(int start, int length) {
+        double sum = 0.0;
+        for (var i = 0; i < length; i++) {
+          sum += math.sqrt(h1[start + i] * h2[start + i]);
+        }
+        final val = 1.0 - sum;
+        return val <= 0.0 ? 0.0 : math.sqrt(val);
+      }
+
+      final distH = calcSubDist(0, 180);
+      final distS = calcSubDist(180, 256);
+      final distV = calcSubDist(180 + 256, 256);
+
+      // Calculate mean saturation (S) for both images to adjust Hue weight adaptively.
+      // If one of the images is grayscale/low-saturation, Hue becomes unreliable noise.
+      double calcMeanS(Float32List h) {
+        double sumS = 0.0;
+        double sumW = 0.0;
+        for (var i = 0; i < 256; i++) {
+          final w = h[180 + i];
+          sumS += i * w;
+          sumW += w;
+        }
+        return sumW > 0 ? (sumS / sumW) : 0.0;
+      }
+
+      final meanS1 = calcMeanS(h1);
+      final meanS2 = calcMeanS(h2);
+      final minMeanS = math.min(meanS1, meanS2);
+
+      // Adaptive weights:
+      // High saturation -> Hue is king (0.95 weight)
+      // Low saturation -> Hue is noise, rely entirely on Saturation and Value (0.50 each)
+      double wH, wS, wV;
+      if (minMeanS >= 50.0) {
+        wH = 0.95;
+        wS = 0.03;
+        wV = 0.02;
+      } else if (minMeanS <= 15.0) {
+        wH = 0.0;
+        wS = 0.50;
+        wV = 0.50;
+      } else {
+        // Linearly interpolate weights between minMeanS=15.0 and 50.0
+        final ratio = ((minMeanS - 15.0) / (50.0 - 15.0)).clamp(0.0, 1.0);
+        wH = 0.95 * ratio;
+        wS = 0.50 - 0.47 * ratio;
+        wV = 0.50 - 0.48 * ratio;
+      }
+
+      return wH * distH + wS * distS + wV * distV;
+    }
+
+    // Default fallback for any other lengths
     double sum = 0.0;
     for (var i = 0; i < h1.length; i++) {
       sum += math.sqrt(h1[i] * h2[i]);
     }
-
     final val = 1.0 - sum;
     return val <= 0.0 ? 0.0 : math.sqrt(val);
   }
