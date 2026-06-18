@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -405,7 +406,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '選択中: Photo ${_activePaneIndex + 1}',
+                    '選択中: ${_getFileName(item)}',
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
@@ -519,6 +520,16 @@ class _LoupeScreenState extends State<LoupeScreen> {
     );
   }
 
+  String _getFileName(PhotoEntry item) {
+    if (item.filePath != null) {
+      return p.basename(item.filePath!);
+    }
+    if (item.key.startsWith('file:')) {
+      return p.basename(item.key.substring(5));
+    }
+    return item.key;
+  }
+
   Widget _buildPane(int index) {
     if (index >= widget.items.length) return const SizedBox.shrink();
     final key = widget.items[index].key;
@@ -528,7 +539,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
       showFocusMask: _showFocusMask,
       maskColor: _focusMaskColor,
       maskOpacity: _focusMaskOpacity,
-      title: 'Photo ${index + 1}',
+      title: _getFileName(widget.items[index]),
       exif: widget.items[index].exifText,
       score: widget.scores[index],
       histogram: widget.items[index].histogram,
