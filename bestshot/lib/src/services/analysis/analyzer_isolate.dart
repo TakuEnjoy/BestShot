@@ -593,9 +593,18 @@ class AnalyzerIsolate {
     cv.Mat? hsv;
     cv.Mat? hist;
     cv.Mat? histNorm;
+    cv.Mat? centerMat;
     try {
       if (bgr.isEmpty) return null;
-      hsv = cv.cvtColor(bgr, cv.COLOR_BGR2HSV);
+
+      // Crop to central 50% region to focus on the subject and reduce background influence
+      final cx = bgr.cols ~/ 4;
+      final cy = bgr.rows ~/ 4;
+      final cw = bgr.cols ~/ 2;
+      final ch = bgr.rows ~/ 2;
+      centerMat = bgr.region(cv.Rect(cx, cy, cw, ch));
+
+      hsv = cv.cvtColor(centerMat, cv.COLOR_BGR2HSV);
 
       final channels = cv.VecI32.fromList([0]);
       final histSize = cv.VecI32.fromList([180]);
@@ -610,6 +619,17 @@ class AnalyzerIsolate {
         ranges,
       );
 
+      // Filter out green colors (leaves and grass) H=35..85 in OpenCV HSV
+      final rawData = hist.data;
+      if (rawData.isNotEmpty) {
+        final floatView = Float32List.sublistView(rawData);
+        for (var i = 35; i <= 85; i++) {
+          if (i >= 0 && i < floatView.length) {
+            floatView[i] = 0.0;
+          }
+        }
+      }
+
       histNorm = cv.Mat.empty();
       cv.normalize(hist, histNorm, alpha: 1, beta: 0, normType: cv.NORM_L1);
 
@@ -622,6 +642,7 @@ class AnalyzerIsolate {
       print('Error in _calcHueHistogramFromMat: $e\n$s');
       return null;
     } finally {
+      centerMat?.dispose();
       hsv?.dispose();
       hist?.dispose();
       histNorm?.dispose();
