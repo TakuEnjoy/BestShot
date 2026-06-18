@@ -36,6 +36,7 @@ class PhotoEntry {
     required this.orbCols,
     required this.orbBytes,
     required this.histogram,
+    this.hueHistogram,
     this.exif,
     this.semanticObjects = const [],
     this.faceQualityScore = 0,
@@ -81,6 +82,9 @@ class PhotoEntry {
 
   /// Luma histogram (256 entries).
   final Uint8List histogram;
+
+  /// HSV Hue histogram (180 entries).
+  final Float32List? hueHistogram;
 
   /// Optional EXIF summary (F/SS/ISO).
   final ExifSummary? exif;
@@ -149,6 +153,7 @@ class PhotoEntry {
     int? orbCols,
     Uint8List? orbBytes,
     Uint8List? histogram,
+    Float32List? hueHistogram,
     ExifSummary? exif,
     List<SemanticObject>? semanticObjects,
     double? faceQualityScore,
@@ -176,6 +181,7 @@ class PhotoEntry {
       orbCols: orbCols ?? this.orbCols,
       orbBytes: orbBytes ?? this.orbBytes,
       histogram: histogram ?? this.histogram,
+      hueHistogram: hueHistogram ?? this.hueHistogram,
       exif: exif ?? this.exif,
       semanticObjects: semanticObjects ?? this.semanticObjects,
       faceQualityScore: faceQualityScore ?? this.faceQualityScore,

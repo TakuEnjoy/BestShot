@@ -128,6 +128,7 @@ class _ImportScreenState extends State<ImportScreen> {
             orbCols: a.orbCols,
             orbBytes: a.orbBytes,
             histogram: a.histogram,
+            hueHistogram: a.hueHistogram,
             exif: i.exifSummary,
             hasPortraitFace: a.hasFace,
             portraitEyesClosed: a.eyesClosed,

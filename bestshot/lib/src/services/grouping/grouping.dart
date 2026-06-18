@@ -1,3 +1,6 @@
+import 'dart:math' as math;
+import 'dart:typed_data';
+
 import '../../models/photo_entry.dart';
 import '../../models/photo_group.dart';
 
@@ -12,6 +15,7 @@ class GroupingConfig {
     this.autoDeleteKeepTopN = 1,
     this.orbMinMatches = 30, // Much tighter from 15
     this.orbMaxHammingDist = 45, // Tighter from 55
+    this.maxColorBhattacharyyaDistance = 0.65,
   });
 
   /// If both photos have EXIF time and diff <= this value, force same group (burst).
@@ -40,6 +44,10 @@ class GroupingConfig {
 
   /// Hamming distance threshold for ORB features (0..256).
   final int orbMaxHammingDist;
+
+  /// Maximum color distance (Bhattacharyya distance) allowed between photos (0..1).
+  /// If the distance is higher than this, they are considered to be different colors.
+  final double maxColorBhattacharyyaDistance;
 }
 
 class PhotoGrouper {
@@ -214,6 +222,11 @@ class PhotoGrouper {
   }
 
   static bool _similar(PhotoEntry a, PhotoEntry b, GroupingConfig config) {
+    // 0) Color similarity check: if color distance is too large, they are not similar
+    if (_isColorClearlyDifferent(a, b, config.maxColorBhattacharyyaDistance)) {
+      return false;
+    }
+
     // 1) Burst priority: <= 30 seconds => same group.
     if (_isTimeCloseSeconds(a, b, config.burstWindowSeconds)) return true;
 
@@ -371,5 +384,33 @@ class PhotoGrouper {
       count++;
     }
     return count > 64 ? 64 : count;
+  }
+
+  static bool _isColorClearlyDifferent(
+    PhotoEntry a,
+    PhotoEntry b,
+    double maxDistance,
+  ) {
+    final hA = a.hueHistogram;
+    final hB = b.hueHistogram;
+    if (hA == null || hB == null || hA.isEmpty || hB.isEmpty) {
+      // If one image lacks color histogram (e.g. legacy entry), bypass check
+      return false;
+    }
+
+    final dist = _bhattacharyyaDistance(hA, hB);
+    return dist > maxDistance;
+  }
+
+  static double _bhattacharyyaDistance(Float32List h1, Float32List h2) {
+    if (h1.length != h2.length || h1.isEmpty) return 1.0;
+
+    double sum = 0.0;
+    for (var i = 0; i < h1.length; i++) {
+      sum += math.sqrt(h1[i] * h2[i]);
+    }
+
+    final val = 1.0 - sum;
+    return val <= 0.0 ? 0.0 : math.sqrt(val);
   }
 }

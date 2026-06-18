@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
@@ -79,6 +80,7 @@ class AnalyzerIsolate {
             orbCols: (message['orbCols'] as num).toInt(),
             orbBytes: message['orbBytes'] as Uint8List,
             histogram: message['histogram'] as Uint8List,
+            hueHistogram: message['hueHistogram'] as Float32List?,
             hasFace: (message['hasFace'] as bool?) ?? false,
             faceX: (message['faceX'] as num?)?.toInt() ?? 0,
             faceY: (message['faceY'] as num?)?.toInt() ?? 0,
@@ -195,6 +197,7 @@ class AnalyzerIsolate {
           'orbCols': out.orbCols,
           'orbBytes': out.orbBytes,
           'histogram': out.histogram,
+          'hueHistogram': out.hueHistogram,
           'hasFace': out.hasFace,
           'faceX': out.faceX,
           'faceY': out.faceY,
@@ -231,6 +234,7 @@ class AnalyzerIsolate {
       orbCols: 0,
       orbBytes: Uint8List(0),
       histogram: Uint8List(256),
+      hueHistogram: null,
       hasFace: false,
       faceX: 0,
       faceY: 0,
@@ -299,6 +303,7 @@ class AnalyzerIsolate {
       final pHashHex = _calcEqualizedPHashHexFromMat(work);
       final (fullSharpness, debugGridSharps) = _calcLaplacianVarianceFromMat(work, workBytes);
       final (exposure, histogram) = _calcExposureAndHistogramFromMat(work);
+      final hueHistogram = _calcHueHistogramFromMat(work);
       final orb = _calcOrbDescriptorsFromMat(work);
 
       var hasFace = false;
@@ -371,6 +376,7 @@ class AnalyzerIsolate {
         orbCols: orb.cols,
         orbBytes: orb.bytes,
         histogram: histogram,
+        hueHistogram: hueHistogram,
         hasFace: hasFace,
         faceX: faceX,
         faceY: faceY,
@@ -580,6 +586,45 @@ class AnalyzerIsolate {
       gray?.dispose();
       eq?.dispose();
       desc?.dispose();
+    }
+  }
+
+  static Float32List? _calcHueHistogramFromMat(cv.Mat bgr) {
+    cv.Mat? hsv;
+    cv.Mat? hist;
+    cv.Mat? histNorm;
+    try {
+      if (bgr.isEmpty) return null;
+      hsv = cv.cvtColor(bgr, cv.COLOR_BGR2HSV);
+
+      final channels = cv.VecI32.fromList([0]);
+      final histSize = cv.VecI32.fromList([180]);
+      final ranges = cv.VecF32.fromList([0, 180]);
+      final mask = cv.Mat.empty();
+
+      hist = cv.calcHist(
+        cv.VecMat.fromList([hsv]),
+        channels,
+        mask,
+        histSize,
+        ranges,
+      );
+
+      histNorm = cv.Mat.empty();
+      cv.normalize(hist, histNorm, alpha: 1, beta: 0, normType: cv.NORM_L1);
+
+      final data = histNorm.data;
+      if (data.isEmpty) return null;
+
+      final floatData = Float32List.sublistView(data);
+      return Float32List.fromList(floatData);
+    } catch (e, s) {
+      print('Error in _calcHueHistogramFromMat: $e\n$s');
+      return null;
+    } finally {
+      hsv?.dispose();
+      hist?.dispose();
+      histNorm?.dispose();
     }
   }
 
