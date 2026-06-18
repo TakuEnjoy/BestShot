@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
@@ -143,18 +144,20 @@ class MlKitSemanticService {
     Uint8List bytes, {
     required int maxEdge,
   }) async {
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) return bytes;
-    final upright = img.bakeOrientation(decoded);
-    final w = upright.width;
-    final h = upright.height;
-    if (w <= maxEdge && h <= maxEdge) return bytes;
-    final resized = img.copyResize(
-      upright,
-      width: w >= h ? maxEdge : null,
-      height: h > w ? maxEdge : null,
-    );
-    return Uint8List.fromList(img.encodeJpg(resized, quality: 90));
+    return Isolate.run(() {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+      final upright = img.bakeOrientation(decoded);
+      final w = upright.width;
+      final h = upright.height;
+      if (w <= maxEdge && h <= maxEdge) return bytes;
+      final resized = img.copyResize(
+        upright,
+        width: w >= h ? maxEdge : null,
+        height: h > w ? maxEdge : null,
+      );
+      return Uint8List.fromList(img.encodeJpg(resized, quality: 90));
+    });
   }
 
   static List<SemanticObject> _toSemanticObjects(

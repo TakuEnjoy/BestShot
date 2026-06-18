@@ -37,6 +37,10 @@ class _GroupsScreenState extends State<GroupsScreen> {
   final List<String> _customFolders = [];
   bool _sorting = false;
 
+  // バックグラウンド処理用の状態
+  final Set<String> _processingKeys = {};
+  final List<_BackgroundTask> _backgroundTasks = [];
+
   // Keyboard focus management
   late final FocusNode _focusNode;
   late final ScrollController _scrollController;
@@ -165,12 +169,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
   }
 
   Future<void> _reviewAndDelete() async {
-    if (_selectedForDelete.isEmpty || _deleting) return;
+    // 処理中のファイルを除外した削除候補を抽出
+    final targets = _selectedForDelete
+        .where((k) => !_processingKeys.contains(k))
+        .toList();
+
+    if (targets.isEmpty) return;
 
     final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => DeleteReviewScreen(
-          items: _selectedForDelete.map((k) => _entryByKey[k]!).toList(),
+          items: targets.map((k) => _entryByKey[k]!).toList(),
           onRemoveFromDelete: (key) {
             setState(() => _selectedForDelete.remove(key));
           },
@@ -179,16 +188,62 @@ class _GroupsScreenState extends State<GroupsScreen> {
     );
 
     if (result == true) {
-      // User confirmed delete in review screen
-      setState(() => _deleting = true);
-      try {
-        final entries = _selectedForDelete
-            .map((k) => _entryByKey[k])
-            .whereType<PhotoEntry>()
-            .toList();
-        await DeleteService.moveToTrash(entries);
-        if (!mounted) return;
+      // 念のため、実行直前に再度処理中のキーが混入していないかダブルチェック
+      final finalTargets = targets
+          .where((k) => !_processingKeys.contains(k))
+          .toList();
+
+      if (finalTargets.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('選択された写真はすでに処理中です。')),
+          );
+        }
+        return;
+      }
+
+      setState(() {
+        _processingKeys.addAll(finalTargets);
+        _selectedForDelete.removeAll(finalTargets);
+      });
+
+      final taskId = 'delete_${DateTime.now().millisecondsSinceEpoch}';
+      final task = _BackgroundTask(
+        id: taskId,
+        title: 'ゴミ箱へ移動中',
+        total: finalTargets.length,
+      );
+
+      setState(() {
+        _backgroundTasks.add(task);
+      });
+
+      // バックグラウンドで実行（awaitせず進む）
+      _executeDeleteInBackground(task, finalTargets);
+    }
+  }
+
+  Future<void> _executeDeleteInBackground(
+    _BackgroundTask task,
+    List<String> targets,
+  ) async {
+    final entries = targets
+        .map((k) => _entryByKey[k])
+        .whereType<PhotoEntry>()
+        .toList();
+
+    try {
+      setState(() {
+        task.progress = 0.5;
+        task.statusText = 'ゴミ箱へ移動中...';
+      });
+
+      await DeleteService.moveToTrash(entries);
+
+      if (mounted) {
         setState(() {
+          _processingKeys.removeAll(targets);
+
           for (final entry in entries) {
             _entryByKey.remove(entry.key);
             for (final g in widget.groups) {
@@ -196,18 +251,26 @@ class _GroupsScreenState extends State<GroupsScreen> {
             }
           }
           widget.groups.removeWhere((g) => g.items.isEmpty);
-          _selectedForDelete.clear();
         });
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('ゴミ箱へ移動しました')));
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('失敗: $e')));
-      } finally {
-        if (mounted) setState(() => _deleting = false);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('ゴミ箱へ移動しました')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _processingKeys.removeAll(targets);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('削除失敗: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _backgroundTasks.removeWhere((t) => t.id == task.id);
+        });
       }
     }
   }
@@ -217,7 +280,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final size = MediaQuery.of(context).size;
     final isWide = size.width >= 800;
     final isMobile = size.width < 600;
-    final crossAxisCount = size.width >= 1200 ? 3 : (size.width >= 800 ? 2 : 1);
+    final crossAxisCount = size.width >= 800 ? 2 : 1;
 
     if (isPortrait) {
       double targetOffset;
@@ -274,6 +337,31 @@ class _GroupsScreenState extends State<GroupsScreen> {
         final tb = b.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
         return ta.compareTo(tb);
       });
+    }
+
+    // 編集用キーボードショートカットの場合は処理中のファイルを保護
+    final bool isEditKey = key == LogicalKeyboardKey.keyB ||
+        key == LogicalKeyboardKey.keyL ||
+        key == LogicalKeyboardKey.space ||
+        key == LogicalKeyboardKey.delete ||
+        key == LogicalKeyboardKey.digit1 || key == LogicalKeyboardKey.numpad1 ||
+        key == LogicalKeyboardKey.digit2 || key == LogicalKeyboardKey.numpad2 ||
+        key == LogicalKeyboardKey.digit3 || key == LogicalKeyboardKey.numpad3 ||
+        key == LogicalKeyboardKey.digit4 || key == LogicalKeyboardKey.numpad4 ||
+        key == LogicalKeyboardKey.digit5 || key == LogicalKeyboardKey.numpad5 ||
+        key == LogicalKeyboardKey.digit6 || key == LogicalKeyboardKey.numpad6 ||
+        key == LogicalKeyboardKey.digit7 || key == LogicalKeyboardKey.numpad7 ||
+        key == LogicalKeyboardKey.digit8 || key == LogicalKeyboardKey.numpad8 ||
+        key == LogicalKeyboardKey.digit9 || key == LogicalKeyboardKey.numpad9 ||
+        key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0;
+
+    if (isEditKey) {
+      final targetKey = isPortrait
+          ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
+          : _keyboardPhotoKey;
+      if (targetKey != null && _processingKeys.contains(targetKey)) {
+        return KeyEventResult.handled; // 現在処理中の写真なので操作を無効化
+      }
     }
 
     if (key == LogicalKeyboardKey.arrowDown) {
@@ -501,9 +589,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
   }
 
   Future<void> _runSortAndProcess() async {
-    if (_selectedSortFolders.isEmpty) {
+    // 処理中のファイルを除外した仕分け対象を抽出
+    final targets = _selectedSortFolders.entries
+        .where((e) => !_processingKeys.contains(e.key))
+        .toList();
+
+    if (targets.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('仕分け先が設定されている写真がありません。')),
+        const SnackBar(content: Text('仕分け先が設定されている（未処理の）写真がありません。')),
       );
       return;
     }
@@ -517,7 +610,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('仕分け先が設定された ${_selectedSortFolders.length} 枚の写真に対して処理を実行します。'),
+              Text('仕分け先が設定された ${targets.length} 枚の写真に対して処理を実行します。'),
               const SizedBox(height: 12),
               const Text('処理方法を選択してください：'),
               const SizedBox(height: 8),
@@ -545,65 +638,68 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     if (isCopy == null) return;
 
+    // 念のため、実行直前に再度処理中のキーが混入していないかダブルチェック
+    final finalTargets = targets
+        .where((e) => !_processingKeys.contains(e.key))
+        .toList();
+
+    if (finalTargets.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('選択された写真はすでに処理中です。')),
+        );
+      }
+      return;
+    }
+
+    final Map<String, String> currentSortMap = {
+      for (final e in finalTargets) e.key: e.value
+    };
+
     setState(() {
-      _sorting = true;
+      _processingKeys.addAll(currentSortMap.keys);
+      _selectedSortFolders.removeWhere((key, _) => currentSortMap.containsKey(key));
     });
 
-    if (!mounted) return;
-
-    final progressNotifier = ValueNotifier<double>(0.0);
-    final statusNotifier = ValueNotifier<String>('処理を開始しています...');
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return PopScope(
-          canPop: false,
-          child: AlertDialog(
-            title: Text(isCopy ? 'ファイルをコピー中' : 'ファイルを移動中'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                ValueListenableBuilder<double>(
-                  valueListenable: progressNotifier,
-                  builder: (context, val, _) {
-                    return LinearProgressIndicator(value: val);
-                  },
-                ),
-                const SizedBox(height: 12),
-                ValueListenableBuilder<String>(
-                  valueListenable: statusNotifier,
-                  builder: (context, text, _) {
-                    return Text(text, style: const TextStyle(fontSize: 12));
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+    final taskId = 'sort_${DateTime.now().millisecondsSinceEpoch}';
+    final task = _BackgroundTask(
+      id: taskId,
+      title: '写真を${isCopy ? "コピー" : "移動"}中',
+      total: currentSortMap.length,
     );
+
+    setState(() {
+      _backgroundTasks.add(task);
+    });
+
+    // バックグラウンドで実行
+    _executeSortInBackground(task, currentSortMap, isCopy);
+  }
+
+  Future<void> _executeSortInBackground(
+    _BackgroundTask task,
+    Map<String, String> currentSortMap,
+    bool isCopy,
+  ) async {
+    final entries = currentSortMap.keys
+        .map((k) => _entryByKey[k])
+        .whereType<PhotoEntry>()
+        .toList();
 
     try {
       final result = await SortService.executeSort(
-        sortMap: _selectedSortFolders,
-        entries: _entryByKey.values.toList(),
+        sortMap: currentSortMap,
+        entries: entries,
         isCopy: isCopy,
         onProgress: (done, total) {
-          progressNotifier.value = total <= 0 ? 0.0 : done / total;
-          statusNotifier.value = '処理中... ($done / $total)';
+          if (mounted) {
+            setState(() {
+              task.progress = total <= 0 ? 0.0 : done / total;
+              task.statusText = '処理中... ($done / $total)';
+            });
+          }
         },
       );
-
-      if (mounted) {
-        Navigator.of(context).pop(); // Close progress dialog
-      }
-
-      setState(() {
-        _sorting = false;
-      });
 
       final entryMapByPath = {for (final e in _entryByKey.values) e.filePath: e};
       final failedKeys = result.failedFiles
@@ -611,51 +707,39 @@ class _GroupsScreenState extends State<GroupsScreen> {
           .whereType<String>()
           .toSet();
 
-      final successKeys = _selectedSortFolders.keys
+      final successKeys = currentSortMap.keys
           .where((key) => !failedKeys.contains(key))
           .toSet();
 
-      if (!isCopy && successKeys.isNotEmpty) {
+      if (mounted) {
         setState(() {
-          for (final key in successKeys) {
-            _entryByKey.remove(key);
-            for (final g in widget.groups) {
-              g.items.removeWhere((item) => item.key == key);
+          _processingKeys.removeAll(currentSortMap.keys);
+
+          if (!isCopy && successKeys.isNotEmpty) {
+            for (final key in successKeys) {
+              _entryByKey.remove(key);
+              for (final g in widget.groups) {
+                g.items.removeWhere((item) => item.key == key);
+              }
             }
+            widget.groups.removeWhere((g) => g.items.isEmpty);
           }
-          widget.groups.removeWhere((g) => g.items.isEmpty);
         });
-      }
 
-      setState(() {
-        _selectedSortFolders.removeWhere((key, _) => successKeys.contains(key));
-      });
-
-      if (result.failedFiles.isEmpty) {
-        if (mounted) {
+        if (result.failedFiles.isEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('${result.successCount} 枚の写真を${isCopy ? "コピー" : "移動"}しました。'),
               backgroundColor: Colors.green,
             ),
           );
-        }
-      } else {
-        if (mounted) {
+        } else {
           showDialog(
             context: context,
             builder: (context) {
               return AlertDialog(
                 title: const Text('仕分け完了（一部失敗）'),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('${result.successCount} 枚の処理は成功しましたが、${result.failedFiles.length} 枚の処理に失敗しました。'),
-                    const SizedBox(height: 12),
-                    const Text('失敗した原因の例: ファイルのロック、容量不足、権限の喪失など。'),
-                  ],
-                ),
+                content: Text('${result.successCount} 枚の処理は成功しましたが、${result.failedFiles.length} 枚の処理に失敗しました。\n\n原因の例: ファイルのロック、容量不足、権限の喪失など。'),
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
@@ -669,18 +753,21 @@ class _GroupsScreenState extends State<GroupsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        Navigator.of(context).pop();
-      }
-      setState(() {
-        _sorting = false;
-      });
-      if (mounted) {
+        setState(() {
+          _processingKeys.removeAll(currentSortMap.keys);
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('処理中にシステムエラーが発生しました: $e'),
             backgroundColor: Colors.red,
           ),
         );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _backgroundTasks.removeWhere((t) => t.id == task.id);
+        });
       }
     }
   }
@@ -1454,6 +1541,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         },
         selectedSortFolders: _selectedSortFolders,
         customFolders: _customFolders,
+        processingKeys: _processingKeys,
         onSortFolderChanged: (key, folder) {
           if (folder == '__NEW_FOLDER__') {
             _addNewFolder(context, key, false);
@@ -1508,7 +1596,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final size = MediaQuery.of(context).size;
     final isWide = size.width >= 800;
     final isMobile = size.width < 600;
-    final crossAxisCount = size.width >= 1200 ? 3 : (size.width >= 800 ? 2 : 1);
+    final crossAxisCount = size.width >= 800 ? 2 : 1;
 
     final isPortrait = widget.detectionMode == DetectionMode.portrait;
     final portraitItems = isPortrait ? _entryByKey.values.toList() : const <PhotoEntry>[];
@@ -1523,6 +1611,10 @@ class _GroupsScreenState extends State<GroupsScreen> {
         return ta.compareTo(tb);
       });
     }
+
+    final bool canSort = _selectedSortFolders.keys.any((k) => !_processingKeys.contains(k));
+    final bool canDelete = _selectedForDelete.any((k) => !_processingKeys.contains(k));
+    final bool canExport = _backgroundTasks.isEmpty;
 
     return Focus(
       focusNode: _focusNode,
@@ -1563,13 +1655,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   ? IconButton(
                       tooltip: 'Bestのみ保存',
                       icon: const Icon(Icons.folder_shared),
-                      onPressed: _deleting ? null : _exportBestShots,
+                      onPressed: canExport ? _exportBestShots : null,
                       color: colorScheme.primary,
                     )
                   : Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: FilledButton.icon(
-                        onPressed: _deleting ? null : _exportBestShots,
+                        onPressed: canExport ? _exportBestShots : null,
                         icon: const Icon(Icons.folder_shared, size: 20),
                         label: const Text('Bestのみ保存'),
                         style: FilledButton.styleFrom(
@@ -1588,7 +1680,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                       child: IconButton(
                         tooltip: '仕分け実行',
                         icon: const Icon(Icons.folder_copy),
-                        onPressed: _selectedSortFolders.isEmpty || _sorting ? null : _runSortAndProcess,
+                        onPressed: canSort ? _runSortAndProcess : null,
                       ),
                     ),
                   )
@@ -1598,7 +1690,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                       label: Text('${_selectedSortFolders.length}'),
                       isLabelVisible: _selectedSortFolders.isNotEmpty,
                       child: FilledButton.icon(
-                        onPressed: _selectedSortFolders.isEmpty || _sorting ? null : _runSortAndProcess,
+                        onPressed: canSort ? _runSortAndProcess : null,
                         icon: const Icon(Icons.folder_copy, size: 20),
                         label: const Text('仕分け実行'),
                         style: FilledButton.styleFrom(
@@ -1757,18 +1849,18 @@ class _GroupsScreenState extends State<GroupsScreen> {
                           Icons.delete_outline,
                           color: _selectedCount > 0 ? colorScheme.error : null,
                         ),
-                        onPressed: (_selectedForDelete.isEmpty || _deleting)
-                            ? null
-                            : _reviewAndDelete,
+                        onPressed: canDelete
+                            ? _reviewAndDelete
+                            : null,
                       ),
                     ),
                   )
                 : Padding(
                     padding: const EdgeInsets.only(right: 12),
                     child: FilledButton.icon(
-                      onPressed: (_selectedForDelete.isEmpty || _deleting)
-                          ? null
-                          : _reviewAndDelete,
+                      onPressed: canDelete
+                          ? _reviewAndDelete
+                          : null,
                       icon: const Icon(Icons.delete_outline, size: 20),
                       label: const Text('ゴミ箱へ'),
                       style: FilledButton.styleFrom(
@@ -1780,12 +1872,113 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   ),
           ],
         ),
-        body: isPortrait
-            ? _buildPortraitBody(context, portraitItems, isWide, size.width, crossAxisCount)
-            : _buildGroupBody(context, isWide, size.width, crossAxisCount),
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: isPortrait
+                  ? _buildPortraitBody(context, portraitItems, isWide, size.width, crossAxisCount)
+                  : _buildGroupBody(context, isWide, size.width, crossAxisCount),
+            ),
+            if (_backgroundTasks.isNotEmpty)
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 16,
+                child: _buildBottomProgressOverlay(colorScheme),
+              ),
+          ],
+        ),
       ),
     );
   }
+
+  Widget _buildBottomProgressOverlay(ColorScheme colorScheme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.85),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.5),
+            blurRadius: 12,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final task in _backgroundTasks) ...[
+            Row(
+              children: [
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        task.title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        task.statusText,
+                        style: const TextStyle(
+                          color: Colors.white60,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                SizedBox(
+                  width: 60,
+                  child: LinearProgressIndicator(
+                    value: task.progress,
+                    backgroundColor: Colors.white10,
+                    valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                  ),
+                ),
+              ],
+            ),
+            if (task != _backgroundTasks.last)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Divider(color: Colors.white10, height: 1),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _BackgroundTask {
+  _BackgroundTask({
+    required this.id,
+    required this.title,
+    required this.total,
+  });
+  final String id;
+  final String title;
+  final int total;
+  double progress = 0.0;
+  String statusText = '準備中...';
 }
 
 class _ExpandableGroupCard extends StatelessWidget {
@@ -1802,6 +1995,7 @@ class _ExpandableGroupCard extends StatelessWidget {
     required this.selectedSortFolders,
     required this.onSortFolderChanged,
     required this.customFolders,
+    required this.processingKeys,
   });
 
   final PhotoGroup group;
@@ -1816,6 +2010,7 @@ class _ExpandableGroupCard extends StatelessWidget {
   final Map<String, String> selectedSortFolders;
   final void Function(String key, String? folder) onSortFolderChanged;
   final List<String> customFolders;
+  final Set<String> processingKeys;
 
   @override
   Widget build(BuildContext context) {
@@ -1924,6 +2119,7 @@ class _ExpandableGroupCard extends StatelessWidget {
                           exifText: e.exifText,
                           isBest: e.key == group.bestKey,
                           selectedForDelete: selectedForDelete.contains(e.key),
+                          isProcessing: processingKeys.contains(e.key),
                           onChanged: (v) {
                             onPhotoTileFocused(e.key);
                             onToggleDelete(e.key, v);
@@ -2199,6 +2395,7 @@ class _PhotoTile extends StatefulWidget {
     required this.sortFolder,
     required this.customFolders,
     required this.onSortFolderChanged,
+    required this.isProcessing,
   });
 
   final Uint8List bytes;
@@ -2215,6 +2412,7 @@ class _PhotoTile extends StatefulWidget {
   final String? sortFolder;
   final List<String> customFolders;
   final ValueChanged<String?> onSortFolderChanged;
+  final bool isProcessing;
 
   @override
   State<_PhotoTile> createState() => _PhotoTileState();
@@ -2322,167 +2520,191 @@ class _PhotoTileState extends State<_PhotoTile> {
           color: Colors.transparent,
           shadowColor: Colors.black.withOpacity(0.3),
           duration: const Duration(milliseconds: 150),
-          child: InkWell(
-            onTap: () => widget.onChanged(!widget.selectedForDelete),
-            borderRadius: BorderRadius.circular(16),
-            child: Stack(
-              children: [
-                // Image and its clipping
-                Positioned.fill(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: Opacity(
-                      opacity: widget.selectedForDelete ? 0.45 : 1.0,
-                      child: ColorFiltered(
-                        colorFilter: ColorFilter.mode(
-                          widget.selectedForDelete ? Colors.grey : Colors.transparent,
-                          BlendMode.saturation,
-                        ),
-                        child: Image.memory(
-                          widget.bytes,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
-                // Selection Overlay (Border) - Placed outside ClipRRect to avoid clipping
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(16),
-                        border: widget.isKeyboardFocused
-                            ? Border.all(color: colorScheme.primary, width: 3)
-                            : (widget.selectedForDelete
-                                ? Border.all(color: colorScheme.error, width: 3)
-                                : (widget.sortFolder != null
-                                    ? Border.all(color: getFolderColor(widget.sortFolder!, widget.customFolders), width: 3)
-                                    : Border.all(
-                                        color: _isHovered
-                                            ? Colors.white.withOpacity(0.4)
-                                            : Colors.white.withOpacity(0.1),
-                                        width: _isHovered ? 1.5 : 1,
-                                      ))),
-                        boxShadow: widget.isKeyboardFocused
-                            ? [
-                                BoxShadow(
-                                  color: colorScheme.primary.withOpacity(0.5),
-                                  blurRadius: 10,
-                                  spreadRadius: 1.5,
-                                )
-                              ]
-                            : null,
-                        color: widget.selectedForDelete
-                            ? colorScheme.error.withOpacity(0.1)
-                            : Colors.transparent,
-                      ),
-                    ),
-                  ),
-                ),
-
-                // Badges (Top Left)
-                Positioned(
-                  left: 8,
-                  top: 8,
-                  child: Row(
-                    children: [
-                      if (widget.isBest)
-                        const _Badge(label: 'Best', color: Color(0xFF22C55E)),
-                      if (!widget.isBest)
-                        _Badge(
-                          label: widget.sharpness.toStringAsFixed(0),
-                          color: Colors.black.withOpacity(0.6),
-                        ),
-                    ],
-                  ),
-                ),
-
-                // Checkbox (Top Right)
-                Positioned(
-                  right: 4,
-                  top: 4,
-                  child: Checkbox(
-                    value: widget.selectedForDelete,
-                    onChanged: (v) => widget.onChanged(v ?? false),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    side: const BorderSide(color: Colors.white, width: 1.5),
-                  ),
-                ),
-
-                // EXIF Overlay (Bottom)
-                if (widget.exifText.isNotEmpty)
-                  Positioned(
-                    left: 6,
-                    right: 6,
-                    bottom: 34,
+          child: IgnorePointer(
+            ignoring: widget.isProcessing,
+            child: InkWell(
+              onTap: () => widget.onChanged(!widget.selectedForDelete),
+              borderRadius: BorderRadius.circular(16),
+              child: Stack(
+                children: [
+                  // Image and its clipping
+                  Positioned.fill(
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: BackdropFilter(
-                        filter: ColorFilter.mode(
-                          Colors.black.withOpacity(0.4),
-                          BlendMode.srcOver,
-                        ),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 3,
+                      borderRadius: BorderRadius.circular(16),
+                      child: Opacity(
+                        opacity: widget.selectedForDelete ? 0.45 : 1.0,
+                        child: ColorFiltered(
+                          colorFilter: ColorFilter.mode(
+                            widget.selectedForDelete ? Colors.grey : Colors.transparent,
+                            BlendMode.saturation,
                           ),
-                          child: Text(
-                            widget.exifText,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 10,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w500,
+                          child: Image.memory(
+                            widget.bytes,
+                            fit: BoxFit.cover,
+                            gaplessPlayback: true,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // Selection Overlay (Border) - Placed outside ClipRRect to avoid clipping
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          border: widget.isKeyboardFocused
+                              ? Border.all(color: colorScheme.primary, width: 3)
+                              : (widget.selectedForDelete
+                                  ? Border.all(color: colorScheme.error, width: 3)
+                                  : (widget.sortFolder != null
+                                      ? Border.all(color: getFolderColor(widget.sortFolder!, widget.customFolders), width: 3)
+                                      : Border.all(
+                                          color: _isHovered
+                                              ? Colors.white.withOpacity(0.4)
+                                              : Colors.white.withOpacity(0.1),
+                                          width: _isHovered ? 1.5 : 1,
+                                        ))),
+                          boxShadow: widget.isKeyboardFocused
+                              ? [
+                                  BoxShadow(
+                                    color: colorScheme.primary.withOpacity(0.5),
+                                    blurRadius: 10,
+                                    spreadRadius: 1.5,
+                                  )
+                                ]
+                              : null,
+                          color: widget.selectedForDelete
+                              ? colorScheme.error.withOpacity(0.1)
+                              : Colors.transparent,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // Badges (Top Left)
+                  Positioned(
+                    left: 8,
+                    top: 8,
+                    child: Row(
+                      children: [
+                        if (widget.isBest)
+                          const _Badge(label: 'Best', color: Color(0xFF22C55E)),
+                        if (!widget.isBest)
+                          _Badge(
+                            label: widget.sharpness.toStringAsFixed(0),
+                            color: Colors.black.withOpacity(0.6),
+                          ),
+                      ],
+                    ),
+                  ),
+
+                  // Checkbox (Top Right)
+                  Positioned(
+                    right: 4,
+                    top: 4,
+                    child: Checkbox(
+                      value: widget.selectedForDelete,
+                      onChanged: (v) => widget.onChanged(v ?? false),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      side: const BorderSide(color: Colors.white, width: 1.5),
+                    ),
+                  ),
+
+                  // EXIF Overlay (Bottom)
+                  if (widget.exifText.isNotEmpty)
+                    Positioned(
+                      left: 6,
+                      right: 6,
+                      bottom: 34,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: BackdropFilter(
+                          filter: ColorFilter.mode(
+                            Colors.black.withOpacity(0.4),
+                            BlendMode.srcOver,
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 3,
+                            ),
+                            child: Text(
+                              widget.exifText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
 
-                // Loupe Button (Bottom Right)
-                Positioned(
-                  right: 4,
-                  bottom: 4,
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: widget.onToggleLoupe,
-                      borderRadius: BorderRadius.circular(20),
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: widget.loupeSelected
-                              ? colorScheme.primary
-                              : Colors.black.withOpacity(0.5),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          widget.loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
-                          size: 16,
-                          color: Colors.white,
+                  // Loupe Button (Bottom Right)
+                  Positioned(
+                    right: 4,
+                    bottom: 4,
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: widget.onToggleLoupe,
+                        borderRadius: BorderRadius.circular(20),
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: widget.loupeSelected
+                                ? colorScheme.primary
+                                : Colors.black.withOpacity(0.5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            widget.loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
+                            size: 16,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
 
-                // Folder Button (Bottom Left)
-                Positioned(
-                  left: 4,
-                  bottom: 4,
-                  child: _buildSortFolderButtonForTile(theme),
-                ),
-              ],
+                  // Folder Button (Bottom Left)
+                  Positioned(
+                    left: 4,
+                    bottom: 4,
+                    child: _buildSortFolderButtonForTile(theme),
+                  ),
+
+                  // Processing Overlay
+                  if (widget.isProcessing)
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.55),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Center(
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),

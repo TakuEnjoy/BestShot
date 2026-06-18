@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:exif/exif.dart';
@@ -113,28 +114,34 @@ class ImportService {
     var done = 0;
     for (final f in files) {
       try {
-        final ext = p.extension(f.path).toLowerCase();
-        final bytes = await f.readAsBytes();
-        final decodeSource = rawExts.contains(ext)
-            ? (_extractEmbeddedJpeg(bytes) ?? bytes)
-            : bytes;
-        final decoded = img.decodeImage(decodeSource);
-        if (decoded == null) continue;
-        final upright = img.bakeOrientation(decoded);
+        final result = await Isolate.run(() async {
+          final ext = p.extension(f.path).toLowerCase();
+          final bytes = await f.readAsBytes();
+          final decodeSource = rawExts.contains(ext)
+              ? (_extractEmbeddedJpeg(bytes) ?? bytes)
+              : bytes;
+          final decoded = img.decodeImage(decodeSource);
+          if (decoded == null) return null;
+          final upright = img.bakeOrientation(decoded);
 
-        final resized = _resizeKeepingAspect(upright, thumbnailMaxEdge);
-        final jpg = Uint8List.fromList(img.encodeJpg(resized, quality: 85));
-        final exifSummary = await _readExifSummary(f);
+          final resized = _resizeKeepingAspect(upright, thumbnailMaxEdge);
+          final jpg = Uint8List.fromList(img.encodeJpg(resized, quality: 85));
+          final exifSummary = await _readExifSummary(f);
 
-        out.add(
-          ImportedItem(
-            key: 'file:${f.path}',
-            origin: PhotoOrigin.filePath,
-            displayBytes: jpg,
-            filePath: f.path,
-            exifSummary: exifSummary,
-          ),
-        );
+          return _ImportPayload(jpg: jpg, exif: exifSummary);
+        });
+
+        if (result != null) {
+          out.add(
+            ImportedItem(
+              key: 'file:${f.path}',
+              origin: PhotoOrigin.filePath,
+              displayBytes: result.jpg,
+              filePath: f.path,
+              exifSummary: result.exif,
+            ),
+          );
+        }
       } catch (_) {
         // Skip
       } finally {
@@ -277,4 +284,10 @@ DateTime? _parseExifDateTime(String? s) {
   final mi = int.parse(m.group(5)!);
   final se = int.parse(m.group(6)!);
   return DateTime(y, mo, d, h, mi, se);
+}
+
+class _ImportPayload {
+  _ImportPayload({required this.jpg, this.exif});
+  final Uint8List jpg;
+  final ExifSummary? exif;
 }
