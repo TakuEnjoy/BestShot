@@ -7,16 +7,16 @@ class BestShotApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF6366F1), // Neon Indigo
-      brightness: Brightness.dark,
-    ).copyWith(
-      background: const Color(0xFF090D16), // Ultra Deep Slate Blue/Black
-      surface: const Color(0xFF111827), // Deep Card Charcoal
-      primary: const Color(0xFF6366F1),
-      secondary: const Color(0xFF10B981), // Emerald Accent
-      error: const Color(0xFFEF4444),
-    );
+    final colorScheme =
+        ColorScheme.fromSeed(
+          seedColor: const Color(0xFF6366F1), // Neon Indigo
+          brightness: Brightness.dark,
+        ).copyWith(
+          surface: const Color(0xFF111827), // Deep Card Charcoal
+          primary: const Color(0xFF6366F1),
+          secondary: const Color(0xFF10B981), // Emerald Accent
+          error: const Color(0xFFEF4444),
+        );
 
     return MaterialApp(
       title: 'BestShot 正式版',
@@ -44,4 +44,3 @@ class BestShotApp extends StatelessWidget {
     );
   }
 }
-

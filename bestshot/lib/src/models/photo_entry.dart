@@ -26,7 +26,7 @@ class PhotoEntry {
   PhotoEntry({
     required this.key,
     required this.origin,
-    required this.displayBytes,
+    required this.thumbnailPath,
     this.assetId,
     this.filePath,
     required this.pHashHex,
@@ -57,8 +57,8 @@ class PhotoEntry {
 
   final PhotoOrigin origin;
 
-  /// Thumbnail bytes (JPEG/PNG) for grid display.
-  final Uint8List displayBytes;
+  /// Thumbnail file path (JPEG/PNG) for grid display.
+  final String? thumbnailPath;
 
   /// `photo_manager` AssetEntity id when [origin] == deviceAsset.
   final String? assetId;
@@ -143,7 +143,7 @@ class PhotoEntry {
   PhotoEntry copyWith({
     String? key,
     PhotoOrigin? origin,
-    Uint8List? displayBytes,
+    String? thumbnailPath,
     String? assetId,
     String? filePath,
     String? pHashHex,
@@ -171,7 +171,7 @@ class PhotoEntry {
     return PhotoEntry(
       key: key ?? this.key,
       origin: origin ?? this.origin,
-      displayBytes: displayBytes ?? this.displayBytes,
+      thumbnailPath: thumbnailPath ?? this.thumbnailPath,
       assetId: assetId ?? this.assetId,
       filePath: filePath ?? this.filePath,
       pHashHex: pHashHex ?? this.pHashHex,
@@ -188,12 +188,14 @@ class PhotoEntry {
       hasPortraitFace: hasPortraitFace ?? this.hasPortraitFace,
       portraitEyesClosed: portraitEyesClosed ?? this.portraitEyesClosed,
       portraitEyeOpenAvg: portraitEyeOpenAvg ?? this.portraitEyeOpenAvg,
-      portraitBothEyesDetected: portraitBothEyesDetected ?? this.portraitBothEyesDetected,
+      portraitBothEyesDetected:
+          portraitBothEyesDetected ?? this.portraitBothEyesDetected,
       portraitFaceX: portraitFaceX ?? this.portraitFaceX,
       portraitFaceY: portraitFaceY ?? this.portraitFaceY,
       portraitFaceW: portraitFaceW ?? this.portraitFaceW,
       portraitFaceH: portraitFaceH ?? this.portraitFaceH,
-      portraitFaceSharpness: portraitFaceSharpness ?? this.portraitFaceSharpness,
+      portraitFaceSharpness:
+          portraitFaceSharpness ?? this.portraitFaceSharpness,
       debugGridSharps: debugGridSharps ?? this.debugGridSharps,
     );
   }

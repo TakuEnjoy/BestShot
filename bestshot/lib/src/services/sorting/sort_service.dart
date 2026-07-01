@@ -3,10 +3,7 @@ import 'package:path/path.dart' as p;
 import '../../models/photo_entry.dart';
 
 class SortResult {
-  SortResult({
-    required this.successCount,
-    required this.failedFiles,
-  });
+  SortResult({required this.successCount, required this.failedFiles});
   final int successCount;
   final List<String> failedFiles; // 失敗したファイルの元パス一覧
 }
@@ -154,15 +151,14 @@ class SortService {
         // 安全のため、エラー発生時点で一括処理を中断
         final remainingIndex = targets.indexOf(t) + 1;
         if (remainingIndex < targets.length) {
-          failed.addAll(targets.sublist(remainingIndex).map((x) => x.key.filePath!));
+          failed.addAll(
+            targets.sublist(remainingIndex).map((x) => x.key.filePath!),
+          );
         }
         break;
       }
     }
 
-    return SortResult(
-      successCount: successCount,
-      failedFiles: failed,
-    );
+    return SortResult(successCount: successCount, failedFiles: failed);
   }
 }

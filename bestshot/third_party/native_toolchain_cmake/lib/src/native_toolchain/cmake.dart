@@ -30,15 +30,10 @@ class _CmakeResolver implements ToolResolver {
             InstallLocationResolver(
               toolName: 'CMake',
               paths: [
-                if (userConfig?.androidHome != null)
-                  '${userConfig?.androidHome}/cmake/*/bin/$executableName',
-                if (Platform.isLinux)
-                  r'$HOME/Android/Sdk/cmake/*/bin/' + executableName,
-                if (Platform.isMacOS)
-                  r'$HOME/Library/Android/sdk/cmake/*/bin/' + executableName,
-                if (Platform.isWindows)
-                  r'$HOME/AppData/Local/Android/Sdk/cmake/*/bin/' +
-                      executableName,
+                if (userConfig?.androidHome != null) '${userConfig?.androidHome}/cmake/*/bin/$executableName',
+                if (Platform.isLinux) r'$HOME/Android/Sdk/cmake/*/bin/' + executableName,
+                if (Platform.isMacOS) r'$HOME/Library/Android/sdk/cmake/*/bin/' + executableName,
+                if (Platform.isWindows) r'$HOME/AppData/Local/Android/Sdk/cmake/*/bin/' + executableName,
               ],
             ),
           ]),
@@ -89,22 +84,12 @@ class _CmakeResolver implements ToolResolver {
   }) async {
     // here, we always try to find android cmake first and filter out unsatisfied versions
     final androidResolver = _getAndroidResolver(userConfig: userConfig);
-    final androidCmakeInstances = await androidResolver.resolve(
-      logger: logger,
-      environment: environment,
-    );
-    logger?.info(
-      'Found Android CMake: ${androidCmakeInstances.map((e) => e.toString()).join(', ')}',
-    );
+    final androidCmakeInstances = await androidResolver.resolve(logger: logger, environment: environment);
+    logger?.info('Found Android CMake: ${androidCmakeInstances.map((e) => e.toString()).join(', ')}');
 
     final systemResolver = _getSystemResolver();
-    final systemCmakeInstances = await systemResolver.resolve(
-      logger: logger,
-      environment: environment,
-    );
-    logger?.info(
-      'Found System CMake: ${systemCmakeInstances.map((e) => e.toString()).join(', ')}',
-    );
+    final systemCmakeInstances = await systemResolver.resolve(logger: logger, environment: environment);
+    logger?.info('Found System CMake: ${systemCmakeInstances.map((e) => e.toString()).join(', ')}');
 
     final combinedCmakeInstances = <ToolInstance>[];
     if (userConfig?.preferAndroidCmake ?? false) {
@@ -141,16 +126,10 @@ class _CmakeResolver implements ToolResolver {
       );
     }
 
-    logger?.info(
-      'Found CMake: ${combinedCmakeInstances.map((e) => e.toString()).join(', ')}',
-    );
+    logger?.info('Found CMake: ${combinedCmakeInstances.map((e) => e.toString()).join(', ')}');
     if (combinedCmakeInstances.isEmpty) {
-      logger?.severe(
-        'Failed to find cmake with version=${specificCmakeVersion ?? 'latest'}',
-      );
-      throw Exception(
-        'Failed to find cmake version: ${specificCmakeVersion ?? 'latest'}',
-      );
+      logger?.severe('Failed to find cmake with version=${specificCmakeVersion ?? 'latest'}');
+      throw Exception('Failed to find cmake version: ${specificCmakeVersion ?? 'latest'}');
     }
 
     return combinedCmakeInstances;

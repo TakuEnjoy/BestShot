@@ -55,7 +55,7 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
 
     final origW = mat.cols;
     final origH = mat.rows;
-    
+
     // Performance improvement: Run on original full resolution to capture pixel-level focus.
     work = mat.clone();
 
@@ -100,25 +100,26 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
       dtype: cv.MatType.CV_8UC1.value,
     );
 
-    final otsu = cv.threshold(
-      norm,
-      0,
-      255,
-      cv.THRESH_BINARY | cv.THRESH_OTSU,
-    );
+    final otsu = cv.threshold(norm, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
     binary = otsu.$2;
 
     // ── Step 5: モルフォロジー（ノイズ除去 → 穴埋め、解像度に応じて動的スケーリング）────────
     // open: 孤立した小ノイズ・誤検出を除去
     int openSize = (7 * scale).round();
     if (openSize < 3) openSize = 3;
-    kernelOpen = cv.getStructuringElement(cv.MORPH_ELLIPSE, (openSize, openSize));
+    kernelOpen = cv.getStructuringElement(cv.MORPH_ELLIPSE, (
+      openSize,
+      openSize,
+    ));
     opened = cv.morphologyEx(binary, cv.MORPH_OPEN, kernelOpen);
 
     // close: ピント領域内の細かい穴を埋めて塊にする
     int closeSize = (19 * scale).round();
     if (closeSize < 3) closeSize = 3;
-    kernelClose = cv.getStructuringElement(cv.MORPH_ELLIPSE, (closeSize, closeSize));
+    kernelClose = cv.getStructuringElement(cv.MORPH_ELLIPSE, (
+      closeSize,
+      closeSize,
+    ));
     closed = cv.morphologyEx(opened, cv.MORPH_CLOSE, kernelClose);
 
     // ── Step 6: Cannyエッジで境界をシャープ化 ──────────────────────────
@@ -128,7 +129,10 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
     // エッジを少し太らせて「境界帯」を定義
     int cannyDilateSize = (3 * scale).round();
     if (cannyDilateSize < 1) cannyDilateSize = 1;
-    kernelCanny = cv.getStructuringElement(cv.MORPH_RECT, (cannyDilateSize, cannyDilateSize));
+    kernelCanny = cv.getStructuringElement(cv.MORPH_RECT, (
+      cannyDilateSize,
+      cannyDilateSize,
+    ));
     cannyDilated = cv.dilate(canny, kernelCanny);
 
     // 境界帯 → binary（細かい判定）、それ以外 → closed（安定した領域）
@@ -144,7 +148,12 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
 
     // ── Step 8: 透過RGBA画像の作成 ──────────────────────────────────────
     // R=255, G=255, B=255, A=binFull (白=不透明, 黒=透明)
-    white = cv.Mat.fromScalar(origH, origW, cv.MatType.CV_8UC1, cv.Scalar.all(255));
+    white = cv.Mat.fromScalar(
+      origH,
+      origW,
+      cv.MatType.CV_8UC1,
+      cv.Scalar.all(255),
+    );
     channels = cv.VecMat.fromList([white, white, white, binFull]);
     rgba = cv.merge(channels);
 

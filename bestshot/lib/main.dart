@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'src/app/bestshot_app.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const BestShotApp());
+  runApp(const ProviderScope(child: BestShotApp()));
 }

@@ -3,8 +3,9 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:exif/exif.dart';
-import 'package:image/image.dart' as img;
+import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:path/path.dart' as p;
+import 'package:photo_manager/photo_manager.dart';
 
 import '../../models/photo_entry.dart';
 import '../analysis/analysis_types.dart';
@@ -13,7 +14,7 @@ class ImportedItem {
   ImportedItem({
     required this.key,
     required this.origin,
-    required this.displayBytes,
+    required this.thumbnailPath,
     this.assetId,
     this.filePath,
     this.exifSummary,
@@ -21,13 +22,13 @@ class ImportedItem {
 
   final String key;
   final PhotoOrigin origin;
-  final Uint8List displayBytes;
+  final String thumbnailPath;
   final String? assetId;
   final String? filePath;
   final ExifSummary? exifSummary;
 
   AnalyzeInput toAnalyzeInput() =>
-      AnalyzeInput(key: key, displayBytes: displayBytes, filePath: filePath);
+      AnalyzeInput(key: key, thumbnailPath: thumbnailPath, filePath: filePath);
 }
 
 class ExifSummary {
@@ -36,39 +37,38 @@ class ExifSummary {
     required this.shutter,
     required this.iso,
     required this.capturedAt,
+    this.orientation = 1,
   });
 
   final String? fNumber;
   final String? shutter;
   final String? iso;
   final DateTime? capturedAt;
+  final int orientation;
 }
 
 class ImportService {
-
-
-  static img.Image _resizeKeepingAspect(img.Image src, int maxEdge) {
-    final w = src.width;
-    final h = src.height;
-    if (w <= maxEdge && h <= maxEdge) return src;
-    if (w >= h) {
-      final newW = maxEdge;
-      final newH = (h * (maxEdge / w)).round();
-      return img.copyResize(src, width: newW, height: newH);
-    } else {
-      final newH = maxEdge;
-      final newW = (w * (maxEdge / h)).round();
-      return img.copyResize(src, width: newW, height: newH);
-    }
-  }
-
   static Future<FolderScanResult?> scanFolder(String dir) async {
     final directory = Directory(dir);
     if (!await directory.exists()) return null;
 
     final exts = <String>{
-      '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.heic', '.heif',
-      '.dng', '.arw', '.nef', '.cr2', '.cr3', '.raf', '.rw2', '.orf',
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.tif',
+      '.tiff',
+      '.webp',
+      '.heic',
+      '.heif',
+      '.dng',
+      '.arw',
+      '.nef',
+      '.cr2',
+      '.cr3',
+      '.raf',
+      '.rw2',
+      '.orf',
     };
 
     final filesByDate = <DateTime, List<File>>{};
@@ -95,40 +95,89 @@ class ImportService {
       }
     }
 
-    return FolderScanResult(
-      folderPath: dir,
-      filesByDate: filesByDate,
-    );
+    return FolderScanResult(folderPath: dir, filesByDate: filesByDate);
   }
 
-  static Future<List<ImportedItem>> importSelectedFiles(
+  static Future<List<ImportedItem>> importLocalFiles(
     List<File> files, {
     required int thumbnailMaxEdge,
+    required String tempDirPath,
     void Function(int done, int total)? onProgress,
+    void Function(List<String> failedPaths)? onFailed,
   }) async {
     final rawExts = <String>{
-      '.dng', '.arw', '.nef', '.cr2', '.cr3', '.raf', '.rw2', '.orf',
+      '.dng',
+      '.arw',
+      '.nef',
+      '.cr2',
+      '.cr3',
+      '.raf',
+      '.rw2',
+      '.orf',
     };
 
     final out = <ImportedItem>[];
+    final failedPaths = <String>[];
     var done = 0;
     for (final f in files) {
       try {
+        final fName = p.basename(f.path);
         final result = await Isolate.run(() async {
           final ext = p.extension(f.path).toLowerCase();
           final bytes = await f.readAsBytes();
           final decodeSource = rawExts.contains(ext)
               ? (_extractEmbeddedJpeg(bytes) ?? bytes)
               : bytes;
-          final decoded = img.decodeImage(decodeSource);
-          if (decoded == null) return null;
-          final upright = img.bakeOrientation(decoded);
 
-          final resized = _resizeKeepingAspect(upright, thumbnailMaxEdge);
-          final jpg = Uint8List.fromList(img.encodeJpg(resized, quality: 85));
           final exifSummary = await _readExifSummary(f);
+          final orientation = exifSummary?.orientation ?? 1;
 
-          return _ImportPayload(jpg: jpg, exif: exifSummary);
+          final mat = cv.imdecode(decodeSource, cv.IMREAD_COLOR);
+          if (mat.isEmpty) return null;
+
+          cv.Mat workMat = mat;
+          if (orientation == 3) {
+            workMat = cv.rotate(mat, cv.ROTATE_180);
+            mat.dispose();
+          } else if (orientation == 6) {
+            workMat = cv.rotate(mat, cv.ROTATE_90_CLOCKWISE);
+            mat.dispose();
+          } else if (orientation == 8) {
+            workMat = cv.rotate(mat, cv.ROTATE_90_COUNTERCLOCKWISE);
+            mat.dispose();
+          }
+
+          final w = workMat.cols;
+          final h = workMat.rows;
+          cv.Mat resized;
+          if (w > thumbnailMaxEdge || h > thumbnailMaxEdge) {
+            double scale = w >= h ? thumbnailMaxEdge / w : thumbnailMaxEdge / h;
+            resized = cv.resize(workMat, (
+              (w * scale).round(),
+              (h * scale).round(),
+            ));
+          } else {
+            resized = workMat.clone();
+          }
+
+          final encodeRes = cv.imencode(
+            '.jpg',
+            resized,
+            params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, 85]),
+          );
+          final jpg = encodeRes.$2;
+
+          workMat.dispose();
+          resized.dispose();
+
+          final thumbId = '${DateTime.now().microsecondsSinceEpoch}_$fName';
+          final thumbFile = File(p.join(tempDirPath, 'thumb_$thumbId.jpg'));
+          await thumbFile.writeAsBytes(jpg);
+
+          return _ImportPayload(
+            thumbnailPath: thumbFile.path,
+            exif: exifSummary,
+          );
         });
 
         if (result != null) {
@@ -136,28 +185,147 @@ class ImportService {
             ImportedItem(
               key: 'file:${f.path}',
               origin: PhotoOrigin.filePath,
-              displayBytes: result.jpg,
+              thumbnailPath: result.thumbnailPath,
               filePath: f.path,
               exifSummary: result.exif,
             ),
           );
+        } else {
+          failedPaths.add(f.path);
         }
-      } catch (_) {
-        // Skip
+      } catch (e) {
+        failedPaths.add(f.path);
       } finally {
         done++;
         onProgress?.call(done, files.length);
       }
+    }
+    if (failedPaths.isNotEmpty) {
+      onFailed?.call(failedPaths);
+    }
+    return out;
+  }
+
+  static Future<List<ImportedItem>> importPhotoManagerAssets(
+    List<AssetEntity> assets, {
+    required int thumbnailMaxEdge,
+    required String tempDirPath,
+    void Function(int done, int total)? onProgress,
+    void Function(List<String> failedPaths)? onFailed,
+  }) async {
+    final rawExts = <String>{
+      '.dng',
+      '.arw',
+      '.nef',
+      '.cr2',
+      '.cr3',
+      '.raf',
+      '.rw2',
+      '.orf',
+    };
+
+    final out = <ImportedItem>[];
+    final failedPaths = <String>[];
+    var done = 0;
+    for (final asset in assets) {
+      try {
+        final f = await asset.file;
+        if (f == null) {
+          failedPaths.add('asset:${asset.id}');
+          continue;
+        }
+
+        final fName = p.basename(f.path);
+        final result = await Isolate.run(() async {
+          final ext = p.extension(f.path).toLowerCase();
+          final bytes = await f.readAsBytes();
+          final decodeSource = rawExts.contains(ext)
+              ? (_extractEmbeddedJpeg(bytes) ?? bytes)
+              : bytes;
+
+          final exifSummary = await _readExifSummary(f);
+          final orientation = exifSummary?.orientation ?? 1;
+
+          final mat = cv.imdecode(decodeSource, cv.IMREAD_COLOR);
+          if (mat.isEmpty) return null;
+
+          cv.Mat workMat = mat;
+          if (orientation == 3) {
+            workMat = cv.rotate(mat, cv.ROTATE_180);
+            mat.dispose();
+          } else if (orientation == 6) {
+            workMat = cv.rotate(mat, cv.ROTATE_90_CLOCKWISE);
+            mat.dispose();
+          } else if (orientation == 8) {
+            workMat = cv.rotate(mat, cv.ROTATE_90_COUNTERCLOCKWISE);
+            mat.dispose();
+          }
+
+          final w = workMat.cols;
+          final h = workMat.rows;
+          cv.Mat resized;
+          if (w > thumbnailMaxEdge || h > thumbnailMaxEdge) {
+            double scale = w >= h ? thumbnailMaxEdge / w : thumbnailMaxEdge / h;
+            resized = cv.resize(workMat, (
+              (w * scale).round(),
+              (h * scale).round(),
+            ));
+          } else {
+            resized = workMat.clone();
+          }
+
+          final encodeRes = cv.imencode(
+            '.jpg',
+            resized,
+            params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, 85]),
+          );
+          final jpg = encodeRes.$2;
+
+          workMat.dispose();
+          resized.dispose();
+
+          final thumbId = '${DateTime.now().microsecondsSinceEpoch}_$fName';
+          final thumbFile = File(
+            p.join(tempDirPath, 'thumb_asset_$thumbId.jpg'),
+          );
+          await thumbFile.writeAsBytes(jpg);
+
+          return _ImportPayload(
+            thumbnailPath: thumbFile.path,
+            exif: exifSummary,
+          );
+        });
+
+        if (result != null) {
+          out.add(
+            ImportedItem(
+              key: 'asset:${asset.id}',
+              origin: PhotoOrigin.deviceAsset,
+              thumbnailPath: result.thumbnailPath,
+              assetId: asset.id,
+              filePath: f.path,
+              exifSummary: result.exif,
+            ),
+          );
+        } else {
+          failedPaths.add('asset:${asset.id}');
+        }
+      } catch (e) {
+        failedPaths.add('asset:${asset.id}');
+      } finally {
+        done++;
+        onProgress?.call(done, assets.length);
+      }
+    }
+    if (failedPaths.isNotEmpty) {
+      onFailed?.call(failedPaths);
     }
     return out;
   }
 }
 
 class FolderScanResult {
-  FolderScanResult({
-    required this.folderPath,
-    required this.filesByDate,
-  });
+  FolderScanResult({required this.folderPath, required this.filesByDate});
 
   final String folderPath;
   final Map<DateTime, List<File>> filesByDate;
@@ -165,34 +333,27 @@ class FolderScanResult {
 
 Uint8List? _extractEmbeddedJpeg(Uint8List bytes) {
   try {
-    // 1. マジックナンバーの高速スキャン（SOI: FF D8, EOI: FF D9）
-    // 既存のロジックをより安全に改善。
     int bestStart = -1;
     int bestEnd = -1;
     int maxLen = 0;
+    int currentStart = -1;
 
-    // 全体をスキャンすると遅いので、先頭と末尾の数MBに絞ることも検討できるが、
-    // RAWの場合は中間に埋め込まれていることが多い。
+    // O(N) スキャンによる高速化
     for (int i = 0; i < bytes.length - 1; i++) {
-      if (bytes[i] == 0xFF && bytes[i + 1] == 0xD8) {
-        // SOI見つけた
-        int start = i;
-        // EOIを探す（次のSOIが見つかるか、ファイルの終わりまで）
-        for (int j = i + 2; j < bytes.length - 1; j++) {
-          if (bytes[j] == 0xFF && bytes[j + 1] == 0xD9) {
-            int end = j + 2;
-            int len = end - start;
+      if (bytes[i] == 0xFF) {
+        if (bytes[i + 1] == 0xD8) {
+          if (currentStart == -1) currentStart = i;
+        } else if (bytes[i + 1] == 0xD9) {
+          if (currentStart != -1) {
+            int end = i + 2;
+            int len = end - currentStart;
             if (len > maxLen) {
               maxLen = len;
-              bestStart = start;
+              bestStart = currentStart;
               bestEnd = end;
             }
-            // 大きなJPEGが見つかったら一旦その範囲をスキップして次を探す
-            i = j;
-            break;
+            currentStart = -1;
           }
-          // JPEGのセグメントとして不自然に長すぎる場合は中断（例: 50MB以上）
-          if (j - start > 50 * 1024 * 1024) break;
         }
       }
     }
@@ -226,11 +387,14 @@ Future<ExifSummary?> _readExifSummary(File f) async {
         getTag('Image DateTime') ??
         getTag('DateTime');
     final capturedAt = _parseExifDateTime(dt);
+    final orientationStr = getTag('EXIF Orientation') ?? getTag('Orientation');
+    final orientation = int.tryParse(orientationStr ?? '') ?? 1;
     return ExifSummary(
       fNumber: fnum,
       shutter: expo,
       iso: iso,
       capturedAt: capturedAt,
+      orientation: orientation,
     );
   } catch (_) {
     return null;
@@ -287,7 +451,7 @@ DateTime? _parseExifDateTime(String? s) {
 }
 
 class _ImportPayload {
-  _ImportPayload({required this.jpg, this.exif});
-  final Uint8List jpg;
+  _ImportPayload({required this.thumbnailPath, this.exif});
+  final String thumbnailPath;
   final ExifSummary? exif;
 }

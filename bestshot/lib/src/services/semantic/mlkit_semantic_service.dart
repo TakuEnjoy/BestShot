@@ -1,12 +1,11 @@
 import 'dart:io';
-import 'dart:isolate';
+
 import 'dart:typed_data';
 
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:opencv_dart/opencv_dart.dart' as cv;
-import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../models/photo_entry.dart';
@@ -44,10 +43,6 @@ class MlKitSemanticService {
     void Function(int done, int total)? onProgress,
     int maxEdge = 640,
   }) async {
-    if (!(Platform.isAndroid || Platform.isIOS)) {
-      return entries;
-    }
-
     final tmp = await getTemporaryDirectory();
     final out = <PhotoEntry>[];
     var done = 0;
@@ -66,13 +61,9 @@ class MlKitSemanticService {
     required int maxEdge,
   }) async {
     try {
-      final resizedBytes = await _resizeForMlKit(
-        e.displayBytes,
-        maxEdge: maxEdge,
-      );
-      final fp = p.join(tmp.path, 'bestshot_${e.key.hashCode}.jpg');
-      await File(fp).writeAsBytes(resizedBytes, flush: true);
-      final input = InputImage.fromFilePath(fp);
+      if (e.thumbnailPath == null) return e;
+      final input = InputImage.fromFilePath(e.thumbnailPath!);
+      final resizedBytes = await File(e.thumbnailPath!).readAsBytes();
 
       final objects = await _objectDetector.processImage(input);
       final semantic = _toSemanticObjects(objects, resizedBytes);
@@ -102,8 +93,10 @@ class MlKitSemanticService {
             try {
               if (e.filePath != null && await File(e.filePath!).exists()) {
                 mat = cv.imread(e.filePath!);
+              } else if (e.thumbnailPath != null) {
+                mat = cv.imread(e.thumbnailPath!);
               } else {
-                mat = cv.imdecode(e.displayBytes, cv.IMREAD_COLOR);
+                mat = cv.Mat.empty();
               }
 
               if (!mat.isEmpty && mlW > 0 && mlH > 0) {
@@ -113,10 +106,19 @@ class MlKitSemanticService {
 
                 final rx = (bb.left / mlW * origW).round().clamp(0, origW - 1);
                 final ry = (bb.top / mlH * origH).round().clamp(0, origH - 1);
-                final rw = (bb.width / mlW * origW).round().clamp(1, origW - rx);
-                final rh = (bb.height / mlH * origH).round().clamp(1, origH - ry);
+                final rw = (bb.width / mlW * origW).round().clamp(
+                  1,
+                  origW - rx,
+                );
+                final rh = (bb.height / mlH * origH).round().clamp(
+                  1,
+                  origH - ry,
+                );
 
-                final objSharpness = _calcLaplacianVarianceInRoi(mat, cv.Rect(rx, ry, rw, rh));
+                final objSharpness = _calcLaplacianVarianceInRoi(
+                  mat,
+                  cv.Rect(rx, ry, rw, rh),
+                );
                 if (objSharpness > 0) {
                   updatedSharpness = objSharpness;
                 }
@@ -138,26 +140,6 @@ class MlKitSemanticService {
     } catch (_) {
       return e;
     }
-  }
-
-  static Future<Uint8List> _resizeForMlKit(
-    Uint8List bytes, {
-    required int maxEdge,
-  }) async {
-    return Isolate.run(() {
-      final decoded = img.decodeImage(bytes);
-      if (decoded == null) return bytes;
-      final upright = img.bakeOrientation(decoded);
-      final w = upright.width;
-      final h = upright.height;
-      if (w <= maxEdge && h <= maxEdge) return bytes;
-      final resized = img.copyResize(
-        upright,
-        width: w >= h ? maxEdge : null,
-        height: h > w ? maxEdge : null,
-      );
-      return Uint8List.fromList(img.encodeJpg(resized, quality: 90));
-    });
   }
 
   static List<SemanticObject> _toSemanticObjects(

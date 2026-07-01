@@ -8,10 +8,14 @@ import '../services/analysis/analyzer_isolate.dart';
 import '../services/analysis/analysis_types.dart';
 import '../services/grouping/grouping.dart';
 import '../services/importing/import_service.dart';
+import '../services/importing/import_history_service.dart';
 import '../services/semantic/mlkit_semantic_service.dart';
 import 'package:file_picker/file_picker.dart';
-import '../platform/folder_picker_windows.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'groups_screen.dart';
+
+import 'import_view_model.dart';
 
 class ImportScreen extends StatefulWidget {
   const ImportScreen({super.key});
@@ -21,51 +25,62 @@ class ImportScreen extends StatefulWidget {
 }
 
 class _ImportScreenState extends State<ImportScreen> {
-  bool _busy = false;
-  String _status = '';
-  double? _progress; // null => indeterminate
-  String _stage = '';
-  DetectionMode _detectionMode = DetectionMode.standard;
-  int _maxCount = 200;
-  /// 連写ウィンドウ（1秒〜60分）。UIは分・秒で編集、初期 00分15秒。
-  int _burstMinutes = 0;
-  int _burstSeconds = 15;
+  late final ImportViewModel _viewModel;
 
-  static const int _burstMinTotal = 1;
-  static const int _burstMaxTotal = 60 * 60;
-
-  int get _burstWindowSeconds {
-    var total = _burstMinutes * 60 + _burstSeconds;
-    if (total < _burstMinTotal) total = _burstMinTotal;
-    if (total > _burstMaxTotal) total = _burstMaxTotal;
-    return total;
-  }
-
-  void _normalizeBurstTotal() {
-    var m = _burstMinutes.clamp(0, 60);
-    var s = _burstSeconds.clamp(0, 59);
-    var total = m * 60 + s;
-    if (total > _burstMaxTotal) {
-      total = _burstMaxTotal;
-      m = total ~/ 60;
-      s = total % 60;
-    }
-    if (total < _burstMinTotal) {
-      m = 0;
-      s = 1;
-    }
-    setState(() {
-      _burstMinutes = m;
-      _burstSeconds = s;
+  @override
+  void initState() {
+    super.initState();
+    _viewModel = ImportViewModel();
+    _viewModel.addListener(() {
+      if (mounted) setState(() {});
     });
   }
 
+  @override
+  void dispose() {
+    _viewModel.dispose();
+    super.dispose();
+  }
+
+  bool get _busy => _viewModel.busy;
+  String get _status => _viewModel.status;
+  double? get _progress => _viewModel.progress;
+  String get _stage => _viewModel.stage;
+  DetectionMode get _detectionMode => _viewModel.detectionMode;
+  int get _maxCount => _viewModel.maxCount;
+  bool get _smartResume => _viewModel.smartResume;
+  int get _burstMinutes => _viewModel.burstMinutes;
+  int get _burstSeconds => _viewModel.burstSeconds;
+  int get _burstWindowSeconds => _viewModel.burstWindowSeconds;
+
+  set _busy(bool v) => _viewModel.setBusy(v);
+  set _status(String v) =>
+      _viewModel.updateProgress(_viewModel.stage, v, _viewModel.progress);
+  set _progress(double? v) =>
+      _viewModel.updateProgress(_viewModel.stage, _viewModel.status, v);
+  set _stage(String v) =>
+      _viewModel.updateProgress(v, _viewModel.status, _viewModel.progress);
+  set _detectionMode(DetectionMode v) => _viewModel.setDetectionMode(v);
+  set _maxCount(int v) => _viewModel.setMaxCount(v);
+  set _smartResume(bool v) => _viewModel.setSmartResume(v);
+  set _burstMinutes(int v) =>
+      _viewModel.normalizeBurstTotal(v, _viewModel.burstSeconds);
+  set _burstSeconds(int v) =>
+      _viewModel.normalizeBurstTotal(_viewModel.burstMinutes, v);
+
+  void _normalizeBurstTotal() {
+    // Moved to ViewModel, no longer needed here, but kept for compatibility if called directly
+  }
+
   Future<void> _runImportAndAnalyze(
-    Future<List<ImportedItem>> Function(void Function(int done, int total) onProgress) importer,
+    Future<List<ImportedItem>> Function(
+      void Function(int done, int total) onProgress,
+    )
+    importer,
   ) async {
-    if (_busy) return;
+    // Note: _busy is already set to true by the caller functions.
+    // We just update the status text here.
     setState(() {
-      _busy = true;
       _stage = 'インポート';
       _status = '写真を読み込み中...';
       _progress = 0;
@@ -118,7 +133,7 @@ class _ImportScreenState extends State<ImportScreen> {
           PhotoEntry(
             key: i.key,
             origin: i.origin,
-            displayBytes: i.displayBytes,
+            thumbnailPath: i.thumbnailPath,
             assetId: i.assetId,
             filePath: i.filePath,
             pHashHex: a.pHashHex,
@@ -146,27 +161,25 @@ class _ImportScreenState extends State<ImportScreen> {
 
       // Semantic analysis (Android/iOS only)
       var enrichedEntries = entries;
-      if (Platform.isAndroid || Platform.isIOS) {
-        setState(() {
-          _stage = '物体/顔検出';
-          _status = 'ML Kitで被写体/表情を解析中...';
-          _progress = 0;
-        });
-        final svc = await MlKitSemanticService.create();
-        try {
-          enrichedEntries = await svc.enrich(
-            entries,
-            onProgress: (done, total) {
-              if (!mounted) return;
-              setState(() {
-                _progress = total <= 0 ? null : (done / total).clamp(0.0, 1.0);
-                _status = 'ML Kit解析中... ($done / $total)';
-              });
-            },
-          );
-        } finally {
-          await svc.close();
-        }
+      setState(() {
+        _stage = '物体/顔検出';
+        _status = 'ML Kitで被写体/表情を解析中...';
+        _progress = 0;
+      });
+      final svc = await MlKitSemanticService.create();
+      try {
+        enrichedEntries = await svc.enrich(
+          entries,
+          onProgress: (done, total) {
+            if (!mounted) return;
+            setState(() {
+              _progress = total <= 0 ? null : (done / total).clamp(0.0, 1.0);
+              _status = 'ML Kit解析中... ($done / $total)';
+            });
+          },
+        );
+      } finally {
+        await svc.close();
       }
 
       setState(() {
@@ -189,7 +202,8 @@ class _ImportScreenState extends State<ImportScreen> {
 
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => GroupsScreen(groups: groups, detectionMode: _detectionMode),
+          builder: (_) =>
+              GroupsScreen(groups: groups, detectionMode: _detectionMode),
         ),
       );
     } catch (e) {
@@ -203,49 +217,92 @@ class _ImportScreenState extends State<ImportScreen> {
     }
   }
 
-  Future<void> _runFolderImportAndAnalyze(bool isAndroidSAF) async {
+  Future<void> _runFileImportAndAnalyze() async {
     if (_busy) return;
 
-    // フォルダパスの取得
-    String? dir;
+    List<File> selectedFiles = [];
     try {
-      if (isAndroidSAF) {
-        dir = await FilePicker.platform.getDirectoryPath();
-      } else {
-        dir = FolderPickerWindows.pickFolder();
-      }
+      final res = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        type: FileType.custom,
+        allowedExtensions: [
+          'jpg', 'jpeg', 'png', 'tif', 'tiff', 'webp', 'heic', 'heif',
+          'dng', 'arw', 'nef', 'cr2', 'cr3', 'raf', 'rw2', 'orf'
+        ],
+      );
+      if (res == null || res.paths.isEmpty) return;
+      selectedFiles = res.paths
+          .whereType<String>()
+          .map((p) => File(p))
+          .toList();
     } catch (e) {
       setState(() {
-        _status = 'フォルダ選択エラー: $e';
+        _status = 'ファイル選択エラー: $e';
       });
       return;
     }
 
-    if (dir == null || dir.isEmpty) return;
+    if (selectedFiles.isEmpty) return;
 
     setState(() {
       _busy = true;
       _stage = 'スキャン';
-      _status = 'フォルダ内の写真を高速スキャン中...';
+      _status = '選択された写真を準備中...';
       _progress = null;
     });
 
     try {
-      final scanResult = await ImportService.scanFolder(dir);
-      if (!mounted) return;
+      // 差分フィルタと最大数制限の適用
+      final filteredFiles = <File>[];
+      for (final file in selectedFiles) {
+        if (filteredFiles.length >= _maxCount) break;
+        if (_smartResume) {
+          final isDone = await ImportHistoryService.instance.isProcessed(
+            'file:${file.path}',
+          );
+          if (isDone) continue;
+        }
+        filteredFiles.add(file);
+      }
 
-      if (scanResult == null || scanResult.filesByDate.isEmpty) {
+      if (filteredFiles.isEmpty) {
         setState(() {
           _busy = false;
-          _status = '対象となる画像ファイルが見つかりませんでした';
+          _status = _smartResume ? '選択された写真はすべて処理済みです' : '写真が見つかりません';
           _stage = '';
         });
         return;
       }
 
-      // 日付選択ダイアログの表示
-      final selectedFiles = await _showDateSelectionDialog(scanResult);
-      if (selectedFiles == null || selectedFiles.isEmpty) {
+      final filesByDate = <DateTime, List<File>>{};
+      for (final file in filteredFiles) {
+        try {
+          final stat = await file.stat();
+          final modDate = stat.modified;
+          final dateOnly = DateTime(modDate.year, modDate.month, modDate.day);
+          if (!filesByDate.containsKey(dateOnly)) {
+            filesByDate[dateOnly] = [];
+          }
+          filesByDate[dateOnly]!.add(file);
+        } catch (_) {
+          final now = DateTime.now();
+          final dateOnly = DateTime(now.year, now.month, now.day);
+          if (!filesByDate.containsKey(dateOnly)) {
+            filesByDate[dateOnly] = [];
+          }
+          filesByDate[dateOnly]!.add(file);
+        }
+      }
+
+      final scanResult = FolderScanResult(
+        folderPath: 'Selected Files',
+        filesByDate: filesByDate,
+      );
+
+      if (!mounted) return;
+
+      final confirmedFiles = await _showDateSelectionDialog(scanResult);
+      if (confirmedFiles == null || confirmedFiles.isEmpty) {
         setState(() {
           _busy = false;
           _status = 'インポートがキャンセルされました';
@@ -254,17 +311,21 @@ class _ImportScreenState extends State<ImportScreen> {
         return;
       }
 
-      // 本解析処理の実行
-      setState(() {
-        _busy = false;
-      });
+      final tempDir = await getTemporaryDirectory();
+      final tempDirPath = tempDir.path;
+
       await _runImportAndAnalyze(
-        (onProgress) => ImportService.importSelectedFiles(
-          selectedFiles,
+        (onProgress) => ImportService.importLocalFiles(
+          confirmedFiles,
           thumbnailMaxEdge: 512,
+          tempDirPath: tempDirPath,
           onProgress: onProgress,
         ),
       );
+
+      // インポート完了したファイルのキーを履歴に保存
+      final importedKeys = confirmedFiles.map((f) => 'file:${f.path}').toList();
+      await ImportHistoryService.instance.saveKeys(importedKeys);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -275,9 +336,158 @@ class _ImportScreenState extends State<ImportScreen> {
     }
   }
 
-  Future<List<File>?> _showDateSelectionDialog(FolderScanResult scanResult) async {
+  Future<void> _runPhotoLibraryImportAndAnalyze() async {
+    if (_busy) return;
+
+    List<File> selectedFiles = [];
+    try {
+      final res = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        type: FileType.image,
+      );
+      if (res == null || res.paths.isEmpty) return;
+      selectedFiles = res.paths
+          .whereType<String>()
+          .map((p) => File(p))
+          .toList();
+    } catch (e) {
+      setState(() {
+        _status = '写真選択エラー: $e';
+      });
+      return;
+    }
+
+    if (selectedFiles.isEmpty) return;
+
+    setState(() {
+      _busy = true;
+      _stage = 'スキャン';
+      _status = '選択された写真を準備中...';
+      _progress = null;
+    });
+
+    try {
+      // 差分フィルタと最大数制限の適用
+      final filteredFiles = <File>[];
+      for (final file in selectedFiles) {
+        if (filteredFiles.length >= _maxCount) break;
+        if (_smartResume) {
+          final isDone = await ImportHistoryService.instance.isProcessed(
+            'file:${file.path}',
+          );
+          if (isDone) continue;
+        }
+        filteredFiles.add(file);
+      }
+
+      if (filteredFiles.isEmpty) {
+        setState(() {
+          _busy = false;
+          _status = _smartResume ? '選択された写真はすべて処理済みです' : '写真が見つかりません';
+          _stage = '';
+        });
+        return;
+      }
+
+      final filesByDate = <DateTime, List<File>>{};
+      for (final file in filteredFiles) {
+        try {
+          final stat = await file.stat();
+          final modDate = stat.modified;
+          final dateOnly = DateTime(modDate.year, modDate.month, modDate.day);
+          if (!filesByDate.containsKey(dateOnly)) {
+            filesByDate[dateOnly] = [];
+          }
+          filesByDate[dateOnly]!.add(file);
+        } catch (_) {
+          final now = DateTime.now();
+          final dateOnly = DateTime(now.year, now.month, now.day);
+          if (!filesByDate.containsKey(dateOnly)) {
+            filesByDate[dateOnly] = [];
+          }
+          filesByDate[dateOnly]!.add(file);
+        }
+      }
+
+      final scanResult = FolderScanResult(
+        folderPath: '写真ライブラリ',
+        filesByDate: filesByDate,
+      );
+
+      if (!mounted) return;
+
+      final confirmedFiles = await _showDateSelectionDialog(scanResult);
+      if (confirmedFiles == null || confirmedFiles.isEmpty) {
+        setState(() {
+          _busy = false;
+          _status = 'インポートがキャンセルされました';
+          _stage = '';
+        });
+        return;
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final tempDirPath = tempDir.path;
+
+      await _runImportAndAnalyze(
+        (onProgress) => ImportService.importLocalFiles(
+          confirmedFiles,
+          thumbnailMaxEdge: 512,
+          tempDirPath: tempDirPath,
+          onProgress: onProgress,
+        ),
+      );
+
+      // インポート完了したファイルのキーを履歴に保存
+      final importedKeys = confirmedFiles.map((f) => 'file:${f.path}').toList();
+      await ImportHistoryService.instance.saveKeys(importedKeys);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _status = 'スキャンエラー: $e';
+        _stage = '';
+      });
+    }
+  }
+
+  Future<void> _clearHistory() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('履歴のクリア'),
+        content: const Text(
+          'これまでにインポート・選別処理した写真の履歴をすべて消去しますか？\n(実画像ファイルは削除されません。次回インポート時に最初から再スキャンされるようになります)',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            child: const Text('クリア実行'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await ImportHistoryService.instance.clearHistory();
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('インポート履歴をリセットしました。')));
+    }
+  }
+
+  Future<List<File>?> _showDateSelectionDialog(
+    FolderScanResult scanResult,
+  ) async {
     final filesByDate = scanResult.filesByDate;
-    final allDates = filesByDate.keys.toList()..sort((a, b) => b.compareTo(a)); // 初期降順
+    final allDates = filesByDate.keys.toList()
+      ..sort((a, b) => b.compareTo(a)); // 初期降順
 
     final selectedDates = <DateTime>{...allDates}; // デフォルト全選択
     bool descending = true;
@@ -358,14 +568,24 @@ class _ImportScreenState extends State<ImportScreen> {
                                 final range = await showDateRangePicker(
                                   context: context,
                                   firstDate: DateTime(2000),
-                                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                                  lastDate: DateTime.now().add(
+                                    const Duration(days: 365),
+                                  ),
                                 );
                                 if (range != null) {
                                   setState(() {
                                     selectedDates.clear();
                                     for (final d in allDates) {
-                                      if (d.isAfter(range.start.subtract(const Duration(seconds: 1))) &&
-                                          d.isBefore(range.end.add(const Duration(days: 1)))) {
+                                      if (d.isAfter(
+                                            range.start.subtract(
+                                              const Duration(seconds: 1),
+                                            ),
+                                          ) &&
+                                          d.isBefore(
+                                            range.end.add(
+                                              const Duration(days: 1),
+                                            ),
+                                          )) {
                                         selectedDates.add(d);
                                       }
                                     }
@@ -378,7 +598,11 @@ class _ImportScreenState extends State<ImportScreen> {
                             // ソートトグル
                             IconButton(
                               tooltip: descending ? '新しい順' : '古い順',
-                              icon: Icon(descending ? Icons.arrow_downward : Icons.arrow_upward),
+                              icon: Icon(
+                                descending
+                                    ? Icons.arrow_downward
+                                    : Icons.arrow_upward,
+                              ),
                               onPressed: () {
                                 setState(() {
                                   descending = !descending;
@@ -404,7 +628,8 @@ class _ImportScreenState extends State<ImportScreen> {
                           itemBuilder: (context, index) {
                             final date = sortedDates[index];
                             final count = filesByDate[date]?.length ?? 0;
-                            final dateStr = '${date.year}/${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
+                            final dateStr =
+                                '${date.year}/${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
                             final isChecked = selectedDates.contains(date);
 
                             return CheckboxListTile(
@@ -487,8 +712,6 @@ class _ImportScreenState extends State<ImportScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isWindows = Platform.isWindows;
-    final isAndroid = Platform.isAndroid;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final size = MediaQuery.of(context).size;
@@ -501,15 +724,15 @@ class _ImportScreenState extends State<ImportScreen> {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            colorScheme.primary.withOpacity(0.08),
-            colorScheme.secondary.withOpacity(0.03),
+            colorScheme.primary.withValues(alpha: 0.08),
+            colorScheme.secondary.withValues(alpha: 0.03),
           ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: colorScheme.primary.withOpacity(0.15),
+          color: colorScheme.primary.withValues(alpha: 0.15),
           width: 1,
         ),
       ),
@@ -527,7 +750,7 @@ class _ImportScreenState extends State<ImportScreen> {
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.bold,
               fontSize: isSmallMobile ? 14 : null,
-              color: Colors.white.withOpacity(0.95),
+              color: Colors.white.withValues(alpha: 0.95),
             ),
           ),
           SizedBox(height: isSmallMobile ? 4 : 6),
@@ -535,7 +758,7 @@ class _ImportScreenState extends State<ImportScreen> {
             '一眼レフやミラーレス of 連写・類似写真を、内容ベースで高速グループ化して「Best」を見つけ出します。',
             textAlign: TextAlign.center,
             style: theme.textTheme.bodySmall?.copyWith(
-              color: Colors.white.withOpacity(0.65),
+              color: Colors.white.withValues(alpha: 0.65),
               fontSize: isSmallMobile ? 10 : null,
               height: 1.4,
             ),
@@ -557,7 +780,11 @@ class _ImportScreenState extends State<ImportScreen> {
           children: [
             Row(
               children: [
-                Icon(Icons.tune_rounded, size: isSmallMobile ? 16 : 20, color: colorScheme.primary),
+                Icon(
+                  Icons.tune_rounded,
+                  size: isSmallMobile ? 16 : 20,
+                  color: colorScheme.primary,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   '解析・グループ化設定',
@@ -572,7 +799,7 @@ class _ImportScreenState extends State<ImportScreen> {
             Text(
               '検出モード',
               style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withOpacity(0.8),
+                color: Colors.white.withValues(alpha: 0.8),
                 fontSize: isSmallMobile ? 11 : null,
               ),
             ),
@@ -585,35 +812,34 @@ class _ImportScreenState extends State<ImportScreen> {
                   borderRadius: BorderRadius.circular(10),
                 ),
                 isDense: true,
-                contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: isSmallMobile ? 8 : 12),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: isSmallMobile ? 8 : 12,
+                ),
               ),
-              items: [
-                const DropdownMenuItem(
+              items: const [
+                DropdownMenuItem(
                   value: DetectionMode.standard,
                   child: Text('標準（全体ピント・構図スコア）'),
                 ),
-                if (isAndroid)
-                  const DropdownMenuItem(
-                    value: DetectionMode.portrait,
-                    child: Text('ポートレート（顔優先・目閉じ判定）'),
-                  ),
+                DropdownMenuItem(
+                  value: DetectionMode.portrait,
+                  child: Text('ポートレート（顔優先・目閉じ判定）'),
+                ),
               ],
               onChanged: _busy
                   ? null
                   : (v) {
-                      if (v == null) return;
-                      if (v == DetectionMode.portrait && !isAndroid) {
-                        setState(() => _detectionMode = DetectionMode.standard);
-                        return;
+                      if (v != null) {
+                        setState(() => _detectionMode = v);
                       }
-                      setState(() => _detectionMode = v);
                     },
             ),
             SizedBox(height: isSmallMobile ? 10 : 16),
             Text(
               '連写としてまとめる時間窓',
               style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withOpacity(0.8),
+                color: Colors.white.withValues(alpha: 0.8),
                 fontSize: isSmallMobile ? 11 : null,
               ),
             ),
@@ -621,7 +847,7 @@ class _ImportScreenState extends State<ImportScreen> {
             Text(
               '合計: ${_formatBurstWindow(_burstWindowSeconds)}（1秒〜60分以内を1グループ化）',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: Colors.white.withOpacity(0.5),
+                color: Colors.white.withValues(alpha: 0.5),
                 fontSize: isSmallMobile ? 10 : null,
               ),
             ),
@@ -637,11 +863,19 @@ class _ImportScreenState extends State<ImportScreen> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       isDense: true,
-                      contentPadding: isSmallMobile ? const EdgeInsets.symmetric(horizontal: 8, vertical: 8) : null,
+                      contentPadding: isSmallMobile
+                          ? const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            )
+                          : null,
                     ),
                     items: [
                       for (var i = 0; i <= 60; i++)
-                        DropdownMenuItem(value: i, child: Text(i.toString().padLeft(2, '0'))),
+                        DropdownMenuItem(
+                          value: i,
+                          child: Text(i.toString().padLeft(2, '0')),
+                        ),
                     ],
                     onChanged: _busy
                         ? null
@@ -662,11 +896,19 @@ class _ImportScreenState extends State<ImportScreen> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       isDense: true,
-                      contentPadding: isSmallMobile ? const EdgeInsets.symmetric(horizontal: 8, vertical: 8) : null,
+                      contentPadding: isSmallMobile
+                          ? const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            )
+                          : null,
                     ),
                     items: [
                       for (var i = 0; i < 60; i++)
-                        DropdownMenuItem(value: i, child: Text(i.toString().padLeft(2, '0'))),
+                        DropdownMenuItem(
+                          value: i,
+                          child: Text(i.toString().padLeft(2, '0')),
+                        ),
                     ],
                     onChanged: _busy
                         ? null
@@ -683,7 +925,7 @@ class _ImportScreenState extends State<ImportScreen> {
             Text(
               '最大インポート件数',
               style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withOpacity(0.8),
+                color: Colors.white.withValues(alpha: 0.8),
                 fontSize: isSmallMobile ? 11 : null,
               ),
             ),
@@ -695,7 +937,9 @@ class _ImportScreenState extends State<ImportScreen> {
                   borderRadius: BorderRadius.circular(10),
                 ),
                 isDense: true,
-                contentPadding: isSmallMobile ? const EdgeInsets.symmetric(horizontal: 16, vertical: 8) : null,
+                contentPadding: isSmallMobile
+                    ? const EdgeInsets.symmetric(horizontal: 16, vertical: 8)
+                    : null,
               ),
               items: const [
                 DropdownMenuItem(value: 50, child: Text('50枚')),
@@ -711,6 +955,41 @@ class _ImportScreenState extends State<ImportScreen> {
                       setState(() => _maxCount = v);
                     },
             ),
+            SizedBox(height: isSmallMobile ? 10 : 16),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(
+                'スマートレジューム（未処理のみ）',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: Colors.white.withValues(alpha: 0.8),
+                  fontSize: isSmallMobile ? 11 : null,
+                ),
+              ),
+              subtitle: Text(
+                '過去に選別完了した写真をスキップし、前回の続きからインポートします。',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  fontSize: isSmallMobile ? 9 : 10,
+                ),
+              ),
+              value: _smartResume,
+              onChanged: _busy ? null : (v) => setState(() => _smartResume = v),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.restore_rounded, size: 16),
+              label: const Text('インポート処理履歴をクリア'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.redAccent,
+                side: BorderSide(
+                  color: Colors.redAccent.withValues(alpha: 0.5),
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: _busy ? null : _clearHistory,
+            ),
           ],
         ),
       ),
@@ -719,60 +998,63 @@ class _ImportScreenState extends State<ImportScreen> {
     // 4. Hero Import Button (Beautiful Gradient Action Box)
     Widget? importButton;
     if (!_busy) {
-      importButton = Container(
+      final photoLibraryBtn = Container(
         decoration: BoxDecoration(
           gradient: const LinearGradient(
-            colors: [Color(0xFF6366F1), Color(0xFF4F46E5)], // Indigo gradients
+            colors: [Color(0xFF6366F1), Color(0xFF4F46E5)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF6366F1).withOpacity(0.3),
-              blurRadius: 16,
-              spreadRadius: 2,
-              offset: const Offset(0, 4),
+              color: const Color(0xFF6366F1).withValues(alpha: 0.3),
+              blurRadius: 12,
+              spreadRadius: 1,
+              offset: const Offset(0, 3),
             ),
           ],
         ),
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: () => _runFolderImportAndAnalyze(!isWindows),
+            onTap: _runPhotoLibraryImportAndAnalyze,
             borderRadius: BorderRadius.circular(16),
             child: Padding(
-              padding: EdgeInsets.symmetric(vertical: isSmallMobile ? 16 : 24, horizontal: 12),
+              padding: EdgeInsets.symmetric(
+                vertical: isSmallMobile ? 14 : 20,
+                horizontal: 12,
+              ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Container(
-                    padding: EdgeInsets.all(isSmallMobile ? 8 : 12),
+                    padding: EdgeInsets.all(isSmallMobile ? 6 : 10),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.12),
+                      color: Colors.white.withValues(alpha: 0.12),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
-                      Icons.folder_open_rounded,
-                      size: isSmallMobile ? 24 : 32,
+                      Icons.photo_library_rounded,
+                      size: isSmallMobile ? 22 : 28,
                       color: Colors.white,
                     ),
                   ),
-                  SizedBox(height: isSmallMobile ? 8 : 12),
+                  SizedBox(height: isSmallMobile ? 6 : 10),
                   Text(
-                    isWindows ? 'フォルダを指定してインポート' : 'スキャンするフォルダを選択',
+                    '写真ライブラリからインポート',
                     style: TextStyle(
-                      fontSize: isSmallMobile ? 14 : 16,
+                      fontSize: isSmallMobile ? 13 : 15,
                       fontWeight: FontWeight.bold,
                       color: Colors.white,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'サブフォルダ内の画像も自動的に再帰スキャンされます',
+                    'iPad本体の写真から一括インポートします',
                     style: TextStyle(
-                      fontSize: isSmallMobile ? 10 : 11,
-                      color: Colors.white.withOpacity(0.7),
+                      fontSize: isSmallMobile ? 9 : 10,
+                      color: Colors.white.withValues(alpha: 0.7),
                     ),
                   ),
                 ],
@@ -781,6 +1063,88 @@ class _ImportScreenState extends State<ImportScreen> {
           ),
         ),
       );
+
+      final filePickerBtn = Container(
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF0D9488), Color(0xFF0F766E)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF0D9488).withValues(alpha: 0.3),
+              blurRadius: 12,
+              spreadRadius: 1,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: _runFileImportAndAnalyze,
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                vertical: isSmallMobile ? 14 : 20,
+                horizontal: 12,
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(isSmallMobile ? 6 : 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.file_open_rounded,
+                      size: isSmallMobile ? 22 : 28,
+                      color: Colors.white,
+                    ),
+                  ),
+                  SizedBox(height: isSmallMobile ? 6 : 10),
+                  Text(
+                    'ファイルからインポート',
+                    style: TextStyle(
+                      fontSize: isSmallMobile ? 13 : 15,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'ファイル選択画面から複数写真を選択します',
+                    style: TextStyle(
+                      fontSize: isSmallMobile ? 9 : 10,
+                      color: Colors.white.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      importButton = isWide
+          ? Row(
+              children: [
+                Expanded(child: photoLibraryBtn),
+                const SizedBox(width: 16),
+                Expanded(child: filePickerBtn),
+              ],
+            )
+          : Column(
+              children: [
+                photoLibraryBtn,
+                const SizedBox(height: 12),
+                filePickerBtn,
+              ],
+            );
     }
 
     // 5. Status and Progress Display
@@ -791,18 +1155,14 @@ class _ImportScreenState extends State<ImportScreen> {
         decoration: BoxDecoration(
           color: colorScheme.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: colorScheme.primary.withOpacity(0.2),
-          ),
+          border: Border.all(color: colorScheme.primary.withValues(alpha: 0.2)),
         ),
         child: Column(
           children: [
             const SizedBox(
               width: 40,
               height: 40,
-              child: CircularProgressIndicator(
-                strokeWidth: 3.5,
-              ),
+              child: CircularProgressIndicator(strokeWidth: 3.5),
             ),
             const SizedBox(height: 16),
             if (_stage.isNotEmpty)
@@ -818,7 +1178,7 @@ class _ImportScreenState extends State<ImportScreen> {
               _status,
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: Colors.white.withOpacity(0.85),
+                color: Colors.white.withValues(alpha: 0.85),
               ),
             ),
             if (_progress != null) ...[
@@ -828,8 +1188,10 @@ class _ImportScreenState extends State<ImportScreen> {
                 child: LinearProgressIndicator(
                   value: _progress,
                   minHeight: 8,
-                  backgroundColor: colorScheme.primary.withOpacity(0.1),
-                  valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                  backgroundColor: colorScheme.primary.withValues(alpha: 0.1),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    colorScheme.primary,
+                  ),
                 ),
               ),
               const SizedBox(height: 6),
@@ -855,13 +1217,13 @@ class _ImportScreenState extends State<ImportScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
             color: _status.contains('エラー')
-                ? colorScheme.error.withOpacity(0.12)
-                : colorScheme.secondary.withOpacity(0.08),
+                ? colorScheme.error.withValues(alpha: 0.12)
+                : colorScheme.secondary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: _status.contains('エラー')
-                  ? colorScheme.error.withOpacity(0.3)
-                  : colorScheme.secondary.withOpacity(0.2),
+                  ? colorScheme.error.withValues(alpha: 0.3)
+                  : colorScheme.secondary.withValues(alpha: 0.2),
             ),
           ),
           child: Row(
@@ -882,7 +1244,7 @@ class _ImportScreenState extends State<ImportScreen> {
                   style: TextStyle(
                     color: _status.contains('エラー')
                         ? colorScheme.error
-                        : Colors.white.withOpacity(0.9),
+                        : Colors.white.withValues(alpha: 0.9),
                     fontSize: 13,
                   ),
                 ),
@@ -930,9 +1292,9 @@ class _ImportScreenState extends State<ImportScreen> {
                           children: [
                             heroHeader,
                             const SizedBox(height: 24),
-                            if (importButton != null) importButton,
-                            if (progressDisplay != null) progressDisplay,
-                            if (errorDisplay != null) errorDisplay,
+                            ?importButton,
+                            ?progressDisplay,
+                            ?errorDisplay,
                             const SizedBox(height: 24),
                             infoCard,
                           ],
@@ -940,10 +1302,7 @@ class _ImportScreenState extends State<ImportScreen> {
                       ),
                       const SizedBox(width: 24),
                       // 右カラム (設定パネル)
-                      Expanded(
-                        flex: 4,
-                        child: parametersCard,
-                      ),
+                      Expanded(flex: 4, child: parametersCard),
                     ],
                   )
                 : Column(
@@ -955,9 +1314,9 @@ class _ImportScreenState extends State<ImportScreen> {
                       SizedBox(height: isSmallMobile ? 12 : 20),
                       parametersCard,
                       SizedBox(height: isSmallMobile ? 16 : 24),
-                      if (importButton != null) importButton,
-                      if (progressDisplay != null) progressDisplay,
-                      if (errorDisplay != null) errorDisplay,
+                      ?importButton,
+                      ?progressDisplay,
+                      ?errorDisplay,
                     ],
                   ),
           ),
@@ -986,7 +1345,7 @@ class _InfoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    
+
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -1014,7 +1373,7 @@ class _InfoCard extends StatelessWidget {
                   const SizedBox(height: 6),
                   DefaultTextStyle(
                     style: theme.textTheme.bodySmall!.copyWith(
-                      color: Colors.white.withOpacity(0.65),
+                      color: Colors.white.withValues(alpha: 0.65),
                       height: 1.4,
                     ),
                     child: const Column(
@@ -1035,4 +1394,3 @@ class _InfoCard extends StatelessWidget {
     );
   }
 }
-

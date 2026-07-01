@@ -15,4 +15,3 @@ class PhotoGroup {
   final Set<String> deleteCandidateKeys;
   final bool isBurst;
 }
-

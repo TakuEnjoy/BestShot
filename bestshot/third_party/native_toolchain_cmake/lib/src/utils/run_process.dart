@@ -64,37 +64,36 @@ Future<RunProcessResult> runProcess({
     runInShell: false,
   );
 
-  final stdoutSub = process.stdout.listen(
-    (List<int> data) {
-      try {
-        final decodedData = _decodePreferUtf8(data);
-        logger?.fine(decodedData);
-        if (captureOutput) {
-          stdoutBuffer.write(decodedData);
-        }
-      } catch (e) {
-        logger?.warning('Failed to decode stdout: $e');
-        stdoutBuffer.write('Failed to decode stdout: $e');
+  final stdoutSub = process.stdout.listen((List<int> data) {
+    try {
+      final decodedData = _decodePreferUtf8(data);
+      logger?.fine(decodedData);
+      if (captureOutput) {
+        stdoutBuffer.write(decodedData);
       }
-    },
-  );
-  final stderrSub = process.stderr.listen(
-    (List<int> data) {
-      try {
-        final decodedData = _decodePreferUtf8(data);
-        logger?.severe(decodedData);
-        if (captureOutput) {
-          stderrBuffer.write(decodedData);
-        }
-      } catch (e) {
-        logger?.severe('Failed to decode stderr: $e');
-        stderrBuffer.write('Failed to decode stderr: $e');
+    } catch (e) {
+      logger?.warning('Failed to decode stdout: $e');
+      stdoutBuffer.write('Failed to decode stdout: $e');
+    }
+  });
+  final stderrSub = process.stderr.listen((List<int> data) {
+    try {
+      final decodedData = _decodePreferUtf8(data);
+      logger?.severe(decodedData);
+      if (captureOutput) {
+        stderrBuffer.write(decodedData);
       }
-    },
-  );
+    } catch (e) {
+      logger?.severe('Failed to decode stderr: $e');
+      stderrBuffer.write('Failed to decode stderr: $e');
+    }
+  });
 
-  final (exitCode, _, _) =
-      await (process.exitCode, stdoutSub.asFuture<void>(), stderrSub.asFuture<void>()).wait;
+  final (exitCode, _, _) = await (
+    process.exitCode,
+    stdoutSub.asFuture<void>(),
+    stderrSub.asFuture<void>(),
+  ).wait;
 
   await stdoutSub.cancel();
   await stderrSub.cancel();
@@ -212,7 +211,8 @@ class RunProcessResult {
   });
 
   @override
-  String toString() => '''command: $command
+  String toString() =>
+      '''command: $command
 exitCode: $exitCode
 stdout: $stdout
 stderr: $stderr''';

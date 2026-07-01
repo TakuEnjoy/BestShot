@@ -154,10 +154,10 @@ class PhotoGrouper {
       return ta == null && tb == null
           ? 0
           : ta == null
-              ? 1
-              : tb == null
-                  ? -1
-                  : ta.compareTo(tb);
+          ? 1
+          : tb == null
+          ? -1
+          : ta.compareTo(tb);
     });
 
     return groups;
