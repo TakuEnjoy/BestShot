@@ -22,6 +22,7 @@ class ImportScreen extends StatefulWidget {
 
 class _ImportScreenState extends State<ImportScreen> {
   bool _busy = false;
+  bool _cancelled = false; // 6. キャンセル状態
   String _status = '';
   double? _progress; // null => indeterminate
   String _stage = '';
@@ -66,6 +67,7 @@ class _ImportScreenState extends State<ImportScreen> {
     if (_busy) return;
     setState(() {
       _busy = true;
+      _cancelled = false;
       _stage = 'インポート';
       _status = '写真を読み込み中...';
       _progress = 0;
@@ -80,6 +82,12 @@ class _ImportScreenState extends State<ImportScreen> {
         });
       });
       if (!mounted) return;
+      
+      if (_cancelled) {
+        _handleCancelled();
+        return;
+      }
+
       if (imported.isEmpty) {
         setState(() {
           _busy = false;
@@ -106,7 +114,13 @@ class _ImportScreenState extends State<ImportScreen> {
             _status = 'バックグラウンド解析中... ($done / $total)';
           });
         },
+        isCancelled: () => _cancelled,
       );
+
+      if (_cancelled) {
+        _handleCancelled();
+        return;
+      }
 
       final byKey = {for (final a in analyzed) a.key: a};
 
@@ -163,10 +177,16 @@ class _ImportScreenState extends State<ImportScreen> {
                 _status = 'ML Kit解析中... ($done / $total)';
               });
             },
+            isCancelled: () => _cancelled,
           );
         } finally {
           await svc.close();
         }
+      }
+
+      if (_cancelled) {
+        _handleCancelled();
+        return;
       }
 
       setState(() {
@@ -192,15 +212,103 @@ class _ImportScreenState extends State<ImportScreen> {
           builder: (_) => GroupsScreen(groups: groups, detectionMode: _detectionMode),
         ),
       );
-    } catch (e) {
+    } catch (e, stack) {
       if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _status = 'エラー: $e';
-        _stage = '';
-        _progress = null;
-      });
+      if (_cancelled) {
+        _handleCancelled();
+      } else {
+        setState(() {
+          _busy = false;
+          _status = 'エラーが発生しました';
+          _stage = '';
+          _progress = null;
+        });
+        _showErrorDialog(e, stack);
+      }
     }
+  }
+
+  void _handleCancelled() {
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _status = '処理がキャンセルされました';
+      _stage = '';
+      _progress = null;
+    });
+  }
+
+  void _showErrorDialog(Object error, StackTrace stackTrace) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.error_outline, color: Colors.red),
+              SizedBox(width: 8),
+              Text('エラー詳細'),
+            ],
+          ),
+          content: Container(
+            constraints: const BoxConstraints(maxWidth: 500),
+            width: MediaQuery.of(context).size.width * 0.9,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    '処理中に以下のエラーが発生しました：',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black26,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: SelectableText(
+                      error.toString(),
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'スタックトレース：',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    constraints: const BoxConstraints(maxHeight: 200),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black26,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: SingleChildScrollView(
+                      child: SelectableText(
+                        stackTrace.toString(),
+                        style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('閉じる'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _runFolderImportAndAnalyze(bool isAndroidSAF) async {
@@ -841,6 +949,20 @@ class _ImportScreenState extends State<ImportScreen> {
                 ),
               ),
             ],
+            const SizedBox(height: 16),
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _status = 'キャンセル中...';
+                  _cancelled = true;
+                });
+              },
+              icon: const Icon(Icons.cancel_outlined, color: Colors.redAccent),
+              label: const Text(
+                'キャンセル',
+                style: TextStyle(color: Colors.redAccent),
+              ),
+            ),
           ],
         ),
       );

@@ -236,13 +236,22 @@ class PhotoGrouper {
       return true;
     }
 
-    // 3) Feature similarity (ORB): more robust than pHash for camera movement.
+    // 3) pHash Pre-filtering: if pHash distance is too large, they cannot be similar
+    final ha = a.pHashHex;
+    final hb = b.pHashHex;
+    if (ha.isNotEmpty && hb.isNotEmpty && ha != '0000000000000000' && hb != '0000000000000000') {
+      final pHashDist = _hammingDistance64Hex(ha, hb);
+      if (pHashDist > 28) {
+        return false; // Fast reject for completely different images
+      }
+    }
+
+    // 4) Feature similarity (ORB): more robust than pHash for camera movement.
     if (_orbSimilar(a, b, config)) return true;
 
-    // 4) pHash: standard fallback for visual similarity.
+    // 5) pHash: standard fallback for visual similarity.
     if (_pHashClose(a, b, config.maxPHashHammingDistance)) return true;
 
-    // Removed the "relaxed time" rule that grouped everything within 1 minute.
     return false;
   }
 
@@ -251,8 +260,9 @@ class PhotoGrouper {
     if (a.orbBytes.isEmpty || b.orbBytes.isEmpty) return false;
 
     var matches = 0;
-    final rA = a.orbRows;
-    final rB = b.orbRows;
+    // Limit processing keypoints to top 150 for massive speedup
+    final rA = a.orbRows > 150 ? 150 : a.orbRows;
+    final rB = b.orbRows > 150 ? 150 : b.orbRows;
     final bytesA = a.orbBytes;
     final bytesB = b.orbBytes;
 
@@ -280,10 +290,14 @@ class PhotoGrouper {
 
       if (bestDist <= config.orbMaxHammingDist) {
         matches++;
+        // Early exit: once we reach required minimum matches, they are similar
+        if (matches >= config.orbMinMatches) {
+          return true;
+        }
       }
     }
 
-    return matches >= config.orbMinMatches;
+    return false;
   }
 
   static bool _semanticSimilar(

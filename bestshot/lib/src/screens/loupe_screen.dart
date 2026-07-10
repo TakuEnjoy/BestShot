@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:io';
 import 'dart:ui';
 
@@ -27,8 +28,8 @@ class LoupeScreen extends StatefulWidget {
   final void Function(String key, bool val)? onToggleDelete;
   final void Function(String key)? onSetBest;
 
-  // Cache focus mask bytes for the duration of the app session
-  static final Map<String, Uint8List> _sessionMaskCache = {};
+  // Cache focus mask bytes for the duration of the app session with LRU limit of 50
+  static final FocusMaskCache _sessionMaskCache = FocusMaskCache(maxEntries: 50);
 
   @override
   State<LoupeScreen> createState() => _LoupeScreenState();
@@ -81,6 +82,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
 
   void _onInteractionUpdate(int sourceIndex) {
     if (!_syncEnabled) return;
+    if (_initialMatrices.isEmpty || sourceIndex >= _initialMatrices.length) return;
 
     final currentMatrix = _controllers[sourceIndex].value;
     final startMatrix = _initialMatrices[sourceIndex];
@@ -533,8 +535,12 @@ class _LoupeScreenState extends State<LoupeScreen> {
   Widget _buildPane(int index) {
     if (index >= widget.items.length) return const SizedBox.shrink();
     final key = widget.items[index].key;
+    final bytes = _loadedBytes[key];
+    if (bytes == null) {
+      return const Center(child: Text('画像読み込み失敗'));
+    }
     return _ZoomPane(
-      bytes: _loadedBytes[key]!,
+      bytes: bytes,
       maskPng: _focusMaskPngByKey[key],
       showFocusMask: _showFocusMask,
       maskColor: _focusMaskColor,
@@ -1051,4 +1057,29 @@ class _HistogramPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_HistogramPainter old) => old.data != data || old.barColor != barColor;
+}
+
+class FocusMaskCache {
+  final int maxEntries;
+  final LinkedHashMap<String, Uint8List> _cache = LinkedHashMap<String, Uint8List>();
+
+  FocusMaskCache({this.maxEntries = 50});
+
+  bool containsKey(String key) => _cache.containsKey(key);
+
+  Uint8List? operator [](String key) {
+    if (!_cache.containsKey(key)) return null;
+    final val = _cache.remove(key)!;
+    _cache[key] = val; // Move to end (most recently used)
+    return val;
+  }
+
+  void operator []=(String key, Uint8List value) {
+    if (_cache.containsKey(key)) {
+      _cache.remove(key);
+    } else if (_cache.length >= maxEntries) {
+      _cache.remove(_cache.keys.first); // Remove oldest
+    }
+    _cache[key] = value;
+  }
 }

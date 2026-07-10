@@ -53,10 +53,21 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
     mat = cv.imdecode(bytes, cv.IMREAD_COLOR);
     if (mat.isEmpty) return null;
 
+    // 8. マスク計算解像度の制限 (最大1080px以下にリサイズして高速化・メモリ節約)
+    const maxMaskEdge = 1080;
+    if (mat.cols > maxMaskEdge || mat.rows > maxMaskEdge) {
+      final scale = maxMaskEdge / (mat.cols > mat.rows ? mat.cols : mat.rows);
+      final resizedMat = cv.resize(mat, (
+        (mat.cols * scale).round(),
+        (mat.rows * scale).round(),
+      ));
+      mat.dispose();
+      mat = resizedMat;
+    }
+
     final origW = mat.cols;
     final origH = mat.rows;
     
-    // Performance improvement: Run on original full resolution to capture pixel-level focus.
     work = mat.clone();
 
     // Scale parameter based on the reference resolution (960px max edge).

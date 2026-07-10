@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -29,13 +30,11 @@ class GroupsScreen extends StatefulWidget {
 class _GroupsScreenState extends State<GroupsScreen> {
   late final Map<String, PhotoEntry> _entryByKey;
   late final Set<String> _selectedForDelete;
-  bool _deleting = false;
   final List<String> _loupeSelection = [];
 
   // 仕分け用の状態変数
   final Map<String, String> _selectedSortFolders = {};
   final List<String> _customFolders = [];
-  bool _sorting = false;
 
   // バックグラウンド処理用の状態
   final Set<String> _processingKeys = {};
@@ -85,10 +84,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
   Future<void> _exportBestShots() async {
     final selectedDirectory = await FilePicker.platform.getDirectoryPath();
     if (selectedDirectory == null) return; // Cancelled
-
-    setState(() {
-      _deleting = true;
-    });
 
     if (!mounted) return;
     showDialog(
@@ -160,11 +155,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         );
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _deleting = false;
-        });
-      }
+      // Nothing
     }
   }
 
@@ -179,7 +170,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => DeleteReviewScreen(
-          items: targets.map((k) => _entryByKey[k]!).toList(),
+          items: targets.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList(),
           onRemoveFromDelete: (key) {
             setState(() => _selectedForDelete.remove(key));
           },
@@ -814,6 +805,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         );
       },
     );
+    textController.dispose();
 
     if (newFolder != null && newFolder.isNotEmpty) {
       final RegExp invalidChars = RegExp(r'[<>:"/\\|?*]');
@@ -2624,10 +2616,7 @@ class _PhotoTileState extends State<_PhotoTile> {
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: BackdropFilter(
-                          filter: ColorFilter.mode(
-                            Colors.black.withOpacity(0.4),
-                            BlendMode.srcOver,
-                          ),
+                          filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 6,

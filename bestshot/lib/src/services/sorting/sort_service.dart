@@ -118,8 +118,11 @@ class SortService {
 
         // (A) コピーの実行
         final iosSink = tmpFile.openWrite();
-        await iosSink.addStream(srcFile.openRead());
-        await iosSink.close();
+        try {
+          await iosSink.addStream(srcFile.openRead());
+        } finally {
+          await iosSink.close();
+        }
 
         // (B) ベリファイ（ファイルサイズの検証）
         final srcLen = await srcFile.length();
@@ -156,6 +159,9 @@ class SortService {
         if (remainingIndex < targets.length) {
           failed.addAll(targets.sublist(remainingIndex).map((x) => x.key.filePath!));
         }
+        
+        done = total;
+        onProgress?.call(done, total);
         break;
       }
     }

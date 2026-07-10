@@ -19,7 +19,11 @@ class AnalyzerIsolate {
     DetectionMode mode = DetectionMode.standard,
     RootIsolateToken? rootIsolateToken,
     void Function(int done, int total)? onProgress,
+    bool Function()? isCancelled,
+    int? overrideWorkerCount,
   }) async {
+    if (inputs.isEmpty) return [];
+
     if (mode == DetectionMode.portrait && Platform.isWindows) {
       final support = await getApplicationSupportDirectory();
       final cascadeDir = Directory(p.join(support.path, 'cascades'));
@@ -36,115 +40,165 @@ class AnalyzerIsolate {
       );
     }
 
+    final isMobile = Platform.isAndroid || Platform.isIOS;
+    final processorCount = Platform.numberOfProcessors;
+    final maxWorkers = isMobile ? 3 : 6;
+    final calculatedWorkerCount = (processorCount ~/ 2).clamp(1, maxWorkers);
+    final workerCount = overrideWorkerCount ?? calculatedWorkerCount;
+    final actualWorkerCount = workerCount > inputs.length ? inputs.length : workerCount;
+
     final receivePort = ReceivePort();
     final errorPort = ReceivePort();
-    final exitPort = ReceivePort();
 
-    final isolate = await Isolate.spawn<_AnalyzerMessage>(
-      _entry,
-      _AnalyzerMessage(
-        sendPort: receivePort.sendPort,
-        inputs: inputs.map((i) {
-          if (i.displayBytes != null && i.filePath == null) {
-            return _TransferableInput(
-              key: i.key,
-              data: TransferableTypedData.fromList([i.displayBytes!]),
-            );
-          } else {
-            return _TransferableInput(key: i.key, filePath: i.filePath);
-          }
-        }).toList(),
-        mode: mode,
-        rootIsolateToken: rootIsolateToken,
-      ),
-      onError: errorPort.sendPort,
-      onExit: exitPort.sendPort,
-    );
-
+    final List<Isolate> isolates = [];
     final results = <AnalyzeOutput>[];
     final completer = Completer<List<AnalyzeOutput>>();
+    
+    int nextInputIndex = 0;
+    int doneCount = 0;
+    final workerSendPorts = <int, SendPort>{};
+    var finishedWorkers = 0;
 
     late StreamSubscription sub;
     late StreamSubscription errSub;
-    late StreamSubscription exitSub;
+    Timer? cancelTimer;
+
+    void assignNextTask(int workerId, SendPort workerSendPort) {
+      if (nextInputIndex < inputs.length) {
+        final input = inputs[nextInputIndex++];
+        final transferable = (input.displayBytes != null && input.filePath == null)
+            ? _TransferableInput(key: input.key, data: TransferableTypedData.fromList([input.displayBytes!]))
+            : _TransferableInput(key: input.key, filePath: input.filePath);
+            
+        workerSendPort.send({'type': 'task', 'input': transferable});
+      } else {
+        workerSendPort.send({'type': 'shutdown'});
+      }
+    }
+
+    try {
+      for (var id = 0; id < actualWorkerCount; id++) {
+        final isolate = await Isolate.spawn<_AnalyzerInitMessage>(
+          _entry,
+          _AnalyzerInitMessage(
+            mainSendPort: receivePort.sendPort,
+            workerId: id,
+            mode: mode,
+            rootIsolateToken: rootIsolateToken,
+          ),
+          onError: errorPort.sendPort,
+        );
+        isolates.add(isolate);
+      }
+    } catch (e) {
+      for (final iso in isolates) {
+        iso.kill(priority: Isolate.immediate);
+      }
+      rethrow;
+    }
 
     sub = receivePort.listen((message) {
-      if (message is Map && message['type'] == 'result') {
-        results.add(
-          AnalyzeOutput(
-            key: message['key'] as String,
-            pHashHex: message['pHashHex'] as String,
-            sharpness: (message['sharpness'] as num).toDouble(),
-            exposureScore: (message['exposureScore'] as num).toDouble(),
-            orbRows: (message['orbRows'] as num).toInt(),
-            orbCols: (message['orbCols'] as num).toInt(),
-            orbBytes: message['orbBytes'] as Uint8List,
-            histogram: message['histogram'] as Uint8List,
-            hueHistogram: message['hueHistogram'] as Float32List?,
-            hasFace: (message['hasFace'] as bool?) ?? false,
-            faceX: (message['faceX'] as num?)?.toInt() ?? 0,
-            faceY: (message['faceY'] as num?)?.toInt() ?? 0,
-            faceW: (message['faceW'] as num?)?.toInt() ?? 0,
-            faceH: (message['faceH'] as num?)?.toInt() ?? 0,
-            faceSharpness: (message['faceSharpness'] as num?)?.toDouble() ?? 0,
-            eyeOpenAvg: (message['eyeOpenAvg'] as num?)?.toDouble() ?? -1,
-            eyesClosed: (message['eyesClosed'] as bool?) ?? false,
-            bothEyesDetected: (message['bothEyesDetected'] as bool?) ?? false,
-            eyeSharpness: (message['eyeSharpness'] as num?)?.toDouble() ?? -1,
-            debugGridSharps: (message['debugGridSharps'] as List?)?.map((e) => (e as num).toDouble()).toList(),
-          ),
-        );
+      if (isCancelled?.call() == true) {
+        if (!completer.isCompleted) completer.completeError(Exception('キャンセルされました'));
+        return;
       }
-      if (message is Map && message['type'] == 'progress') {
-        final done = (message['done'] as num).toInt();
-        final total = (message['total'] as num).toInt();
-        onProgress?.call(done, total);
-      }
-      if (message is Map && message['type'] == 'done') {
-        completer.complete(results);
+      if (message is Map) {
+        final type = message['type'];
+        final workerId = message['workerId'] as int;
+
+        if (type == 'init') {
+          final sp = message['sendPort'] as SendPort;
+          workerSendPorts[workerId] = sp;
+          assignNextTask(workerId, sp);
+        } else if (type == 'result') {
+          results.add(
+            AnalyzeOutput(
+              key: message['key'] as String,
+              pHashHex: message['pHashHex'] as String,
+              sharpness: (message['sharpness'] as num).toDouble(),
+              exposureScore: (message['exposureScore'] as num).toDouble(),
+              orbRows: (message['orbRows'] as num).toInt(),
+              orbCols: (message['orbCols'] as num).toInt(),
+              orbBytes: message['orbBytes'] as Uint8List,
+              histogram: message['histogram'] as Uint8List,
+              hueHistogram: message['hueHistogram'] as Float32List?,
+              hasFace: (message['hasFace'] as bool?) ?? false,
+              faceX: (message['faceX'] as num?)?.toInt() ?? 0,
+              faceY: (message['faceY'] as num?)?.toInt() ?? 0,
+              faceW: (message['faceW'] as num?)?.toInt() ?? 0,
+              faceH: (message['faceH'] as num?)?.toInt() ?? 0,
+              faceSharpness: (message['faceSharpness'] as num?)?.toDouble() ?? 0,
+              eyeOpenAvg: (message['eyeOpenAvg'] as num?)?.toDouble() ?? -1,
+              eyesClosed: (message['eyesClosed'] as bool?) ?? false,
+              bothEyesDetected: (message['bothEyesDetected'] as bool?) ?? false,
+              eyeSharpness: (message['eyeSharpness'] as num?)?.toDouble() ?? -1,
+              debugGridSharps: (message['debugGridSharps'] as List?)?.map((e) => (e as num).toDouble()).toList(),
+            ),
+          );
+          doneCount++;
+          onProgress?.call(doneCount, inputs.length);
+          
+          if (workerSendPorts.containsKey(workerId)) {
+            assignNextTask(workerId, workerSendPorts[workerId]!);
+          }
+        } else if (type == 'done') {
+          finishedWorkers++;
+          if (finishedWorkers >= actualWorkerCount) {
+            if (!completer.isCompleted) completer.complete(results);
+          }
+        }
       }
     });
 
     errSub = errorPort.listen((e) {
-      if (!completer.isCompleted) {
-        completer.completeError(e);
-      }
+      if (isCancelled?.call() == true) return;
+      if (!completer.isCompleted) completer.completeError(e);
     });
 
-    exitSub = exitPort.listen((_) {
-      if (!completer.isCompleted) {
-        completer.complete(results);
-      }
-    });
+    if (isCancelled != null) {
+      cancelTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+        if (isCancelled()) {
+          timer.cancel();
+          if (!completer.isCompleted) completer.completeError(Exception('キャンセルされました'));
+        }
+      });
+    }
 
     try {
       return await completer.future;
     } finally {
+      cancelTimer?.cancel();
       await sub.cancel();
       await errSub.cancel();
-      await exitSub.cancel();
       receivePort.close();
       errorPort.close();
-      exitPort.close();
-      isolate.kill(priority: Isolate.immediate);
+      for (final iso in isolates) {
+        iso.kill(priority: Isolate.immediate);
+      }
     }
   }
 
-  static void _entry(_AnalyzerMessage message) {
+  static void _entry(_AnalyzerInitMessage message) {
     // Isolate.spawn の entrypoint は「void Function(T)」である必要があるため、
     // async を直接渡さずに内部の async 処理へ委譲する。
-    _entryAsync(message);
+    _entryAsync(message).catchError((e, s) {
+      print('Analyzer _entryAsync error: $e\\n$s');
+    });
   }
 
-  static Future<void> _entryAsync(_AnalyzerMessage message) async {
+  static Future<void> _entryAsync(_AnalyzerInitMessage message) async {
     if (message.rootIsolateToken != null) {
       BackgroundIsolateBinaryMessenger.ensureInitialized(
         message.rootIsolateToken!,
       );
     }
 
-    final total = message.inputs.length;
-    var done = 0;
+    final workerReceivePort = ReceivePort();
+    message.mainSendPort.send({
+      'type': 'init',
+      'workerId': message.workerId,
+      'sendPort': workerReceivePort.sendPort,
+    });
 
     final isAndroid = Platform.isAndroid;
     final isWindows = Platform.isWindows;
@@ -175,53 +229,62 @@ class AnalyzerIsolate {
     }
 
     try {
-      for (final input in message.inputs) {
-        final bytes = input.data?.materialize().asUint8List();
-        final out = await _analyzeOne(
-          input.key,
-          bytes,
-          filePath: input.filePath,
-          mode: message.mode,
-          faceDetector: faceDetector,
-          tmpDir: tmpDir,
-          faceCascade: faceCascade,
-          eyeCascade: eyeCascade,
-        );
-        message.sendPort.send({
-          'type': 'result',
-          'key': out.key,
-          'pHashHex': out.pHashHex,
-          'sharpness': out.sharpness,
-          'exposureScore': out.exposureScore,
-          'orbRows': out.orbRows,
-          'orbCols': out.orbCols,
-          'orbBytes': out.orbBytes,
-          'histogram': out.histogram,
-          'hueHistogram': out.hueHistogram,
-          'hasFace': out.hasFace,
-          'faceX': out.faceX,
-          'faceY': out.faceY,
-          'faceW': out.faceW,
-          'faceH': out.faceH,
-          'faceSharpness': out.faceSharpness,
-          'eyeOpenAvg': out.eyeOpenAvg,
-          'eyesClosed': out.eyesClosed,
-          'bothEyesDetected': out.bothEyesDetected,
-          'eyeSharpness': out.eyeSharpness,
-          'debugGridSharps': out.debugGridSharps,
-        });
-        done++;
-        message.sendPort.send({
-          'type': 'progress',
-          'done': done,
-          'total': total,
-        });
+      await for (final msg in workerReceivePort) {
+        if (msg is Map) {
+          final type = msg['type'];
+          if (type == 'shutdown') {
+            break;
+          } else if (type == 'task') {
+            final input = msg['input'] as _TransferableInput;
+            final bytes = input.data?.materialize().asUint8List();
+            final out = await _analyzeOne(
+              input.key,
+              bytes,
+              filePath: input.filePath,
+              mode: message.mode,
+              faceDetector: faceDetector,
+              tmpDir: tmpDir,
+              faceCascade: faceCascade,
+              eyeCascade: eyeCascade,
+            );
+            message.mainSendPort.send({
+              'type': 'result',
+              'workerId': message.workerId,
+              'key': out.key,
+              'pHashHex': out.pHashHex,
+              'sharpness': out.sharpness,
+              'exposureScore': out.exposureScore,
+              'orbRows': out.orbRows,
+              'orbCols': out.orbCols,
+              'orbBytes': out.orbBytes,
+              'histogram': out.histogram,
+              'hueHistogram': out.hueHistogram,
+              'hasFace': out.hasFace,
+              'faceX': out.faceX,
+              'faceY': out.faceY,
+              'faceW': out.faceW,
+              'faceH': out.faceH,
+              'faceSharpness': out.faceSharpness,
+              'eyeOpenAvg': out.eyeOpenAvg,
+              'eyesClosed': out.eyesClosed,
+              'bothEyesDetected': out.bothEyesDetected,
+              'eyeSharpness': out.eyeSharpness,
+              'debugGridSharps': out.debugGridSharps,
+            });
+          }
+        }
       }
     } finally {
       await faceDetector?.close();
+      faceCascade?.dispose();
+      eyeCascade?.dispose();
+      workerReceivePort.close();
     }
 
-    message.sendPort.send({'type': 'done'});
+    message.mainSendPort.send({
+      'type': 'done',
+      'workerId': message.workerId,
+    });
   }
 
   static AnalyzeOutput _emptyOutput(String key) {
@@ -261,7 +324,17 @@ class AnalyzerIsolate {
   }) async {
     Uint8List rawBytes;
     if (filePath != null) {
-      rawBytes = await File(filePath).readAsBytes();
+      final fileBytes = await File(filePath).readAsBytes();
+      final ext = p.extension(filePath).toLowerCase();
+      final rawExts = <String>{
+        '.dng', '.arw', '.nef', '.cr2', '.cr3', '.raf', '.rw2', '.orf',
+      };
+      if (rawExts.contains(ext)) {
+        final jpegBytes = _extractEmbeddedJpeg(fileBytes);
+        rawBytes = jpegBytes ?? fileBytes;
+      } else {
+        rawBytes = fileBytes;
+      }
     } else {
       rawBytes = displayBytes ?? Uint8List(0);
     }
@@ -278,6 +351,18 @@ class AnalyzerIsolate {
       mat = cv.imdecode(rawBytes, cv.IMREAD_COLOR);
       if (mat.isEmpty) {
         return _emptyOutput(key);
+      }
+
+      // 8. 解析解像度の制限 (最大1920px以下にリサイズしてメモリとCPU負荷を削減)
+      const maxAnalysisEdge = 1920;
+      if (mat.cols > maxAnalysisEdge || mat.rows > maxAnalysisEdge) {
+        final scale = maxAnalysisEdge / (mat.cols > mat.rows ? mat.cols : mat.rows);
+        final resizedMat = cv.resize(mat, (
+          (mat.cols * scale).round(),
+          (mat.rows * scale).round(),
+        ));
+        mat.dispose();
+        mat = resizedMat;
       }
 
       // Resize for analysis (speed & accuracy)
@@ -322,7 +407,7 @@ class AnalyzerIsolate {
       if (mode == DetectionMode.portrait) {
         if (Platform.isAndroid && faceDetector != null && tmpDir != null) {
           final r = await _portraitAnalyzeAndroid(
-            rawBytes, // Face detection on original for accuracy
+            rawBytes, // Use extracted JPEG for RAW files
             faceDetector: faceDetector,
             tmpDir: tmpDir,
           );
@@ -340,7 +425,7 @@ class AnalyzerIsolate {
             faceCascade != null &&
             eyeCascade != null) {
           final r = _portraitAnalyzeWindowsFromMat(
-            mat, // Use original for Windows detection accuracy
+            mat, // Resized to max 1920px
             faceCascade: faceCascade,
             eyeCascade: eyeCascade,
           );
@@ -568,8 +653,12 @@ class AnalyzerIsolate {
       eq = cv.equalizeHist(gray);
 
       final orb = cv.ORB.create(nFeatures: 600, scaleFactor: 1.2, nLevels: 8);
-      final result = orb.detectAndCompute(eq, cv.Mat.empty());
+      final emptyMat = cv.Mat.empty();
+      final result = orb.detectAndCompute(eq, emptyMat);
       desc = result.$2;
+      orb.dispose();
+      emptyMat.dispose();
+      result.$1.dispose();
       if (desc.isEmpty) return _OrbDesc.empty();
       final rows = desc.rows > 256 ? 256 : desc.rows;
       final cols = desc.cols;
@@ -1144,16 +1233,16 @@ class AnalyzerIsolate {
   }
 }
 
-class _AnalyzerMessage {
-  _AnalyzerMessage({
-    required this.sendPort,
-    required this.inputs,
+class _AnalyzerInitMessage {
+  _AnalyzerInitMessage({
+    required this.mainSendPort,
+    required this.workerId,
     required this.mode,
     required this.rootIsolateToken,
   });
 
-  final SendPort sendPort;
-  final List<_TransferableInput> inputs;
+  final SendPort mainSendPort;
+  final int workerId;
   final DetectionMode mode;
   final RootIsolateToken? rootIsolateToken;
 }
@@ -1210,4 +1299,37 @@ class _PortraitResult {
   final bool eyesClosed;
   final bool bothEyesDetected;
   final double eyeSharpness;
+}
+
+Uint8List? _extractEmbeddedJpeg(Uint8List bytes) {
+  try {
+    int bestStart = -1;
+    int bestEnd = -1;
+    int maxLen = 0;
+
+    for (int i = 0; i < bytes.length - 1; i++) {
+      if (bytes[i] == 0xFF && bytes[i + 1] == 0xD8) {
+        int start = i;
+        for (int j = i + 2; j < bytes.length - 1; j++) {
+          if (bytes[j] == 0xFF && bytes[j + 1] == 0xD9) {
+            int end = j + 2;
+            int len = end - start;
+            if (len > maxLen) {
+              maxLen = len;
+              bestStart = start;
+              bestEnd = end;
+            }
+            i = j;
+            break;
+          }
+          if (j - start > 50 * 1024 * 1024) break;
+        }
+      }
+    }
+
+    if (bestStart >= 0 && bestEnd > bestStart) {
+      return Uint8List.sublistView(bytes, bestStart, bestEnd);
+    }
+  } catch (_) {}
+  return null;
 }

@@ -1,11 +1,8 @@
 import 'dart:io';
-import 'dart:isolate';
-import 'dart:typed_data';
 
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 import 'package:image/image.dart' as img;
-import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -43,6 +40,7 @@ class MlKitSemanticService {
     List<PhotoEntry> entries, {
     void Function(int done, int total)? onProgress,
     int maxEdge = 640,
+    bool Function()? isCancelled,
   }) async {
     if (!(Platform.isAndroid || Platform.isIOS)) {
       return entries;
@@ -52,6 +50,9 @@ class MlKitSemanticService {
     final out = <PhotoEntry>[];
     var done = 0;
     for (final e in entries) {
+      if (isCancelled?.call() == true) {
+        break;
+      }
       final enriched = await _enrichOne(e, tmp, maxEdge: maxEdge);
       out.add(enriched);
       done++;
@@ -66,67 +67,64 @@ class MlKitSemanticService {
     required int maxEdge,
   }) async {
     try {
-      final resizedBytes = await _resizeForMlKit(
-        e.displayBytes,
-        maxEdge: maxEdge,
-      );
+      final bytes = e.displayBytes;
       final fp = p.join(tmp.path, 'bestshot_${e.key.hashCode}.jpg');
-      await File(fp).writeAsBytes(resizedBytes, flush: true);
+      await File(fp).writeAsBytes(bytes, flush: true);
       final input = InputImage.fromFilePath(fp);
 
       final objects = await _objectDetector.processImage(input);
-      final semantic = _toSemanticObjects(objects, resizedBytes);
-
       final faces = await _faceDetector.processImage(input);
       final faceScore = _faceQualityScore(faces);
 
-      var updatedSharpness = e.sharpness;
-      if (objects.isNotEmpty) {
-        DetectedObject? mainObj;
-        double maxArea = 0;
-        for (final o in objects) {
-          final area = o.boundingBox.width * o.boundingBox.height;
-          if (area > maxArea) {
-            maxArea = area.toDouble();
-            mainObj = o;
-          }
+      if (objects.isEmpty) {
+        return e.copyWith(
+          semanticObjects: const [],
+          faceQualityScore: faceScore,
+        );
+      }
+
+      // Decode once to get the dimensions of displayBytes
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) {
+        return e.copyWith(
+          semanticObjects: const [],
+          faceQualityScore: faceScore,
+        );
+      }
+      final w = decoded.width.toDouble();
+      final h = decoded.height.toDouble();
+
+      final semantic = <SemanticObject>[];
+      DetectedObject? mainObj;
+      double maxArea = 0;
+
+      for (final o in objects) {
+        final label = o.labels.isNotEmpty ? o.labels.first.text : 'Object';
+        final bb = o.boundingBox;
+        final x = (bb.left / w).clamp(0.0, 1.0);
+        final y = (bb.top / h).clamp(0.0, 1.0);
+        final ww = (bb.width / w).clamp(0.0, 1.0);
+        final hh = (bb.height / h).clamp(0.0, 1.0);
+        semantic.add(SemanticObject(label: label, x: x, y: y, w: ww, h: hh));
+
+        final area = bb.width * bb.height;
+        if (area > maxArea) {
+          maxArea = area.toDouble();
+          mainObj = o;
         }
+      }
 
-        if (mainObj != null) {
-          final mlImage = img.decodeImage(resizedBytes);
-          if (mlImage != null) {
-            final mlW = mlImage.width;
-            final mlH = mlImage.height;
+      var updatedSharpness = e.sharpness;
+      if (mainObj != null && e.debugGridSharps != null && e.debugGridSharps!.isNotEmpty) {
+        final bb = mainObj.boundingBox;
+        final ox = (bb.left / w).clamp(0.0, 1.0);
+        final oy = (bb.top / h).clamp(0.0, 1.0);
+        final ow = (bb.width / w).clamp(0.0, 1.0);
+        final oh = (bb.height / h).clamp(0.0, 1.0);
 
-            cv.Mat? mat;
-            try {
-              if (e.filePath != null && await File(e.filePath!).exists()) {
-                mat = cv.imread(e.filePath!);
-              } else {
-                mat = cv.imdecode(e.displayBytes, cv.IMREAD_COLOR);
-              }
-
-              if (!mat.isEmpty && mlW > 0 && mlH > 0) {
-                final origW = mat.cols;
-                final origH = mat.rows;
-                final bb = mainObj.boundingBox;
-
-                final rx = (bb.left / mlW * origW).round().clamp(0, origW - 1);
-                final ry = (bb.top / mlH * origH).round().clamp(0, origH - 1);
-                final rw = (bb.width / mlW * origW).round().clamp(1, origW - rx);
-                final rh = (bb.height / mlH * origH).round().clamp(1, origH - ry);
-
-                final objSharpness = _calcLaplacianVarianceInRoi(mat, cv.Rect(rx, ry, rw, rh));
-                if (objSharpness > 0) {
-                  updatedSharpness = objSharpness;
-                }
-              }
-            } catch (_) {
-              // Keep original sharpness
-            } finally {
-              mat?.dispose();
-            }
-          }
+        final objSharpness = _estimateObjectSharpness(e.debugGridSharps!, ox, oy, ow, oh);
+        if (objSharpness > 0) {
+          updatedSharpness = objSharpness;
         }
       }
 
@@ -137,50 +135,61 @@ class MlKitSemanticService {
       );
     } catch (_) {
       return e;
+    } finally {
+      // Clean up the temp file
+      try {
+        final fp = p.join(tmp.path, 'bestshot_${e.key.hashCode}.jpg');
+        final f = File(fp);
+        if (await f.exists()) {
+          await f.delete();
+        }
+      } catch (_) {}
     }
   }
 
-  static Future<Uint8List> _resizeForMlKit(
-    Uint8List bytes, {
-    required int maxEdge,
-  }) async {
-    return Isolate.run(() {
-      final decoded = img.decodeImage(bytes);
-      if (decoded == null) return bytes;
-      final upright = img.bakeOrientation(decoded);
-      final w = upright.width;
-      final h = upright.height;
-      if (w <= maxEdge && h <= maxEdge) return bytes;
-      final resized = img.copyResize(
-        upright,
-        width: w >= h ? maxEdge : null,
-        height: h > w ? maxEdge : null,
-      );
-      return Uint8List.fromList(img.encodeJpg(resized, quality: 90));
-    });
-  }
-
-  static List<SemanticObject> _toSemanticObjects(
-    List<DetectedObject> objects,
-    Uint8List jpgBytes,
+  static double _estimateObjectSharpness(
+    List<double> gridSharps,
+    double ox,
+    double oy,
+    double ow,
+    double oh,
   ) {
-    final decoded = img.decodeImage(jpgBytes);
-    if (decoded == null) return const [];
-    final w = decoded.width.toDouble();
-    final h = decoded.height.toDouble();
-    if (w <= 0 || h <= 0) return const [];
+    if (gridSharps.length < 16) return 0.0;
+    double totalWeight = 0.0;
+    double weightedSharpness = 0.0;
 
-    final out = <SemanticObject>[];
-    for (final o in objects) {
-      final label = o.labels.isNotEmpty ? o.labels.first.text : 'Object';
-      final bb = o.boundingBox;
-      final x = (bb.left / w).clamp(0.0, 1.0);
-      final y = (bb.top / h).clamp(0.0, 1.0);
-      final ww = (bb.width / w).clamp(0.0, 1.0);
-      final hh = (bb.height / h).clamp(0.0, 1.0);
-      out.add(SemanticObject(label: label, x: x, y: y, w: ww, h: hh));
+    for (int r = 0; r < 4; r++) {
+      for (int c = 0; c < 4; c++) {
+        double cx1 = c * 0.25;
+        double cy1 = r * 0.25;
+        double cx2 = cx1 + 0.25;
+        double cy2 = cy1 + 0.25;
+
+        double ox1 = ox;
+        double oy1 = oy;
+        double ox2 = ox + ow;
+        double oy2 = oy + oh;
+
+        double ix1 = cx1 > ox1 ? cx1 : ox1;
+        double iy1 = cy1 > oy1 ? cy1 : oy1;
+        double ix2 = cx2 < ox2 ? cx2 : ox2;
+        double iy2 = cy2 < oy2 ? cy2 : oy2;
+
+        double iw = ix2 - ix1;
+        double ih = iy2 - iy1;
+
+        if (iw > 0 && ih > 0) {
+          double overlap = iw * ih;
+          int idx = r * 4 + c;
+          weightedSharpness += gridSharps[idx] * overlap;
+          totalWeight += overlap;
+        }
+      }
     }
-    return out;
+    if (totalWeight > 0) {
+      return weightedSharpness / totalWeight;
+    }
+    return 0.0;
   }
 
   static double _faceQualityScore(List<Face> faces) {
@@ -198,37 +207,5 @@ class MlKitSemanticService {
       if (avg > best) best = avg;
     }
     return best.clamp(0.0, 1.0);
-  }
-
-  static double _calcLaplacianVarianceInRoi(cv.Mat bgr, cv.Rect roi) {
-    cv.Mat? sub;
-    cv.Mat? gray;
-    cv.Mat? lap;
-    try {
-      if (bgr.isEmpty) return 0;
-      final x1 = roi.x.clamp(0, bgr.cols - 1);
-      final y1 = roi.y.clamp(0, bgr.rows - 1);
-      final x2 = (roi.x + roi.width).clamp(0, bgr.cols);
-      final y2 = (roi.y + roi.height).clamp(0, bgr.rows);
-      final w = x2 - x1;
-      final h = y2 - y1;
-
-      if (w <= 0 || h <= 0) return 0;
-      final safe = cv.Rect(x1, y1, w, h);
-      sub = bgr.region(safe);
-      if (sub.isEmpty) return 0;
-
-      gray = cv.cvtColor(sub, cv.COLOR_BGR2GRAY);
-      lap = cv.laplacian(gray, cv.MatType.CV_64F);
-      final (_, stddev) = cv.meanStdDev(lap);
-      final v = stddev.val1 * stddev.val1;
-      return v.isFinite ? v : 0;
-    } catch (_) {
-      return 0;
-    } finally {
-      sub?.dispose();
-      gray?.dispose();
-      lap?.dispose();
-    }
   }
 }

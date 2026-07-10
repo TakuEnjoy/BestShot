@@ -31,21 +31,15 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
   photo_manager: ^3.9.0
   image: ^3.3.0
   image_compare: ^1.1.2
   opencv_dart: ^2.2.1+4
   file_picker:
     path: third_party/file_picker
-  permission_handler: ^11.4.0
   exif: ^3.3.0
   google_mlkit_object_detection: ^0.14.0
   google_mlkit_face_detection: ^0.12.0
-  collection: ^1.19.1
-  async: ^2.13.0
   path_provider: ^2.1.5
   path: ^1.9.1
   win32: ^6.0.0
@@ -98,7 +92,7 @@ hooks:
         - objdetect
         - features2d
       android:
-        android_home: "C:\\Android\\Sdk"
+        android_home: "C:\\android-sdk"
         ndk_version: "28.2.13676358"
 
   # To add custom fonts to your application, add a fonts section here,

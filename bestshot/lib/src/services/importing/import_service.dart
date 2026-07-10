@@ -71,7 +71,7 @@ class ImportService {
       '.dng', '.arw', '.nef', '.cr2', '.cr3', '.raf', '.rw2', '.orf',
     };
 
-    final filesByDate = <DateTime, List<File>>{};
+    final List<File> targetFiles = [];
 
     await for (final entity in directory.list(
       recursive: true,
@@ -80,20 +80,60 @@ class ImportService {
       if (entity is! File) continue;
       final ext = p.extension(entity.path).toLowerCase();
       if (!exts.contains(ext)) continue;
+      targetFiles.add(entity);
+    }
 
-      try {
-        final stat = await entity.stat();
-        final modDate = stat.modified;
-        final dateOnly = DateTime(modDate.year, modDate.month, modDate.day);
+    if (targetFiles.isEmpty) {
+      return FolderScanResult(
+        folderPath: dir,
+        filesByDate: {},
+      );
+    }
 
-        if (!filesByDate.containsKey(dateOnly)) {
-          filesByDate[dateOnly] = [];
+    final filesByDate = <DateTime, List<File>>{};
+    
+    // 多重度制限（最大16並行）でEXIF/更新日時をスキャン
+    var currentIndex = 0;
+    
+    Future<void> processNext() async {
+      while (true) {
+        final localIndex = currentIndex++;
+        if (localIndex >= targetFiles.length) {
+          break;
         }
-        filesByDate[dateOnly]!.add(entity);
-      } catch (_) {
-        // Skip files that fail to stat
+        final file = targetFiles[localIndex];
+        try {
+          // EXIFから撮影日を優先取得 (先頭256KBのみロード)
+          final summary = await _readExifSummary(file);
+          final capturedAt = summary?.capturedAt;
+          
+          DateTime date;
+          if (capturedAt != null) {
+            date = DateTime(capturedAt.year, capturedAt.month, capturedAt.day);
+          } else {
+            // EXIFが無い、またはパース失敗時は modified (更新日時) をフォールバックに使用
+            final stat = await file.stat();
+            final modDate = stat.modified;
+            date = DateTime(modDate.year, modDate.month, modDate.day);
+          }
+          
+          // Dartのイベントループ上、Mapへの操作はスレッド安全
+          filesByDate.putIfAbsent(date, () => []).add(file);
+        } catch (_) {
+          // 完全失敗時は modified のみを試みる
+          try {
+            final stat = await file.stat();
+            final modDate = stat.modified;
+            final date = DateTime(modDate.year, modDate.month, modDate.day);
+            filesByDate.putIfAbsent(date, () => []).add(file);
+          } catch (_) {}
+        }
       }
     }
+
+    final workerCount = targetFiles.length < 16 ? targetFiles.length : 16;
+    final workers = List.generate(workerCount, (_) => processNext());
+    await Future.wait(workers);
 
     return FolderScanResult(
       folderPath: dir,
@@ -105,6 +145,7 @@ class ImportService {
     List<File> files, {
     required int thumbnailMaxEdge,
     void Function(int done, int total)? onProgress,
+    bool Function()? isCancelled,
   }) async {
     final rawExts = <String>{
       '.dng', '.arw', '.nef', '.cr2', '.cr3', '.raf', '.rw2', '.orf',
@@ -113,6 +154,9 @@ class ImportService {
     final out = <ImportedItem>[];
     var done = 0;
     for (final f in files) {
+      if (isCancelled?.call() == true) {
+        break;
+      }
       try {
         final result = await Isolate.run(() async {
           final ext = p.extension(f.path).toLowerCase();
@@ -206,7 +250,6 @@ Uint8List? _extractEmbeddedJpeg(Uint8List bytes) {
   return null;
 }
 
-int minInt(int a, int b) => a < b ? a : b;
 
 Future<ExifSummary?> _readExifSummary(File f) async {
   try {

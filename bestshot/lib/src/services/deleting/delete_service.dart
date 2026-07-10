@@ -46,7 +46,9 @@ class DeleteService {
 
     try {
       await PhotoManager.editor.deleteWithIds(ids);
-    } catch (_) {}
+    } catch (e, s) {
+      print('PhotoManager delete error: $e\\n$s');
+    }
   }
 }
 
