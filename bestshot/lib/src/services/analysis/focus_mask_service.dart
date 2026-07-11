@@ -1,3 +1,5 @@
+import 'dart:developer' as developer;
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:opencv_dart/opencv_dart.dart' as cv;
@@ -9,6 +11,15 @@ import 'package:opencv_dart/opencv_dart.dart' as cv;
 ///   - マルチスケールLaplacian（3種のkernelサイズ）で細部〜大域のピントを両方捉える
 ///   - normalize → Otsu で確実に二値化
 ///   - モルフォロジー: open（ノイズ除去）→ close（穴埋め）→ Canny guided refine（境界シャープ化）
+Uint8List? focusMaskPngFromPath(String path) {
+  try {
+    final bytes = File(path).readAsBytesSync();
+    return focusMaskPngFromBytes(bytes);
+  } catch (_) {
+    return null;
+  }
+}
+
 Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
   cv.Mat? mat;
   cv.Mat? work;
@@ -67,8 +78,8 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
 
     final origW = mat.cols;
     final origH = mat.rows;
-    
-    work = mat.clone();
+
+    work = mat;
 
     // Scale parameter based on the reference resolution (960px max edge).
     final maxD = origW > origH ? origW : origH;
@@ -90,9 +101,12 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
     abs3 = cv.convertScaleAbs(lap3);
 
     // 3スケールを加重合成（高周波ノイズ低減のため安定性重視へ調整：25% / 50% / 25%）
+    const weight1 = 0.25;
+    const weight2 = 0.50;
+    const weight3 = 0.25;
     merged = cv.Mat.zeros(gray.rows, gray.cols, cv.MatType.CV_8UC1);
-    cv.addWeighted(abs1, 0.25, abs2, 0.50, 0, dst: merged);
-    cv.addWeighted(merged, 1.0, abs3, 0.25, 0, dst: merged);
+    cv.addWeighted(abs1, weight1, abs2, weight2, 0, dst: merged);
+    cv.addWeighted(merged, 1.0, abs3, weight3, 0, dst: merged);
 
     // ── Step 3: ガウシアンブラー（解像度に応じて動的スケーリング）────────
     int blurSize = (9 * scale).round();
@@ -111,35 +125,41 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
       dtype: cv.MatType.CV_8UC1.value,
     );
 
-    final otsu = cv.threshold(
-      norm,
-      0,
-      255,
-      cv.THRESH_BINARY | cv.THRESH_OTSU,
-    );
+    final otsu = cv.threshold(norm, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
     binary = otsu.$2;
 
     // ── Step 5: モルフォロジー（ノイズ除去 → 穴埋め、解像度に応じて動的スケーリング）────────
     // open: 孤立した小ノイズ・誤検出を除去
     int openSize = (7 * scale).round();
     if (openSize < 3) openSize = 3;
-    kernelOpen = cv.getStructuringElement(cv.MORPH_ELLIPSE, (openSize, openSize));
+    kernelOpen = cv.getStructuringElement(cv.MORPH_ELLIPSE, (
+      openSize,
+      openSize,
+    ));
     opened = cv.morphologyEx(binary, cv.MORPH_OPEN, kernelOpen);
 
     // close: ピント領域内の細かい穴を埋めて塊にする
     int closeSize = (19 * scale).round();
     if (closeSize < 3) closeSize = 3;
-    kernelClose = cv.getStructuringElement(cv.MORPH_ELLIPSE, (closeSize, closeSize));
+    kernelClose = cv.getStructuringElement(cv.MORPH_ELLIPSE, (
+      closeSize,
+      closeSize,
+    ));
     closed = cv.morphologyEx(opened, cv.MORPH_CLOSE, kernelClose);
 
     // ── Step 6: Cannyエッジで境界をシャープ化 ──────────────────────────
     // 元グレー画像からエッジを検出し、境界帯だけ細部（binary）を復元する
-    canny = cv.canny(gray, 40, 120);
+    const cannyThreshold1 = 40.0;
+    const cannyThreshold2 = 120.0;
+    canny = cv.canny(gray, cannyThreshold1, cannyThreshold2);
 
     // エッジを少し太らせて「境界帯」を定義
     int cannyDilateSize = (3 * scale).round();
     if (cannyDilateSize < 1) cannyDilateSize = 1;
-    kernelCanny = cv.getStructuringElement(cv.MORPH_RECT, (cannyDilateSize, cannyDilateSize));
+    kernelCanny = cv.getStructuringElement(cv.MORPH_RECT, (
+      cannyDilateSize,
+      cannyDilateSize,
+    ));
     cannyDilated = cv.dilate(canny, kernelCanny);
 
     // 境界帯 → binary（細かい判定）、それ以外 → closed（安定した領域）
@@ -155,17 +175,24 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
 
     // ── Step 8: 透過RGBA画像の作成 ──────────────────────────────────────
     // R=255, G=255, B=255, A=binFull (白=不透明, 黒=透明)
-    white = cv.Mat.fromScalar(origH, origW, cv.MatType.CV_8UC1, cv.Scalar.all(255));
+    white = cv.Mat.fromScalar(
+      origH,
+      origW,
+      cv.MatType.CV_8UC1,
+      cv.Scalar.all(255),
+    );
     channels = cv.VecMat.fromList([white, white, white, binFull]);
     rgba = cv.merge(channels);
 
     final encodeResult = cv.imencode('.png', rgba);
     return encodeResult.$2;
-  } catch (_) {
-    return null;
+  } catch (e, st) {
+    developer.log('focusMask error: $e\n$st');
   } finally {
+    if (work != mat) {
+      work?.dispose();
+    }
     mat?.dispose();
-    work?.dispose();
     gray?.dispose();
     lap1?.dispose();
     lap2?.dispose();
@@ -193,4 +220,5 @@ Uint8List? focusMaskPngFromBytes(Uint8List bytes) {
     channels?.dispose();
     rgba?.dispose();
   }
+  return null;
 }

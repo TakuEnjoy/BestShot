@@ -22,12 +22,14 @@ class ImportScreen extends StatefulWidget {
 
 class _ImportScreenState extends State<ImportScreen> {
   bool _busy = false;
-  bool _cancelled = false; // 6. キャンセル状態
+  bool _cancelled = false;
+  bool _isError = false;
   String _status = '';
   double? _progress; // null => indeterminate
   String _stage = '';
   DetectionMode _detectionMode = DetectionMode.standard;
   int _maxCount = 200;
+
   /// 連写ウィンドウ（1秒〜60分）。UIは分・秒で編集、初期 00分15秒。
   int _burstMinutes = 0;
   int _burstSeconds = 15;
@@ -62,12 +64,17 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   Future<void> _runImportAndAnalyze(
-    Future<List<ImportedItem>> Function(void Function(int done, int total) onProgress) importer,
-  ) async {
-    if (_busy) return;
+    Future<List<ImportedItem>> Function(
+      void Function(int done, int total) onProgress,
+    )
+    importer, {
+    bool skipBusyCheck = false,
+  }) async {
+    if (!skipBusyCheck && _busy) return;
     setState(() {
       _busy = true;
       _cancelled = false;
+      _isError = false;
       _stage = 'インポート';
       _status = '写真を読み込み中...';
       _progress = 0;
@@ -82,7 +89,7 @@ class _ImportScreenState extends State<ImportScreen> {
         });
       });
       if (!mounted) return;
-      
+
       if (_cancelled) {
         _handleCancelled();
         return;
@@ -144,15 +151,17 @@ class _ImportScreenState extends State<ImportScreen> {
             histogram: a.histogram,
             hueHistogram: a.hueHistogram,
             exif: i.exifSummary,
-            hasPortraitFace: a.hasFace,
-            portraitEyesClosed: a.eyesClosed,
-            portraitEyeOpenAvg: a.eyeOpenAvg,
-            portraitBothEyesDetected: a.bothEyesDetected,
-            portraitFaceX: a.faceX,
-            portraitFaceY: a.faceY,
-            portraitFaceW: a.faceW,
-            portraitFaceH: a.faceH,
-            portraitFaceSharpness: a.faceSharpness,
+            portrait: PortraitAnalysis(
+              hasFace: a.hasFace,
+              eyesClosed: a.eyesClosed,
+              eyeOpenAvg: a.eyeOpenAvg,
+              bothEyesDetected: a.bothEyesDetected,
+              faceX: a.faceX,
+              faceY: a.faceY,
+              faceW: a.faceW,
+              faceH: a.faceH,
+              faceSharpness: a.faceSharpness,
+            ),
             debugGridSharps: a.debugGridSharps,
           ),
         );
@@ -209,7 +218,8 @@ class _ImportScreenState extends State<ImportScreen> {
 
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => GroupsScreen(groups: groups, detectionMode: _detectionMode),
+          builder: (_) =>
+              GroupsScreen(groups: groups, detectionMode: _detectionMode),
         ),
       );
     } catch (e, stack) {
@@ -219,6 +229,7 @@ class _ImportScreenState extends State<ImportScreen> {
       } else {
         setState(() {
           _busy = false;
+          _isError = true;
           _status = 'エラーが発生しました';
           _stage = '';
           _progress = null;
@@ -272,7 +283,10 @@ class _ImportScreenState extends State<ImportScreen> {
                     ),
                     child: SelectableText(
                       error.toString(),
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -292,7 +306,10 @@ class _ImportScreenState extends State<ImportScreen> {
                     child: SingleChildScrollView(
                       child: SelectableText(
                         stackTrace.toString(),
-                        style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                        ),
                       ),
                     ),
                   ),
@@ -363,15 +380,13 @@ class _ImportScreenState extends State<ImportScreen> {
       }
 
       // 本解析処理の実行
-      setState(() {
-        _busy = false;
-      });
       await _runImportAndAnalyze(
         (onProgress) => ImportService.importSelectedFiles(
           selectedFiles,
           thumbnailMaxEdge: 512,
           onProgress: onProgress,
         ),
+        skipBusyCheck: true,
       );
     } catch (e) {
       if (!mounted) return;
@@ -383,9 +398,12 @@ class _ImportScreenState extends State<ImportScreen> {
     }
   }
 
-  Future<List<File>?> _showDateSelectionDialog(FolderScanResult scanResult) async {
+  Future<List<File>?> _showDateSelectionDialog(
+    FolderScanResult scanResult,
+  ) async {
     final filesByDate = scanResult.filesByDate;
-    final allDates = filesByDate.keys.toList()..sort((a, b) => b.compareTo(a)); // 初期降順
+    final allDates = filesByDate.keys.toList()
+      ..sort((a, b) => b.compareTo(a)); // 初期降順
 
     final selectedDates = <DateTime>{...allDates}; // デフォルト全選択
     bool descending = true;
@@ -466,14 +484,24 @@ class _ImportScreenState extends State<ImportScreen> {
                                 final range = await showDateRangePicker(
                                   context: context,
                                   firstDate: DateTime(2000),
-                                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                                  lastDate: DateTime.now().add(
+                                    const Duration(days: 365),
+                                  ),
                                 );
                                 if (range != null) {
                                   setState(() {
                                     selectedDates.clear();
                                     for (final d in allDates) {
-                                      if (d.isAfter(range.start.subtract(const Duration(seconds: 1))) &&
-                                          d.isBefore(range.end.add(const Duration(days: 1)))) {
+                                      if (d.isAfter(
+                                            range.start.subtract(
+                                              const Duration(seconds: 1),
+                                            ),
+                                          ) &&
+                                          d.isBefore(
+                                            range.end.add(
+                                              const Duration(days: 1),
+                                            ),
+                                          )) {
                                         selectedDates.add(d);
                                       }
                                     }
@@ -486,7 +514,11 @@ class _ImportScreenState extends State<ImportScreen> {
                             // ソートトグル
                             IconButton(
                               tooltip: descending ? '新しい順' : '古い順',
-                              icon: Icon(descending ? Icons.arrow_downward : Icons.arrow_upward),
+                              icon: Icon(
+                                descending
+                                    ? Icons.arrow_downward
+                                    : Icons.arrow_upward,
+                              ),
                               onPressed: () {
                                 setState(() {
                                   descending = !descending;
@@ -512,7 +544,8 @@ class _ImportScreenState extends State<ImportScreen> {
                           itemBuilder: (context, index) {
                             final date = sortedDates[index];
                             final count = filesByDate[date]?.length ?? 0;
-                            final dateStr = '${date.year}/${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
+                            final dateStr =
+                                '${date.year}/${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
                             final isChecked = selectedDates.contains(date);
 
                             return CheckboxListTile(
@@ -609,15 +642,15 @@ class _ImportScreenState extends State<ImportScreen> {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            colorScheme.primary.withOpacity(0.08),
-            colorScheme.secondary.withOpacity(0.03),
+            colorScheme.primary.withValues(alpha: 0.08),
+            colorScheme.secondary.withValues(alpha: 0.03),
           ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: colorScheme.primary.withOpacity(0.15),
+          color: colorScheme.primary.withValues(alpha: 0.15),
           width: 1,
         ),
       ),
@@ -635,7 +668,7 @@ class _ImportScreenState extends State<ImportScreen> {
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.bold,
               fontSize: isSmallMobile ? 14 : null,
-              color: Colors.white.withOpacity(0.95),
+              color: Colors.white.withValues(alpha: 0.95),
             ),
           ),
           SizedBox(height: isSmallMobile ? 4 : 6),
@@ -643,7 +676,7 @@ class _ImportScreenState extends State<ImportScreen> {
             '一眼レフやミラーレス of 連写・類似写真を、内容ベースで高速グループ化して「Best」を見つけ出します。',
             textAlign: TextAlign.center,
             style: theme.textTheme.bodySmall?.copyWith(
-              color: Colors.white.withOpacity(0.65),
+              color: Colors.white.withValues(alpha: 0.65),
               fontSize: isSmallMobile ? 10 : null,
               height: 1.4,
             ),
@@ -665,7 +698,11 @@ class _ImportScreenState extends State<ImportScreen> {
           children: [
             Row(
               children: [
-                Icon(Icons.tune_rounded, size: isSmallMobile ? 16 : 20, color: colorScheme.primary),
+                Icon(
+                  Icons.tune_rounded,
+                  size: isSmallMobile ? 16 : 20,
+                  color: colorScheme.primary,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   '解析・グループ化設定',
@@ -680,20 +717,23 @@ class _ImportScreenState extends State<ImportScreen> {
             Text(
               '検出モード',
               style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withOpacity(0.8),
+                color: Colors.white.withValues(alpha: 0.8),
                 fontSize: isSmallMobile ? 11 : null,
               ),
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<DetectionMode>(
               isExpanded: true,
-              initialValue: _detectionMode,
+              value: _detectionMode,
               decoration: InputDecoration(
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                 ),
                 isDense: true,
-                contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: isSmallMobile ? 8 : 12),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: isSmallMobile ? 8 : 12,
+                ),
               ),
               items: [
                 const DropdownMenuItem(
@@ -721,7 +761,7 @@ class _ImportScreenState extends State<ImportScreen> {
             Text(
               '連写としてまとめる時間窓',
               style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withOpacity(0.8),
+                color: Colors.white.withValues(alpha: 0.8),
                 fontSize: isSmallMobile ? 11 : null,
               ),
             ),
@@ -729,7 +769,7 @@ class _ImportScreenState extends State<ImportScreen> {
             Text(
               '合計: ${_formatBurstWindow(_burstWindowSeconds)}（1秒〜60分以内を1グループ化）',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: Colors.white.withOpacity(0.5),
+                color: Colors.white.withValues(alpha: 0.5),
                 fontSize: isSmallMobile ? 10 : null,
               ),
             ),
@@ -738,18 +778,26 @@ class _ImportScreenState extends State<ImportScreen> {
               children: [
                 Expanded(
                   child: DropdownButtonFormField<int>(
-                    initialValue: _burstMinutes.clamp(0, 60),
+                    value: _burstMinutes.clamp(0, 60),
                     decoration: InputDecoration(
                       labelText: '分',
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),
                       isDense: true,
-                      contentPadding: isSmallMobile ? const EdgeInsets.symmetric(horizontal: 8, vertical: 8) : null,
+                      contentPadding: isSmallMobile
+                          ? const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            )
+                          : null,
                     ),
                     items: [
                       for (var i = 0; i <= 60; i++)
-                        DropdownMenuItem(value: i, child: Text(i.toString().padLeft(2, '0'))),
+                        DropdownMenuItem(
+                          value: i,
+                          child: Text(i.toString().padLeft(2, '0')),
+                        ),
                     ],
                     onChanged: _busy
                         ? null
@@ -763,18 +811,26 @@ class _ImportScreenState extends State<ImportScreen> {
                 SizedBox(width: isSmallMobile ? 8 : 12),
                 Expanded(
                   child: DropdownButtonFormField<int>(
-                    initialValue: _burstSeconds.clamp(0, 59),
+                    value: _burstSeconds.clamp(0, 59),
                     decoration: InputDecoration(
                       labelText: '秒',
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),
                       isDense: true,
-                      contentPadding: isSmallMobile ? const EdgeInsets.symmetric(horizontal: 8, vertical: 8) : null,
+                      contentPadding: isSmallMobile
+                          ? const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            )
+                          : null,
                     ),
                     items: [
                       for (var i = 0; i < 60; i++)
-                        DropdownMenuItem(value: i, child: Text(i.toString().padLeft(2, '0'))),
+                        DropdownMenuItem(
+                          value: i,
+                          child: Text(i.toString().padLeft(2, '0')),
+                        ),
                     ],
                     onChanged: _busy
                         ? null
@@ -791,19 +847,21 @@ class _ImportScreenState extends State<ImportScreen> {
             Text(
               '最大インポート件数',
               style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withOpacity(0.8),
+                color: Colors.white.withValues(alpha: 0.8),
                 fontSize: isSmallMobile ? 11 : null,
               ),
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<int>(
-              initialValue: _maxCount,
+              value: _maxCount,
               decoration: InputDecoration(
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                 ),
                 isDense: true,
-                contentPadding: isSmallMobile ? const EdgeInsets.symmetric(horizontal: 16, vertical: 8) : null,
+                contentPadding: isSmallMobile
+                    ? const EdgeInsets.symmetric(horizontal: 16, vertical: 8)
+                    : null,
               ),
               items: const [
                 DropdownMenuItem(value: 50, child: Text('50枚')),
@@ -837,7 +895,7 @@ class _ImportScreenState extends State<ImportScreen> {
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF6366F1).withOpacity(0.3),
+              color: const Color(0xFF6366F1).withValues(alpha: 0.3),
               blurRadius: 16,
               spreadRadius: 2,
               offset: const Offset(0, 4),
@@ -850,14 +908,17 @@ class _ImportScreenState extends State<ImportScreen> {
             onTap: () => _runFolderImportAndAnalyze(!isWindows),
             borderRadius: BorderRadius.circular(16),
             child: Padding(
-              padding: EdgeInsets.symmetric(vertical: isSmallMobile ? 16 : 24, horizontal: 12),
+              padding: EdgeInsets.symmetric(
+                vertical: isSmallMobile ? 16 : 24,
+                horizontal: 12,
+              ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Container(
                     padding: EdgeInsets.all(isSmallMobile ? 8 : 12),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.12),
+                      color: Colors.white.withValues(alpha: 0.12),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
@@ -880,7 +941,7 @@ class _ImportScreenState extends State<ImportScreen> {
                     'サブフォルダ内の画像も自動的に再帰スキャンされます',
                     style: TextStyle(
                       fontSize: isSmallMobile ? 10 : 11,
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.white.withValues(alpha: 0.7),
                     ),
                   ),
                 ],
@@ -899,18 +960,14 @@ class _ImportScreenState extends State<ImportScreen> {
         decoration: BoxDecoration(
           color: colorScheme.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: colorScheme.primary.withOpacity(0.2),
-          ),
+          border: Border.all(color: colorScheme.primary.withValues(alpha: 0.2)),
         ),
         child: Column(
           children: [
             const SizedBox(
               width: 40,
               height: 40,
-              child: CircularProgressIndicator(
-                strokeWidth: 3.5,
-              ),
+              child: CircularProgressIndicator(strokeWidth: 3.5),
             ),
             const SizedBox(height: 16),
             if (_stage.isNotEmpty)
@@ -926,7 +983,7 @@ class _ImportScreenState extends State<ImportScreen> {
               _status,
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: Colors.white.withOpacity(0.85),
+                color: Colors.white.withValues(alpha: 0.85),
               ),
             ),
             if (_progress != null) ...[
@@ -936,8 +993,10 @@ class _ImportScreenState extends State<ImportScreen> {
                 child: LinearProgressIndicator(
                   value: _progress,
                   minHeight: 8,
-                  backgroundColor: colorScheme.primary.withOpacity(0.1),
-                  valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                  backgroundColor: colorScheme.primary.withValues(alpha: 0.1),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    colorScheme.primary,
+                  ),
                 ),
               ),
               const SizedBox(height: 6),
@@ -976,23 +1035,23 @@ class _ImportScreenState extends State<ImportScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
-            color: _status.contains('エラー')
-                ? colorScheme.error.withOpacity(0.12)
-                : colorScheme.secondary.withOpacity(0.08),
+            color: _isError
+                ? colorScheme.error.withValues(alpha: 0.12)
+                : colorScheme.secondary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: _status.contains('エラー')
-                  ? colorScheme.error.withOpacity(0.3)
-                  : colorScheme.secondary.withOpacity(0.2),
+              color: _isError
+                  ? colorScheme.error.withValues(alpha: 0.3)
+                  : colorScheme.secondary.withValues(alpha: 0.2),
             ),
           ),
           child: Row(
             children: [
               Icon(
-                _status.contains('エラー')
+                _isError
                     ? Icons.error_outline_rounded
                     : Icons.info_outline_rounded,
-                color: _status.contains('エラー')
+                color: _isError
                     ? colorScheme.error
                     : colorScheme.secondary,
                 size: 20,
@@ -1002,9 +1061,9 @@ class _ImportScreenState extends State<ImportScreen> {
                 child: Text(
                   _status,
                   style: TextStyle(
-                    color: _status.contains('エラー')
+                    color: _isError
                         ? colorScheme.error
-                        : Colors.white.withOpacity(0.9),
+                        : Colors.white.withValues(alpha: 0.9),
                     fontSize: 13,
                   ),
                 ),
@@ -1052,9 +1111,9 @@ class _ImportScreenState extends State<ImportScreen> {
                           children: [
                             heroHeader,
                             const SizedBox(height: 24),
-                            if (importButton != null) importButton,
-                            if (progressDisplay != null) progressDisplay,
-                            if (errorDisplay != null) errorDisplay,
+                            ?importButton,
+                            ?progressDisplay,
+                            ?errorDisplay,
                             const SizedBox(height: 24),
                             infoCard,
                           ],
@@ -1062,10 +1121,7 @@ class _ImportScreenState extends State<ImportScreen> {
                       ),
                       const SizedBox(width: 24),
                       // 右カラム (設定パネル)
-                      Expanded(
-                        flex: 4,
-                        child: parametersCard,
-                      ),
+                      Expanded(flex: 4, child: parametersCard),
                     ],
                   )
                 : Column(
@@ -1077,9 +1133,9 @@ class _ImportScreenState extends State<ImportScreen> {
                       SizedBox(height: isSmallMobile ? 12 : 20),
                       parametersCard,
                       SizedBox(height: isSmallMobile ? 16 : 24),
-                      if (importButton != null) importButton,
-                      if (progressDisplay != null) progressDisplay,
-                      if (errorDisplay != null) errorDisplay,
+                      ?importButton,
+                      ?progressDisplay,
+                      ?errorDisplay,
                     ],
                   ),
           ),
@@ -1108,7 +1164,7 @@ class _InfoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    
+
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -1136,7 +1192,7 @@ class _InfoCard extends StatelessWidget {
                   const SizedBox(height: 6),
                   DefaultTextStyle(
                     style: theme.textTheme.bodySmall!.copyWith(
-                      color: Colors.white.withOpacity(0.65),
+                      color: Colors.white.withValues(alpha: 0.65),
                       height: 1.4,
                     ),
                     child: const Column(
@@ -1157,4 +1213,3 @@ class _InfoCard extends StatelessWidget {
     );
   }
 }
-

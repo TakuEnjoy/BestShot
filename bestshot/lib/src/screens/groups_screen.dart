@@ -29,8 +29,10 @@ class GroupsScreen extends StatefulWidget {
 
 class _GroupsScreenState extends State<GroupsScreen> {
   late final Map<String, PhotoEntry> _entryByKey;
+  List<PhotoEntry>? _sortedPortraitItems;
   late final Set<String> _selectedForDelete;
   final List<String> _loupeSelection = [];
+  late List<PhotoGroup> _groups;
 
   // 仕分け用の状態変数
   final Map<String, String> _selectedSortFolders = {};
@@ -58,17 +60,43 @@ class _GroupsScreenState extends State<GroupsScreen> {
       _focusNode.requestFocus();
     });
 
+    _groups = List.of(widget.groups);
+
     _entryByKey = {
-      for (final g in widget.groups)
+      for (final g in _groups)
         for (final e in g.items) e.key: e,
     };
     _selectedForDelete = {
-      for (final g in widget.groups) ...g.deleteCandidateKeys,
+      for (final g in _groups) ...g.deleteCandidateKeys,
     };
 
     // Initialize keyboard photo focus to the first bestKey
-    if (widget.groups.isNotEmpty) {
-      _keyboardPhotoKey = widget.groups.first.bestKey;
+    if (_groups.isNotEmpty) {
+      _keyboardPhotoKey = _groups.first.bestKey;
+    }
+  }
+
+  @override
+  void didUpdateWidget(GroupsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.groups != widget.groups) {
+      _groups = List.of(widget.groups);
+      _entryByKey.clear();
+      for (final g in _groups) {
+        for (final e in g.items) {
+          _entryByKey[e.key] = e;
+        }
+      }
+      _sortedPortraitItems = null;
+    }
+  }
+
+  void _syncEntryByKey() {
+    _entryByKey.clear();
+    for (final g in _groups) {
+      for (final e in g.items) {
+        _entryByKey[e.key] = e;
+      }
     }
   }
 
@@ -77,6 +105,38 @@ class _GroupsScreenState extends State<GroupsScreen> {
     _focusNode.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _clampKeyboardIndices() {
+    if (_groups.isEmpty) {
+      _keyboardGroupIndex = 0;
+      _keyboardPortraitIndex = 0;
+      _keyboardPhotoKey = null;
+      return;
+    }
+    if (_keyboardGroupIndex >= _groups.length) {
+      _keyboardGroupIndex = _groups.length - 1;
+    }
+    // Note: _sortedPortraitItems is not available here easily without state,
+    // so _keyboardPortraitIndex clamp might need to happen elsewhere if needed.
+  }
+
+  List<PhotoEntry> _getPortraitItems() {
+    if (widget.detectionMode != DetectionMode.portrait) return const <PhotoEntry>[];
+    if (_sortedPortraitItems != null) return _sortedPortraitItems!;
+    
+    final items = _entryByKey.values.toList();
+    items.sort((a, b) {
+      final fa = a.portrait?.hasFace == true ? 0 : 1;
+      final fb = b.portrait?.hasFace == true ? 0 : 1;
+      final faceCmp = fa.compareTo(fb);
+      if (faceCmp != 0) return faceCmp;
+      final ta = a.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final tb = b.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return ta.compareTo(tb);
+    });
+    _sortedPortraitItems = items;
+    return items;
   }
 
   int get _selectedCount => _selectedForDelete.length;
@@ -107,7 +167,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     try {
       int count = 0;
-      for (final group in widget.groups) {
+      for (final group in _groups) {
         if (group.items.isEmpty) continue;
         final bestItem = group.items.firstWhere(
           (item) => item.key == group.bestKey,
@@ -236,12 +296,18 @@ class _GroupsScreenState extends State<GroupsScreen> {
           _processingKeys.removeAll(targets);
 
           for (final entry in entries) {
-            _entryByKey.remove(entry.key);
-            for (final g in widget.groups) {
-              g.items.removeWhere((item) => item.key == entry.key);
+            for (var i = 0; i < _groups.length; i++) {
+              final g = _groups[i];
+              if (g.items.any((item) => item.key == entry.key)) {
+                final newItems = g.items.where((item) => item.key != entry.key).toList();
+                _groups[i] = g.copyWith(items: newItems);
+              }
             }
           }
-          widget.groups.removeWhere((g) => g.items.isEmpty);
+          _groups.removeWhere((g) => g.items.isEmpty);
+          _syncEntryByKey();
+          _sortedPortraitItems = null;
+          _clampKeyboardIndices();
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -316,19 +382,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     final key = event.logicalKey;
     final isPortrait = widget.detectionMode == DetectionMode.portrait;
-    final portraitItems = isPortrait ? _entryByKey.values.toList() : const <PhotoEntry>[];
-    
-    if (isPortrait) {
-      portraitItems.sort((a, b) {
-        final fa = a.hasPortraitFace ? 0 : 1;
-        final fb = b.hasPortraitFace ? 0 : 1;
-        final faceCmp = fa.compareTo(fb);
-        if (faceCmp != 0) return faceCmp;
-        final ta = a.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final tb = b.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return ta.compareTo(tb);
-      });
-    }
+    final portraitItems = _getPortraitItems();
 
     // 編集用キーボードショートカットの場合は処理中のファイルを保護
     final bool isEditKey = key == LogicalKeyboardKey.keyB ||
@@ -363,9 +417,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
             _scrollToActiveGroup(true);
           }
         } else {
-          if (widget.groups.isNotEmpty && _keyboardGroupIndex < widget.groups.length - 1) {
+          if (_groups.isNotEmpty && _keyboardGroupIndex < _groups.length - 1) {
             _keyboardGroupIndex++;
-            final g = widget.groups[_keyboardGroupIndex];
+            final g = _groups[_keyboardGroupIndex];
             if (g.items.isNotEmpty) {
               _keyboardPhotoKey = g.bestKey;
             }
@@ -386,7 +440,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         } else {
           if (_keyboardGroupIndex > 0) {
             _keyboardGroupIndex--;
-            final g = widget.groups[_keyboardGroupIndex];
+            final g = _groups[_keyboardGroupIndex];
             if (g.items.isNotEmpty) {
               _keyboardPhotoKey = g.bestKey;
             }
@@ -397,8 +451,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
       return KeyEventResult.handled;
     }
 
-    if (!isPortrait && widget.groups.isNotEmpty) {
-      final g = widget.groups[_keyboardGroupIndex];
+    if (!isPortrait && _groups.isNotEmpty) {
+      final g = _groups[_keyboardGroupIndex];
       final items = g.items;
       final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
 
@@ -423,7 +477,10 @@ class _GroupsScreenState extends State<GroupsScreen> {
       if (key == LogicalKeyboardKey.keyB) {
         if (_keyboardPhotoKey != null) {
           setState(() {
-            g.bestKey = _keyboardPhotoKey!;
+            final idx = _groups.indexOf(g);
+            if (idx != -1) {
+              _groups[idx] = g.copyWith(bestKey: _keyboardPhotoKey!);
+            }
           });
         }
         return KeyEventResult.handled;
@@ -445,42 +502,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
             .whereType<PhotoEntry>()
             .toList();
         if (items.isNotEmpty) {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => LoupeScreen(
-                items: items,
-                scores: items.map((e) => e.sharpness).toList(),
-                isBests: items.map((e) {
-                  for (final g in widget.groups) {
-                    if (g.items.any((item) => item.key == e.key)) {
-                      return e.key == g.bestKey;
-                    }
-                  }
-                  return false;
-                }).toList(),
-                initialSelectedForDelete: _selectedForDelete,
-                onToggleDelete: (k, val) {
-                  setState(() {
-                    if (val) {
-                      _selectedForDelete.add(k);
-                    } else {
-                      _selectedForDelete.remove(k);
-                    }
-                  });
-                },
-                onSetBest: (k) {
-                  setState(() {
-                    for (final g in widget.groups) {
-                      if (g.items.any((item) => item.key == k)) {
-                        g.bestKey = k;
-                        break;
-                      }
-                    }
-                  });
-                },
-              ),
-            ),
-          );
+          _openLoupe(items);
         }
       }
       return KeyEventResult.handled;
@@ -563,7 +585,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
             });
           }
         } else {
-          final g = widget.groups[_keyboardGroupIndex];
+          final g = _groups[_keyboardGroupIndex];
           final items = g.items;
           final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
           if (currentIndex != -1 && currentIndex < items.length - 1) {
@@ -708,12 +730,18 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
           if (!isCopy && successKeys.isNotEmpty) {
             for (final key in successKeys) {
-              _entryByKey.remove(key);
-              for (final g in widget.groups) {
-                g.items.removeWhere((item) => item.key == key);
+              for (var i = 0; i < _groups.length; i++) {
+                final g = _groups[i];
+                if (g.items.any((item) => item.key == key)) {
+                  final newItems = g.items.where((item) => item.key != key).toList();
+                  _groups[i] = g.copyWith(items: newItems);
+                }
               }
             }
-            widget.groups.removeWhere((g) => g.items.isEmpty);
+            _groups.removeWhere((g) => g.items.isEmpty);
+            _syncEntryByKey();
+            _sortedPortraitItems = null;
+            _clampKeyboardIndices();
           }
         });
 
@@ -920,6 +948,47 @@ class _GroupsScreenState extends State<GroupsScreen> {
     );
   }
 
+  void _openLoupe(List<PhotoEntry> items) {
+    if (items.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LoupeScreen(
+          items: items,
+          scores: items.map((e) => e.sharpness).toList(),
+          isBests: items.map((e) {
+            for (final g in _groups) {
+              if (g.items.any((item) => item.key == e.key)) {
+                return e.key == g.bestKey;
+              }
+            }
+            return false;
+          }).toList(),
+          initialSelectedForDelete: _selectedForDelete,
+          onToggleDelete: (k, val) {
+            setState(() {
+              if (val) {
+                _selectedForDelete.add(k);
+              } else {
+                _selectedForDelete.remove(k);
+              }
+            });
+          },
+          onSetBest: (k) {
+            setState(() {
+              for (var i = 0; i < _groups.length; i++) {
+                final g = _groups[i];
+                if (g.items.any((item) => item.key == k)) {
+                  _groups[i] = g.copyWith(bestKey: k);
+                  break;
+                }
+              }
+            });
+          },
+        ),
+      ),
+    );
+  }
+
   void _showKeyboardShortcutsDialog(BuildContext context) {
     showDialog(
       context: context,
@@ -1002,9 +1071,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
       final timeStr = t == null
           ? ''
           : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
-      final eyeText = e.portraitBothEyesDetected
+      final eyeText = (e.portrait?.bothEyesDetected ?? false)
           ? '目閉じなし'
-          : (e.portraitEyesClosed ? '目閉じ' : '');
+          : ((e.portrait?.eyesClosed ?? false) ? '目閉じ' : '');
 
       final loupeSelected = _loupeSelection.contains(e.key);
       final selectedForDelete = _selectedForDelete.contains(e.key);
@@ -1179,7 +1248,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '鮮明度: ${e.sharpness.toStringAsFixed(0)}（顔ROI: ${e.portraitFaceSharpness.toStringAsFixed(0)}）',
+                        '鮮明度: ${e.sharpness.toStringAsFixed(0)}（顔ROI: ${(e.portrait?.faceSharpness ?? 0).toStringAsFixed(0)}）',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                       if (eyeText.isNotEmpty) ...[
@@ -1188,16 +1257,16 @@ class _GroupsScreenState extends State<GroupsScreen> {
                           eyeText,
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                 fontWeight: FontWeight.w700,
-                                color: e.portraitBothEyesDetected
+                                color: (e.portrait?.bothEyesDetected ?? false)
                                     ? const Color(0xFF16A34A)
                                     : const Color(0xFFDC2626),
                               ),
                         ),
                       ],
-                      if (e.portraitEyeOpenAvg >= 0) ...[
+                      if ((e.portrait?.eyeOpenAvg ?? -1.0) >= 0) ...[
                         const SizedBox(height: 2),
                         Text(
-                          '目開き平均: ${e.portraitEyeOpenAvg.toStringAsFixed(2)}',
+                          '目開き平均: ${(e.portrait?.eyeOpenAvg ?? 0.0).toStringAsFixed(2)}',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
@@ -1218,9 +1287,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
       final timeStr = t == null
           ? ''
           : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
-      final eyeText = e.portraitBothEyesDetected
+      final eyeText = (e.portrait?.bothEyesDetected ?? false)
           ? '目閉じなし'
-          : (e.portraitEyesClosed ? '目閉じ' : '');
+          : ((e.portrait?.eyesClosed ?? false) ? '目閉じ' : '');
 
       final loupeSelected = _loupeSelection.contains(e.key);
       final selectedForDelete = _selectedForDelete.contains(e.key);
@@ -1407,7 +1476,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '顔ROI: ${e.portraitFaceSharpness.toStringAsFixed(0)}',
+                      '顔ROI: ${(e.portrait?.faceSharpness ?? 0).toStringAsFixed(0)}',
                       style: theme.textTheme.bodySmall?.copyWith(fontSize: 10),
                     ),
                     if (eyeText.isNotEmpty) ...[
@@ -1417,7 +1486,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         style: theme.textTheme.bodySmall?.copyWith(
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
-                              color: e.portraitBothEyesDetected
+                              color: (e.portrait?.bothEyesDetected ?? false)
                                   ? const Color(0xFF16A34A)
                                   : const Color(0xFFDC2626),
                             ),
@@ -1435,22 +1504,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final isMobile = width < 600;
 
     if (isWide) {
-      final itemWidth = (width - 32 - (crossAxisCount - 1) * 16) / crossAxisCount;
-      return SingleChildScrollView(
+      return GridView.builder(
         controller: _scrollController,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: [
-            for (int i = 0; i < portraitItems.length; i++)
-              SizedBox(
-                width: itemWidth,
-                height: itemWidth / 0.82,
-                child: buildGridItem(i),
-              ),
-          ],
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: crossAxisCount,
+          mainAxisSpacing: 16,
+          crossAxisSpacing: 16,
+          childAspectRatio: 0.82,
         ),
+        itemCount: portraitItems.length,
+        itemBuilder: (context, i) => buildGridItem(i),
       );
     } else if (isMobile) {
       return GridView.builder(
@@ -1484,7 +1548,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   Widget _buildGroupBody(BuildContext context, bool isWide, double width, int crossAxisCount) {
     Widget buildItem(int index) {
-      final g = widget.groups[index];
+      final g = _groups[index];
       final isKeyboardGroupFocused = index == _keyboardGroupIndex;
 
       return _ExpandableGroupCard(
@@ -1551,27 +1615,37 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
 
     if (isWide) {
-      final itemWidth = (width - 32 - (crossAxisCount - 1) * 16) / crossAxisCount;
-      return SingleChildScrollView(
+      return ListView.builder(
         controller: _scrollController,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: [
-            for (int i = 0; i < widget.groups.length; i++)
-              SizedBox(
-                width: itemWidth,
-                child: buildItem(i),
-              ),
-          ],
-        ),
+        itemCount: (_groups.length / crossAxisCount).ceil(),
+        itemBuilder: (context, index) {
+          final children = <Widget>[];
+          for (int i = 0; i < crossAxisCount; i++) {
+            final itemIndex = index * crossAxisCount + i;
+            if (itemIndex < _groups.length) {
+              children.add(Expanded(child: buildItem(itemIndex)));
+            } else {
+              children.add(const Expanded(child: SizedBox.shrink()));
+            }
+            if (i < crossAxisCount - 1) {
+              children.add(const SizedBox(width: 16));
+            }
+          }
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: children,
+            ),
+          );
+        },
       );
     } else {
       return ListView.builder(
         controller: _scrollController,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        itemCount: widget.groups.length,
+        itemCount: _groups.length,
         itemBuilder: (context, index) {
           return Padding(
             padding: const EdgeInsets.only(bottom: 12),
@@ -1591,18 +1665,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final crossAxisCount = size.width >= 800 ? 2 : 1;
 
     final isPortrait = widget.detectionMode == DetectionMode.portrait;
-    final portraitItems = isPortrait ? _entryByKey.values.toList() : const <PhotoEntry>[];
-    if (isPortrait) {
-      portraitItems.sort((a, b) {
-        final fa = a.hasPortraitFace ? 0 : 1;
-        final fb = b.hasPortraitFace ? 0 : 1;
-        final faceCmp = fa.compareTo(fb);
-        if (faceCmp != 0) return faceCmp;
-        final ta = a.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final tb = b.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return ta.compareTo(tb);
-      });
-    }
+    final portraitItems = _getPortraitItems();
 
     final bool canSort = _selectedSortFolders.keys.any((k) => !_processingKeys.contains(k));
     final bool canDelete = _selectedForDelete.any((k) => !_processingKeys.contains(k));
@@ -1626,8 +1689,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     const Text('整理・比較'),
                     Text(
                       isPortrait
-                          ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.hasPortraitFace).length} / 削除候補: $_selectedCount'
-                          : 'グループ: ${widget.groups.length} / 削除候補: $_selectedCount',
+                          ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.portrait?.hasFace == true).length} / 削除候補: $_selectedCount'
+                          : 'グループ: ${_groups.length} / 削除候補: $_selectedCount',
                       style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.normal,
@@ -1714,51 +1777,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                                     .map((k) => _entryByKey[k])
                                     .whereType<PhotoEntry>()
                                     .toList();
-                                if (items.isEmpty) return;
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => LoupeScreen(
-                                      items: items,
-                                      scores: _loupeSelection
-                                          .map((k) => _entryByKey[k])
-                                          .whereType<PhotoEntry>()
-                                          .map((e) => e.sharpness)
-                                          .toList(),
-                                      isBests: _loupeSelection
-                                          .map((k) => _entryByKey[k])
-                                          .whereType<PhotoEntry>()
-                                          .map((e) {
-                                            for (final g in widget.groups) {
-                                              if (g.items.any((item) => item.key == e.key)) {
-                                                return e.key == g.bestKey;
-                                              }
-                                            }
-                                            return false;
-                                          })
-                                          .toList(),
-                                      initialSelectedForDelete: _selectedForDelete,
-                                      onToggleDelete: (key, val) {
-                                        setState(() {
-                                          if (val) {
-                                            _selectedForDelete.add(key);
-                                          } else {
-                                            _selectedForDelete.remove(key);
-                                          }
-                                        });
-                                      },
-                                      onSetBest: (key) {
-                                        setState(() {
-                                          for (final g in widget.groups) {
-                                            if (g.items.any((item) => item.key == key)) {
-                                              g.bestKey = key;
-                                              break;
-                                            }
-                                          }
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                );
+                                _openLoupe(items);
                               }
                             : null,
                       ),
@@ -1773,51 +1792,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                                   .map((k) => _entryByKey[k])
                                   .whereType<PhotoEntry>()
                                   .toList();
-                              if (items.isEmpty) return;
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => LoupeScreen(
-                                    items: items,
-                                    scores: _loupeSelection
-                                        .map((k) => _entryByKey[k])
-                                        .whereType<PhotoEntry>()
-                                        .map((e) => e.sharpness)
-                                        .toList(),
-                                    isBests: _loupeSelection
-                                        .map((k) => _entryByKey[k])
-                                        .whereType<PhotoEntry>()
-                                        .map((e) {
-                                          for (final g in widget.groups) {
-                                            if (g.items.any((item) => item.key == e.key)) {
-                                              return e.key == g.bestKey;
-                                            }
-                                          }
-                                          return false;
-                                        })
-                                        .toList(),
-                                    initialSelectedForDelete: _selectedForDelete,
-                                    onToggleDelete: (key, val) {
-                                      setState(() {
-                                        if (val) {
-                                          _selectedForDelete.add(key);
-                                        } else {
-                                          _selectedForDelete.remove(key);
-                                        }
-                                      });
-                                    },
-                                    onSetBest: (key) {
-                                      setState(() {
-                                        for (final g in widget.groups) {
-                                          if (g.items.any((item) => item.key == key)) {
-                                            g.bestKey = key;
-                                            break;
-                                          }
-                                        }
-                                      });
-                                    },
-                                  ),
-                                ),
-                              );
+                              _openLoupe(items);
                             }
                           : null,
                       icon: const Icon(Icons.zoom_in, size: 20),

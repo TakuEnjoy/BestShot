@@ -1,26 +1,12 @@
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 
-import '../services/importing/import_service.dart';
+import 'exif_summary.dart';
+import 'semantic_object.dart';
+import 'portrait_analysis.dart';
+export 'semantic_object.dart';
+export 'portrait_analysis.dart';
 
 enum PhotoOrigin { deviceAsset, filePath }
-
-class SemanticObject {
-  const SemanticObject({
-    required this.label,
-    required this.x,
-    required this.y,
-    required this.w,
-    required this.h,
-  });
-
-  final String label;
-
-  /// Normalized 0..1 coords relative to image.
-  final double x;
-  final double y;
-  final double w;
-  final double h;
-}
 
 class PhotoEntry {
   PhotoEntry({
@@ -40,15 +26,7 @@ class PhotoEntry {
     this.exif,
     this.semanticObjects = const [],
     this.faceQualityScore = 0,
-    this.hasPortraitFace = false,
-    this.portraitEyesClosed = false,
-    this.portraitEyeOpenAvg = -1,
-    this.portraitBothEyesDetected = false,
-    this.portraitFaceX = 0,
-    this.portraitFaceY = 0,
-    this.portraitFaceW = 0,
-    this.portraitFaceH = 0,
-    this.portraitFaceSharpness = 0,
+    this.portrait = const PortraitAnalysis(),
     this.debugGridSharps,
   });
 
@@ -95,26 +73,8 @@ class PhotoEntry {
   /// ML Kit face-based preference (higher => better expression/eyes).
   final double faceQualityScore;
 
-  /// Portrait-mode: face detected in ROI analysis.
-  final bool hasPortraitFace;
-
-  /// Portrait-mode: true when judged as eyes closed.
-  final bool portraitEyesClosed;
-
-  /// Portrait-mode: average eye open probability when available (0..1). -1 if unknown.
-  final double portraitEyeOpenAvg;
-
-  /// Portrait-mode: true when both eyes are confirmed.
-  final bool portraitBothEyesDetected;
-
-  /// Portrait-mode: face bounding box in image pixel coordinates.
-  final int portraitFaceX;
-  final int portraitFaceY;
-  final int portraitFaceW;
-  final int portraitFaceH;
-
-  /// Portrait-mode: Laplacian variance within face ROI.
-  final double portraitFaceSharpness;
+  /// Portrait-mode analysis results.
+  final PortraitAnalysis portrait;
 
   /// Debug info: Laplacian variance for each of the 4x4 grid cells.
   final List<double>? debugGridSharps;
@@ -144,8 +104,8 @@ class PhotoEntry {
     String? key,
     PhotoOrigin? origin,
     Uint8List? displayBytes,
-    String? assetId,
-    String? filePath,
+    ValueGetter<String?>? assetId,
+    ValueGetter<String?>? filePath,
     String? pHashHex,
     double? sharpness,
     double? exposureScore,
@@ -153,27 +113,19 @@ class PhotoEntry {
     int? orbCols,
     Uint8List? orbBytes,
     Uint8List? histogram,
-    Float32List? hueHistogram,
-    ExifSummary? exif,
+    ValueGetter<Float32List?>? hueHistogram,
+    ValueGetter<ExifSummary?>? exif,
     List<SemanticObject>? semanticObjects,
     double? faceQualityScore,
-    bool? hasPortraitFace,
-    bool? portraitEyesClosed,
-    double? portraitEyeOpenAvg,
-    bool? portraitBothEyesDetected,
-    int? portraitFaceX,
-    int? portraitFaceY,
-    int? portraitFaceW,
-    int? portraitFaceH,
-    double? portraitFaceSharpness,
-    List<double>? debugGridSharps,
+    PortraitAnalysis? portrait,
+    ValueGetter<List<double>?>? debugGridSharps,
   }) {
     return PhotoEntry(
       key: key ?? this.key,
       origin: origin ?? this.origin,
       displayBytes: displayBytes ?? this.displayBytes,
-      assetId: assetId ?? this.assetId,
-      filePath: filePath ?? this.filePath,
+      assetId: assetId != null ? assetId() : this.assetId,
+      filePath: filePath != null ? filePath() : this.filePath,
       pHashHex: pHashHex ?? this.pHashHex,
       sharpness: sharpness ?? this.sharpness,
       exposureScore: exposureScore ?? this.exposureScore,
@@ -181,20 +133,65 @@ class PhotoEntry {
       orbCols: orbCols ?? this.orbCols,
       orbBytes: orbBytes ?? this.orbBytes,
       histogram: histogram ?? this.histogram,
-      hueHistogram: hueHistogram ?? this.hueHistogram,
-      exif: exif ?? this.exif,
+      hueHistogram: hueHistogram != null ? hueHistogram() : this.hueHistogram,
+      exif: exif != null ? exif() : this.exif,
       semanticObjects: semanticObjects ?? this.semanticObjects,
       faceQualityScore: faceQualityScore ?? this.faceQualityScore,
-      hasPortraitFace: hasPortraitFace ?? this.hasPortraitFace,
-      portraitEyesClosed: portraitEyesClosed ?? this.portraitEyesClosed,
-      portraitEyeOpenAvg: portraitEyeOpenAvg ?? this.portraitEyeOpenAvg,
-      portraitBothEyesDetected: portraitBothEyesDetected ?? this.portraitBothEyesDetected,
-      portraitFaceX: portraitFaceX ?? this.portraitFaceX,
-      portraitFaceY: portraitFaceY ?? this.portraitFaceY,
-      portraitFaceW: portraitFaceW ?? this.portraitFaceW,
-      portraitFaceH: portraitFaceH ?? this.portraitFaceH,
-      portraitFaceSharpness: portraitFaceSharpness ?? this.portraitFaceSharpness,
-      debugGridSharps: debugGridSharps ?? this.debugGridSharps,
+      portrait: portrait ?? this.portrait,
+      debugGridSharps: debugGridSharps != null
+          ? debugGridSharps()
+          : this.debugGridSharps,
     );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is PhotoEntry &&
+        other.key == key &&
+        other.origin == origin &&
+        listEquals(other.displayBytes, displayBytes) &&
+        other.assetId == assetId &&
+        other.filePath == filePath &&
+        other.pHashHex == pHashHex &&
+        other.sharpness == sharpness &&
+        other.exposureScore == exposureScore &&
+        other.orbRows == orbRows &&
+        other.orbCols == orbCols &&
+        listEquals(other.orbBytes, orbBytes) &&
+        listEquals(other.histogram, histogram) &&
+        listEquals(other.hueHistogram, hueHistogram) &&
+        other.exif == exif &&
+        listEquals(other.semanticObjects, semanticObjects) &&
+        other.faceQualityScore == faceQualityScore &&
+        other.portrait == portrait &&
+        listEquals(other.debugGridSharps, debugGridSharps);
+  }
+
+  @override
+  int get hashCode {
+    return key.hashCode ^
+        origin.hashCode ^
+        Object.hashAll(displayBytes) ^
+        assetId.hashCode ^
+        filePath.hashCode ^
+        pHashHex.hashCode ^
+        sharpness.hashCode ^
+        exposureScore.hashCode ^
+        orbRows.hashCode ^
+        orbCols.hashCode ^
+        Object.hashAll(orbBytes) ^
+        Object.hashAll(histogram) ^
+        (hueHistogram != null ? Object.hashAll(hueHistogram!) : 0) ^
+        exif.hashCode ^
+        Object.hashAll(semanticObjects) ^
+        faceQualityScore.hashCode ^
+        portrait.hashCode ^
+        (debugGridSharps != null ? Object.hashAll(debugGridSharps!) : 0);
+  }
+
+  @override
+  String toString() {
+    return 'PhotoEntry(key: $key, origin: $origin, sharpness: $sharpness, exposure: $exposureScore, pHashHex: $pHashHex)';
   }
 }

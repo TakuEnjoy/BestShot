@@ -69,7 +69,8 @@ class _AndroidNdkResolver implements ToolResolver {
     );
 
     if (ndkInstances.isEmpty) {
-      final sdk = userConfig?.androidHome ??
+      final sdk =
+          userConfig?.androidHome ??
           Platform.environment['ANDROID_HOME'] ??
           Platform.environment['ANDROID_SDK_ROOT'];
       if (sdk != null && sdk.isNotEmpty) {
@@ -104,10 +105,7 @@ class _AndroidNdkResolver implements ToolResolver {
   }
 
   /// When glob-based lookup fails (e.g. Windows paths), scan [sdkRoot]/ndk.
-  Future<List<ToolInstance>> _androidNdkInstancesFromNdkFolder(
-    String sdkRoot,
-    Logger? logger,
-  ) async {
+  Future<List<ToolInstance>> _androidNdkInstancesFromNdkFolder(String sdkRoot, Logger? logger) async {
     final ndkRoot = Directory(p.join(sdkRoot, 'ndk'));
     if (!await ndkRoot.exists()) {
       logger?.fine('NDK folder missing: ${ndkRoot.path}');
@@ -122,7 +120,10 @@ class _AndroidNdkResolver implements ToolResolver {
     return [
       for (final uri in uris)
         PathVersionResolver.lookupVersion(
-          ToolInstance(tool: Tool(name: 'Android NDK'), uri: uri),
+          ToolInstance(
+            tool: Tool(name: 'Android NDK'),
+            uri: uri,
+          ),
         ),
     ];
   }

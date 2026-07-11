@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
@@ -12,6 +13,9 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'analysis_types.dart';
+import '../../models/photo_entry.dart';
+import '../../utils/jpeg_utils.dart';
+import '../semantic/mlkit_semantic_service.dart';
 
 class AnalyzerIsolate {
   static Future<List<AnalyzeOutput>> analyzeAll(
@@ -45,7 +49,9 @@ class AnalyzerIsolate {
     final maxWorkers = isMobile ? 3 : 6;
     final calculatedWorkerCount = (processorCount ~/ 2).clamp(1, maxWorkers);
     final workerCount = overrideWorkerCount ?? calculatedWorkerCount;
-    final actualWorkerCount = workerCount > inputs.length ? inputs.length : workerCount;
+    final actualWorkerCount = workerCount > inputs.length
+        ? inputs.length
+        : workerCount;
 
     final receivePort = ReceivePort();
     final errorPort = ReceivePort();
@@ -53,7 +59,7 @@ class AnalyzerIsolate {
     final List<Isolate> isolates = [];
     final results = <AnalyzeOutput>[];
     final completer = Completer<List<AnalyzeOutput>>();
-    
+
     int nextInputIndex = 0;
     int doneCount = 0;
     final workerSendPorts = <int, SendPort>{};
@@ -66,13 +72,17 @@ class AnalyzerIsolate {
     void assignNextTask(int workerId, SendPort workerSendPort) {
       if (nextInputIndex < inputs.length) {
         final input = inputs[nextInputIndex++];
-        final transferable = (input.displayBytes != null && input.filePath == null)
-            ? _TransferableInput(key: input.key, data: TransferableTypedData.fromList([input.displayBytes!]))
+        final transferable =
+            (input.displayBytes != null && input.filePath == null)
+            ? _TransferableInput(
+                key: input.key,
+                data: TransferableTypedData.fromList([input.displayBytes!]),
+              )
             : _TransferableInput(key: input.key, filePath: input.filePath);
-            
-        workerSendPort.send({'type': 'task', 'input': transferable});
+
+        workerSendPort.send(_MainTaskMessage(input: transferable));
       } else {
-        workerSendPort.send({'type': 'shutdown'});
+        workerSendPort.send(_MainShutdownMessage());
       }
     }
 
@@ -99,49 +109,28 @@ class AnalyzerIsolate {
 
     sub = receivePort.listen((message) {
       if (isCancelled?.call() == true) {
-        if (!completer.isCompleted) completer.completeError(Exception('キャンセルされました'));
+        if (!completer.isCompleted) {
+          completer.completeError(Exception('キャンセルされました'));
+        }
         return;
       }
-      if (message is Map) {
-        final type = message['type'];
-        final workerId = message['workerId'] as int;
-
-        if (type == 'init') {
-          final sp = message['sendPort'] as SendPort;
+      if (message is _WorkerMessage) {
+        if (message is _WorkerInitMessage) {
+          final workerId = message.workerId;
+          final sp = message.sendPort;
           workerSendPorts[workerId] = sp;
           assignNextTask(workerId, sp);
-        } else if (type == 'result') {
-          results.add(
-            AnalyzeOutput(
-              key: message['key'] as String,
-              pHashHex: message['pHashHex'] as String,
-              sharpness: (message['sharpness'] as num).toDouble(),
-              exposureScore: (message['exposureScore'] as num).toDouble(),
-              orbRows: (message['orbRows'] as num).toInt(),
-              orbCols: (message['orbCols'] as num).toInt(),
-              orbBytes: message['orbBytes'] as Uint8List,
-              histogram: message['histogram'] as Uint8List,
-              hueHistogram: message['hueHistogram'] as Float32List?,
-              hasFace: (message['hasFace'] as bool?) ?? false,
-              faceX: (message['faceX'] as num?)?.toInt() ?? 0,
-              faceY: (message['faceY'] as num?)?.toInt() ?? 0,
-              faceW: (message['faceW'] as num?)?.toInt() ?? 0,
-              faceH: (message['faceH'] as num?)?.toInt() ?? 0,
-              faceSharpness: (message['faceSharpness'] as num?)?.toDouble() ?? 0,
-              eyeOpenAvg: (message['eyeOpenAvg'] as num?)?.toDouble() ?? -1,
-              eyesClosed: (message['eyesClosed'] as bool?) ?? false,
-              bothEyesDetected: (message['bothEyesDetected'] as bool?) ?? false,
-              eyeSharpness: (message['eyeSharpness'] as num?)?.toDouble() ?? -1,
-              debugGridSharps: (message['debugGridSharps'] as List?)?.map((e) => (e as num).toDouble()).toList(),
-            ),
-          );
+        } else if (message is _WorkerResultMessage) {
+          final workerId = message.workerId;
+          final out = message.output;
+          results.add(out);
           doneCount++;
           onProgress?.call(doneCount, inputs.length);
-          
+
           if (workerSendPorts.containsKey(workerId)) {
             assignNextTask(workerId, workerSendPorts[workerId]!);
           }
-        } else if (type == 'done') {
+        } else if (message is _WorkerDoneMessage) {
           finishedWorkers++;
           if (finishedWorkers >= actualWorkerCount) {
             if (!completer.isCompleted) completer.complete(results);
@@ -159,7 +148,9 @@ class AnalyzerIsolate {
       cancelTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
         if (isCancelled()) {
           timer.cancel();
-          if (!completer.isCompleted) completer.completeError(Exception('キャンセルされました'));
+          if (!completer.isCompleted) {
+            completer.completeError(Exception('キャンセルされました'));
+          }
         }
       });
     }
@@ -182,7 +173,7 @@ class AnalyzerIsolate {
     // Isolate.spawn の entrypoint は「void Function(T)」である必要があるため、
     // async を直接渡さずに内部の async 処理へ委譲する。
     _entryAsync(message).catchError((e, s) {
-      print('Analyzer _entryAsync error: $e\\n$s');
+      developer.log('Analyzer _entryAsync error: $e\n$s');
     });
   }
 
@@ -194,11 +185,12 @@ class AnalyzerIsolate {
     }
 
     final workerReceivePort = ReceivePort();
-    message.mainSendPort.send({
-      'type': 'init',
-      'workerId': message.workerId,
-      'sendPort': workerReceivePort.sendPort,
-    });
+    message.mainSendPort.send(
+      _WorkerInitMessage(
+        workerId: message.workerId,
+        sendPort: workerReceivePort.sendPort,
+      ),
+    );
 
     final isAndroid = Platform.isAndroid;
     final isWindows = Platform.isWindows;
@@ -216,75 +208,64 @@ class AnalyzerIsolate {
           performanceMode: FaceDetectorMode.accurate,
         ),
       );
-      tmpDir = await getTemporaryDirectory();
     }
 
-    if (message.mode == DetectionMode.portrait && isWindows) {
-      final support = await getApplicationSupportDirectory();
-      final cascadeDir = Directory(p.join(support.path, 'cascades'));
-      final facePath = p.join(cascadeDir.path, 'haarcascade_frontalface_default.xml');
-      final eyePath = p.join(cascadeDir.path, 'haarcascade_eye.xml');
-      faceCascade = cv.CascadeClassifier.fromFile(facePath);
-      eyeCascade = cv.CascadeClassifier.fromFile(eyePath);
-    }
-
+    cv.ORB? orbDetector;
     try {
+      if (message.mode == DetectionMode.portrait && isAndroid) {
+        final baseTmp = await getTemporaryDirectory();
+        tmpDir = Directory(p.join(baseTmp.path, 'bestshot_isolate_${message.workerId}'));
+        if (!await tmpDir.exists()) {
+          await tmpDir.create(recursive: true);
+        }
+      }
+
+      if (message.mode == DetectionMode.portrait && isWindows) {
+        final support = await getApplicationSupportDirectory();
+        final cascadeDir = Directory(p.join(support.path, 'cascades'));
+        final facePath = p.join(
+          cascadeDir.path,
+          'haarcascade_frontalface_default.xml',
+        );
+        final eyePath = p.join(cascadeDir.path, 'haarcascade_eye.xml');
+        faceCascade = cv.CascadeClassifier.fromFile(facePath);
+        eyeCascade = cv.CascadeClassifier.fromFile(eyePath);
+      }
+
+      orbDetector = cv.ORB.create(nFeatures: 600, scaleFactor: 1.2, nLevels: 8);
       await for (final msg in workerReceivePort) {
-        if (msg is Map) {
-          final type = msg['type'];
-          if (type == 'shutdown') {
-            break;
-          } else if (type == 'task') {
-            final input = msg['input'] as _TransferableInput;
-            final bytes = input.data?.materialize().asUint8List();
-            final out = await _analyzeOne(
-              input.key,
-              bytes,
-              filePath: input.filePath,
-              mode: message.mode,
-              faceDetector: faceDetector,
-              tmpDir: tmpDir,
-              faceCascade: faceCascade,
-              eyeCascade: eyeCascade,
-            );
-            message.mainSendPort.send({
-              'type': 'result',
-              'workerId': message.workerId,
-              'key': out.key,
-              'pHashHex': out.pHashHex,
-              'sharpness': out.sharpness,
-              'exposureScore': out.exposureScore,
-              'orbRows': out.orbRows,
-              'orbCols': out.orbCols,
-              'orbBytes': out.orbBytes,
-              'histogram': out.histogram,
-              'hueHistogram': out.hueHistogram,
-              'hasFace': out.hasFace,
-              'faceX': out.faceX,
-              'faceY': out.faceY,
-              'faceW': out.faceW,
-              'faceH': out.faceH,
-              'faceSharpness': out.faceSharpness,
-              'eyeOpenAvg': out.eyeOpenAvg,
-              'eyesClosed': out.eyesClosed,
-              'bothEyesDetected': out.bothEyesDetected,
-              'eyeSharpness': out.eyeSharpness,
-              'debugGridSharps': out.debugGridSharps,
-            });
-          }
+        if (msg is _MainShutdownMessage) {
+          break;
+        } else if (msg is _MainTaskMessage) {
+          final input = msg.input;
+          final bytes = input.data?.materialize().asUint8List();
+          final out = await _analyzeOne(
+            input.key,
+            bytes,
+            filePath: input.filePath,
+            mode: message.mode,
+            faceDetector: faceDetector,
+            tmpDir: tmpDir,
+            faceCascade: faceCascade,
+            eyeCascade: eyeCascade,
+            orbDetector: orbDetector,
+          );
+          message.mainSendPort.send(
+            _WorkerResultMessage(workerId: message.workerId, output: out),
+          );
         }
       }
     } finally {
+      if (tmpDir != null && await tmpDir.exists()) {
+        await tmpDir.delete(recursive: true);
+      }
+      orbDetector?.dispose();
       await faceDetector?.close();
       faceCascade?.dispose();
       eyeCascade?.dispose();
       workerReceivePort.close();
+      message.mainSendPort.send(_WorkerDoneMessage(workerId: message.workerId));
     }
-
-    message.mainSendPort.send({
-      'type': 'done',
-      'workerId': message.workerId,
-    });
   }
 
   static AnalyzeOutput _emptyOutput(String key) {
@@ -321,16 +302,24 @@ class AnalyzerIsolate {
     Directory? tmpDir,
     cv.CascadeClassifier? faceCascade,
     cv.CascadeClassifier? eyeCascade,
+    required cv.ORB orbDetector,
   }) async {
     Uint8List rawBytes;
     if (filePath != null) {
       final fileBytes = await File(filePath).readAsBytes();
       final ext = p.extension(filePath).toLowerCase();
       final rawExts = <String>{
-        '.dng', '.arw', '.nef', '.cr2', '.cr3', '.raf', '.rw2', '.orf',
+        '.dng',
+        '.arw',
+        '.nef',
+        '.cr2',
+        '.cr3',
+        '.raf',
+        '.rw2',
+        '.orf',
       };
       if (rawExts.contains(ext)) {
-        final jpegBytes = _extractEmbeddedJpeg(fileBytes);
+        final jpegBytes = JpegUtils.extractEmbeddedJpeg(fileBytes);
         rawBytes = jpegBytes ?? fileBytes;
       } else {
         rawBytes = fileBytes;
@@ -344,7 +333,7 @@ class AnalyzerIsolate {
     }
 
     cv.Mat? mat;
-    cv.Mat? work;
+    late cv.Mat work;
     Uint8List? workBytes;
 
     try {
@@ -356,7 +345,8 @@ class AnalyzerIsolate {
       // 8. 解析解像度の制限 (最大1920px以下にリサイズしてメモリとCPU負荷を削減)
       const maxAnalysisEdge = 1920;
       if (mat.cols > maxAnalysisEdge || mat.rows > maxAnalysisEdge) {
-        final scale = maxAnalysisEdge / (mat.cols > mat.rows ? mat.cols : mat.rows);
+        final scale =
+            maxAnalysisEdge / (mat.cols > mat.rows ? mat.cols : mat.rows);
         final resizedMat = cv.resize(mat, (
           (mat.cols * scale).round(),
           (mat.rows * scale).round(),
@@ -365,31 +355,32 @@ class AnalyzerIsolate {
         mat = resizedMat;
       }
 
+      // Constants for resizing and JPEG quality
+      const maxWorkEdge = 640;
+      const jpegQuality = 90;
+
       // Resize for analysis (speed & accuracy)
-      const maxEdge = 640;
-      if (mat.cols > maxEdge || mat.rows > maxEdge) {
-        final scale = maxEdge / (mat.cols > mat.rows ? mat.cols : mat.rows);
+      if (mat.cols > maxWorkEdge || mat.rows > maxWorkEdge) {
+        final scale = maxWorkEdge / (mat.cols > mat.rows ? mat.cols : mat.rows);
         work = cv.resize(mat, (
           (mat.cols * scale).round(),
           (mat.rows * scale).round(),
         ));
       } else {
-        work = mat.clone();
+        work = mat;
       }
 
-      // Some methods still use bytes, so encode once if needed.
-      final encodeRes = cv.imencode(
-        '.jpg',
-        work,
-        params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, 90]),
-      );
-      workBytes = encodeRes.$2;
-
       final pHashHex = _calcEqualizedPHashHexFromMat(work);
-      final (fullSharpness, debugGridSharps) = _calcLaplacianVarianceFromMat(work, workBytes);
+      final (fullSharpness, debugGridSharps) = _calcLaplacianVarianceFromMat(
+        work,
+        () {
+          final res = cv.imencode('.jpg', work, params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, jpegQuality]));
+          return res.$1 ? res.$2 : null;
+        },
+      );
       final (exposure, histogram) = _calcExposureAndHistogramFromMat(work);
       final hueHistogram = _calcHueHistogramFromMat(work);
-      final orb = _calcOrbDescriptorsFromMat(work);
+      final orb = _calcOrbDescriptorsFromMat(work, orbDetector);
 
       var hasFace = false;
       var faceX = 0;
@@ -475,11 +466,13 @@ class AnalyzerIsolate {
         debugGridSharps: debugGridSharps,
       );
     } catch (e, stack) {
-      print('Isolate analysis error for key $key: $e\n$stack');
+      developer.log('Isolate analysis error for key $key: $e\n$stack');
       return _emptyOutput(key);
     } finally {
+      if (work != mat) {
+        work.dispose();
+      }
       mat?.dispose();
-      work?.dispose();
     }
   }
 
@@ -503,12 +496,15 @@ class AnalyzerIsolate {
       final hex = ic.PerceptualHash().calcPhash(dynamicPixelList);
       return hex.padLeft(16, '0');
     } catch (e, s) {
-      print('Error in _calcEqualizedPHashHexFromMat: $e\n$s');
+      developer.log('Error in _calcEqualizedPHashHexFromMat: $e\n$s');
       return '0000000000000000';
     }
   }
 
-  static (double, List<double>) _calcLaplacianVarianceFromMat(cv.Mat bgr, Uint8List? bytes) {
+  static (double, List<double>) _calcLaplacianVarianceFromMat(
+    cv.Mat bgr,
+    Uint8List? Function() getBytes,
+  ) {
     cv.Mat? gray;
     try {
       if (bgr.isEmpty) return (0.0, List.filled(16, 0.0));
@@ -561,7 +557,7 @@ class AnalyzerIsolate {
 
             variances.add(v.toDouble());
           } catch (e) {
-            print('Error in cell _calcLaplacianVarianceFromMat: $e');
+            developer.log('Error in cell _calcLaplacianVarianceFromMat: $e');
             variances.add(0.0);
           } finally {
             sub?.dispose();
@@ -571,12 +567,14 @@ class AnalyzerIsolate {
       }
 
       // Find top 4 blocks to calculate subject focused average sharpness
-      final sorted = List<double>.from(variances)..sort((a, b) => b.compareTo(a));
+      final sorted = List<double>.from(variances)
+        ..sort((a, b) => b.compareTo(a));
       final topAvg = (sorted[0] + sorted[1] + sorted[2] + sorted[3]) / 4.0;
 
       return (topAvg.isFinite ? topAvg : 0.0, variances);
     } catch (e, s) {
-      print('Error in _calcLaplacianVarianceFromMat: $e\n$s');
+      developer.log('Error in _calcLaplacianVarianceFromMat: $e\n$s');
+      final bytes = getBytes();
       final fb = bytes != null ? _fallbackLaplacianVariance(bytes) : 0.0;
       return (fb, List.filled(16, fb));
     } finally {
@@ -636,7 +634,7 @@ class AnalyzerIsolate {
       final score = (1.0 - clip) * (1.0 - (meanPenalty * 0.15));
       return (score.clamp(0.0, 1.0), normHist);
     } catch (e, s) {
-      print('Error in _calcExposureAndHistogramFromMat: $e\n$s');
+      developer.log('Error in _calcExposureAndHistogramFromMat: $e\n$s');
       return (0.0, Uint8List(256));
     } finally {
       gray?.dispose();
@@ -644,7 +642,7 @@ class AnalyzerIsolate {
     }
   }
 
-  static _OrbDesc _calcOrbDescriptorsFromMat(cv.Mat mat) {
+  static _OrbDesc _calcOrbDescriptorsFromMat(cv.Mat mat, cv.ORB orbDetector) {
     cv.Mat? gray;
     cv.Mat? eq;
     cv.Mat? desc;
@@ -652,11 +650,9 @@ class AnalyzerIsolate {
       gray = cv.cvtColor(mat, cv.COLOR_BGR2GRAY);
       eq = cv.equalizeHist(gray);
 
-      final orb = cv.ORB.create(nFeatures: 600, scaleFactor: 1.2, nLevels: 8);
       final emptyMat = cv.Mat.empty();
-      final result = orb.detectAndCompute(eq, emptyMat);
+      final result = orbDetector.detectAndCompute(eq, emptyMat);
       desc = result.$2;
-      orb.dispose();
       emptyMat.dispose();
       result.$1.dispose();
       if (desc.isEmpty) return _OrbDesc.empty();
@@ -669,7 +665,7 @@ class AnalyzerIsolate {
       final sliced = Uint8List.fromList(all.sublist(0, bytesLen));
       return _OrbDesc(rows: rows, cols: cols, bytes: sliced);
     } catch (e, s) {
-      print('Error in _calcOrbDescriptorsFromMat: $e\n$s');
+      developer.log('Error in _calcOrbDescriptorsFromMat: $e\n$s');
       return _OrbDesc.empty();
     } finally {
       gray?.dispose();
@@ -722,7 +718,7 @@ class AnalyzerIsolate {
       // 鮮やかな色がある場合は高めのしきい値(最大60)で背景のノイズを除去
       // 全体的に低彩度（白い壁や灰色）の場合はしきい値を下げて(最低15)、わずかな色味を捉える
       final thS = (maxS * 0.25).clamp(15.0, 60.0);
-      
+
       // 暗い画像の場合は低めのしきい値(最低15)にして、暗い被写体を除去しすぎないようにする
       final thV = (maxV * 0.20).clamp(15.0, 45.0);
 
@@ -730,7 +726,7 @@ class AnalyzerIsolate {
       maskV = cv.Mat.empty();
       cv.threshold(S, thS.toDouble(), 255.0, cv.THRESH_BINARY, dst: maskS);
       cv.threshold(V, thV.toDouble(), 255.0, cv.THRESH_BINARY, dst: maskV);
-      
+
       mask = cv.bitwiseAND(maskS, maskV);
 
       // 1. Hue Hist (180 bins)
@@ -742,7 +738,13 @@ class AnalyzerIsolate {
         cv.VecF32.fromList([0, 180]),
       );
       histHNorm = cv.Mat.empty();
-      cv.normalize(histH, histHNorm, alpha: 1.0, beta: 0.0, normType: cv.NORM_L1);
+      cv.normalize(
+        histH,
+        histHNorm,
+        alpha: 1.0,
+        beta: 0.0,
+        normType: cv.NORM_L1,
+      );
 
       // 2. Saturation Hist (256 bins)
       histS = cv.calcHist(
@@ -753,7 +755,13 @@ class AnalyzerIsolate {
         cv.VecF32.fromList([0, 256]),
       );
       histSNorm = cv.Mat.empty();
-      cv.normalize(histS, histSNorm, alpha: 1.0, beta: 0.0, normType: cv.NORM_L1);
+      cv.normalize(
+        histS,
+        histSNorm,
+        alpha: 1.0,
+        beta: 0.0,
+        normType: cv.NORM_L1,
+      );
 
       // 3. Value Hist (256 bins)
       histV = cv.calcHist(
@@ -764,7 +772,13 @@ class AnalyzerIsolate {
         cv.VecF32.fromList([0, 256]),
       );
       histVNorm = cv.Mat.empty();
-      cv.normalize(histV, histVNorm, alpha: 1.0, beta: 0.0, normType: cv.NORM_L1);
+      cv.normalize(
+        histV,
+        histVNorm,
+        alpha: 1.0,
+        beta: 0.0,
+        normType: cv.NORM_L1,
+      );
 
       for (final c in channels) {
         c.dispose();
@@ -788,7 +802,7 @@ class AnalyzerIsolate {
 
       return combined;
     } catch (e, s) {
-      print('Error in _calcHueHistogramFromMat: $e\n$s');
+      developer.log('Error in _calcHueHistogramFromMat: $e\n$s');
       return null;
     } finally {
       centerMat?.dispose();
@@ -926,7 +940,7 @@ class AnalyzerIsolate {
         eyeSharpness: avgEyeSharpness,
       );
     } catch (e, s) {
-      print('Error in _portraitAnalyzeWindowsFromMat: $e\n$s');
+      developer.log('Error in _portraitAnalyzeWindowsFromMat: $e\n$s');
       return const _PortraitResult.none();
     } finally {
       gray?.dispose();
@@ -957,7 +971,7 @@ class AnalyzerIsolate {
       final v = stddev.val1 * stddev.val1;
       return v.isFinite ? v : 0;
     } catch (e, s) {
-      print('Error in _calcLaplacianVarianceInRoi: $e\n$s');
+      developer.log('Error in _calcLaplacianVarianceInRoi: $e\n$s');
       return 0;
     } finally {
       sub?.dispose();
@@ -1031,7 +1045,7 @@ class AnalyzerIsolate {
       final variance = (meanSq - (mean * mean));
       return variance.isFinite ? variance.abs() : 0;
     } catch (e, s) {
-      print('Error in _fallbackLaplacianVariance: $e\n$s');
+      developer.log('Error in _fallbackLaplacianVariance: $e\n$s');
       return 0;
     }
   }
@@ -1084,7 +1098,8 @@ class AnalyzerIsolate {
 
       // Primary face is the largest one
       Face primaryFace = mainFaces.first;
-      var primaryArea = primaryFace.boundingBox.width * primaryFace.boundingBox.height;
+      var primaryArea =
+          primaryFace.boundingBox.width * primaryFace.boundingBox.height;
       for (final f in mainFaces.skip(1)) {
         final area = f.boundingBox.width * f.boundingBox.height;
         if (area > primaryArea) {
@@ -1160,7 +1175,8 @@ class AnalyzerIsolate {
         if (leftLandmark != null) {
           final ex = leftLandmark.position.x;
           final ey = leftLandmark.position.y;
-          final ew = (rw * 0.15).round(); // Eye ROI size approx 15% of face width
+          final ew = (rw * 0.15)
+              .round(); // Eye ROI size approx 15% of face width
           final eroi = cv.Rect(
             (ex - ew / 2).round(),
             (ey - ew / 2).round(),
@@ -1198,7 +1214,9 @@ class AnalyzerIsolate {
         avgEyeSharpness = (avgV / 1000.0).clamp(0.0, 1.0);
       }
 
-      final finalEyeOpenAvg = (minEyeOpen == 1.0 && !anyBothEyesDetected) ? -1.0 : minEyeOpen;
+      final finalEyeOpenAvg = (minEyeOpen == 1.0 && !anyBothEyesDetected)
+          ? -1.0
+          : minEyeOpen;
 
       final pBb = primaryFace.boundingBox;
       return _PortraitResult(
@@ -1301,35 +1319,32 @@ class _PortraitResult {
   final double eyeSharpness;
 }
 
-Uint8List? _extractEmbeddedJpeg(Uint8List bytes) {
-  try {
-    int bestStart = -1;
-    int bestEnd = -1;
-    int maxLen = 0;
 
-    for (int i = 0; i < bytes.length - 1; i++) {
-      if (bytes[i] == 0xFF && bytes[i + 1] == 0xD8) {
-        int start = i;
-        for (int j = i + 2; j < bytes.length - 1; j++) {
-          if (bytes[j] == 0xFF && bytes[j + 1] == 0xD9) {
-            int end = j + 2;
-            int len = end - start;
-            if (len > maxLen) {
-              maxLen = len;
-              bestStart = start;
-              bestEnd = end;
-            }
-            i = j;
-            break;
-          }
-          if (j - start > 50 * 1024 * 1024) break;
-        }
-      }
-    }
 
-    if (bestStart >= 0 && bestEnd > bestStart) {
-      return Uint8List.sublistView(bytes, bestStart, bestEnd);
-    }
-  } catch (_) {}
-  return null;
+sealed class _WorkerMessage {}
+
+class _WorkerInitMessage extends _WorkerMessage {
+  _WorkerInitMessage({required this.workerId, required this.sendPort});
+  final int workerId;
+  final SendPort sendPort;
 }
+
+class _WorkerResultMessage extends _WorkerMessage {
+  _WorkerResultMessage({required this.workerId, required this.output});
+  final int workerId;
+  final AnalyzeOutput output;
+}
+
+class _WorkerDoneMessage extends _WorkerMessage {
+  _WorkerDoneMessage({required this.workerId});
+  final int workerId;
+}
+
+sealed class _MainMessage {}
+
+class _MainTaskMessage extends _MainMessage {
+  _MainTaskMessage({required this.input});
+  final _TransferableInput input;
+}
+
+class _MainShutdownMessage extends _MainMessage {}

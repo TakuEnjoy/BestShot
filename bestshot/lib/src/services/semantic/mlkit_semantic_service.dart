@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
@@ -66,9 +67,11 @@ class MlKitSemanticService {
     Directory tmp, {
     required int maxEdge,
   }) async {
+    final uniqueId =
+        '${DateTime.now().millisecondsSinceEpoch}_${e.key.hashCode}';
+    final fp = p.join(tmp.path, 'bestshot_$uniqueId.jpg');
     try {
       final bytes = e.displayBytes;
-      final fp = p.join(tmp.path, 'bestshot_${e.key.hashCode}.jpg');
       await File(fp).writeAsBytes(bytes, flush: true);
       final input = InputImage.fromFilePath(fp);
 
@@ -84,7 +87,8 @@ class MlKitSemanticService {
       }
 
       // Decode once to get the dimensions of displayBytes
-      final decoded = img.decodeImage(bytes);
+      final decoder = img.findDecoderForData(bytes);
+      final decoded = decoder?.startDecode(bytes);
       if (decoded == null) {
         return e.copyWith(
           semanticObjects: const [],
@@ -115,14 +119,22 @@ class MlKitSemanticService {
       }
 
       var updatedSharpness = e.sharpness;
-      if (mainObj != null && e.debugGridSharps != null && e.debugGridSharps!.isNotEmpty) {
+      if (mainObj != null &&
+          e.debugGridSharps != null &&
+          e.debugGridSharps!.isNotEmpty) {
         final bb = mainObj.boundingBox;
         final ox = (bb.left / w).clamp(0.0, 1.0);
         final oy = (bb.top / h).clamp(0.0, 1.0);
         final ow = (bb.width / w).clamp(0.0, 1.0);
         final oh = (bb.height / h).clamp(0.0, 1.0);
 
-        final objSharpness = _estimateObjectSharpness(e.debugGridSharps!, ox, oy, ow, oh);
+        final objSharpness = _estimateObjectSharpness(
+          e.debugGridSharps!,
+          ox,
+          oy,
+          ow,
+          oh,
+        );
         if (objSharpness > 0) {
           updatedSharpness = objSharpness;
         }
@@ -133,12 +145,12 @@ class MlKitSemanticService {
         faceQualityScore: faceScore,
         sharpness: updatedSharpness,
       );
-    } catch (_) {
+    } catch (err, stack) {
+      developer.log('Error in MLKit semantic processing: $err\n$stack');
       return e;
     } finally {
       // Clean up the temp file
       try {
-        final fp = p.join(tmp.path, 'bestshot_${e.key.hashCode}.jpg');
         final f = File(fp);
         if (await f.exists()) {
           await f.delete();

@@ -61,8 +61,17 @@ class PhotoGrouper {
     }
 
     String find(String k) {
-      if (parent[k] == k) return k;
-      return parent[k] = find(parent[k]!);
+      var root = k;
+      while (parent[root] != root) {
+        root = parent[root]!;
+      }
+      var curr = k;
+      while (curr != root) {
+        final next = parent[curr]!;
+        parent[curr] = root;
+        curr = next;
+      }
+      return root;
     }
 
     void union(String a, String b) {
@@ -94,6 +103,10 @@ class PhotoGrouper {
             tb != null &&
             tb.difference(ta).inMinutes.abs() > 10) {
           break;
+        }
+
+        if (find(a.key) == find(b.key)) {
+          continue;
         }
 
         if (_similar(a, b, config)) {
@@ -154,10 +167,10 @@ class PhotoGrouper {
       return ta == null && tb == null
           ? 0
           : ta == null
-              ? 1
-              : tb == null
-                  ? -1
-                  : ta.compareTo(tb);
+          ? 1
+          : tb == null
+          ? -1
+          : ta.compareTo(tb);
     });
 
     return groups;
@@ -239,7 +252,10 @@ class PhotoGrouper {
     // 3) pHash Pre-filtering: if pHash distance is too large, they cannot be similar
     final ha = a.pHashHex;
     final hb = b.pHashHex;
-    if (ha.isNotEmpty && hb.isNotEmpty && ha != '0000000000000000' && hb != '0000000000000000') {
+    if (ha.isNotEmpty &&
+        hb.isNotEmpty &&
+        ha != '0000000000000000' &&
+        hb != '0000000000000000') {
       final pHashDist = _hammingDistance64Hex(ha, hb);
       if (pHashDist > 28) {
         return false; // Fast reject for completely different images

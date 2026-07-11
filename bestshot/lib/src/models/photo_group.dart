@@ -1,18 +1,43 @@
+import 'dart:collection';
 import 'photo_entry.dart';
 
 class PhotoGroup {
   PhotoGroup({
     required this.id,
-    required this.items,
-    required this.bestKey,
-    required this.deleteCandidateKeys,
+    required Iterable<PhotoEntry> items,
+    required String bestKey,
+    required Iterable<String> deleteCandidateKeys,
     required this.isBurst,
-  });
+  }) : items = UnmodifiableListView(items.toList()),
+       deleteCandidateKeys = Set.unmodifiable(deleteCandidateKeys),
+       _bestKey = bestKey {
+    assert(
+      this.items.any((e) => e.key == _bestKey),
+      'bestKey must exist in items',
+    );
+  }
 
   final String id;
   final List<PhotoEntry> items;
-  String bestKey; // Made mutable to allow changing best key from loupe preview
   final Set<String> deleteCandidateKeys;
   final bool isBurst;
-}
 
+  final String _bestKey;
+  String get bestKey => _bestKey;
+
+  PhotoGroup copyWith({
+    String? id,
+    Iterable<PhotoEntry>? items,
+    String? bestKey,
+    Iterable<String>? deleteCandidateKeys,
+    bool? isBurst,
+  }) {
+    return PhotoGroup(
+      id: id ?? this.id,
+      items: items ?? this.items,
+      bestKey: bestKey ?? this.bestKey,
+      deleteCandidateKeys: deleteCandidateKeys ?? this.deleteCandidateKeys,
+      isBurst: isBurst ?? this.isBurst,
+    );
+  }
+}

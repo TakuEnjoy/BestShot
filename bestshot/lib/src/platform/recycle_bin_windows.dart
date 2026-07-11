@@ -27,8 +27,7 @@ class RecycleBinWindows {
       }
     } finally {
       calloc.free(op);
-      calloc.free(pFrom);
+      malloc.free(pFrom);
     }
   }
 }
-

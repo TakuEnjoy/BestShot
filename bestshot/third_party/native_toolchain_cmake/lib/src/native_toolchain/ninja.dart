@@ -30,15 +30,10 @@ class _NinjaResolver implements ToolResolver {
             InstallLocationResolver(
               toolName: 'Ninja',
               paths: [
-                if (userConfig?.androidHome != null)
-                  '${userConfig?.androidHome}/cmake/*/bin/$executableName',
-                if (Platform.isLinux)
-                  r'$HOME/Android/Sdk/cmake/*/bin/' + executableName,
-                if (Platform.isMacOS)
-                  r'$HOME/Library/Android/sdk/cmake/*/bin/' + executableName,
-                if (Platform.isWindows)
-                  r'$HOME/AppData/Local/Android/Sdk/cmake/*/bin/' +
-                      executableName,
+                if (userConfig?.androidHome != null) '${userConfig?.androidHome}/cmake/*/bin/$executableName',
+                if (Platform.isLinux) r'$HOME/Android/Sdk/cmake/*/bin/' + executableName,
+                if (Platform.isMacOS) r'$HOME/Library/Android/sdk/cmake/*/bin/' + executableName,
+                if (Platform.isWindows) r'$HOME/AppData/Local/Android/Sdk/cmake/*/bin/' + executableName,
               ],
             ),
           ]),
@@ -93,25 +88,14 @@ class _NinjaResolver implements ToolResolver {
           Platform.environment['ANDROID_HOME'] ??
           Platform.environment['ANDROID_SDK_ROOT'];
       if (sdk != null && sdk.isNotEmpty) {
-        androidNinjaInstances = await _ninjaInstancesFromAndroidSdkCmake(
-          sdk,
-          executableName,
-          logger,
-        );
+        androidNinjaInstances = await _ninjaInstancesFromAndroidSdkCmake(sdk, executableName, logger);
       }
     }
-    logger?.info(
-      'Found Android Ninja: ${androidNinjaInstances.map((e) => e.toString()).join(', ')}',
-    );
+    logger?.info('Found Android Ninja: ${androidNinjaInstances.map((e) => e.toString()).join(', ')}');
 
     final systemResolver = _getSystemResolver();
-    final systemNinjaInstances = await systemResolver.resolve(
-      logger: logger,
-      environment: environment,
-    );
-    logger?.info(
-      'Found System Ninja: ${systemNinjaInstances.map((e) => e.toString()).join(', ')}',
-    );
+    final systemNinjaInstances = await systemResolver.resolve(logger: logger, environment: environment);
+    logger?.info('Found System Ninja: ${systemNinjaInstances.map((e) => e.toString()).join(', ')}');
 
     final combinedNinjaInstances = <ToolInstance>[];
     if (userConfig?.preferAndroidNinja ?? false) {
@@ -145,16 +129,10 @@ class _NinjaResolver implements ToolResolver {
       );
     }
 
-    logger?.info(
-      'Found Ninja: ${combinedNinjaInstances.map((e) => e.toString()).join(', ')}',
-    );
+    logger?.info('Found Ninja: ${combinedNinjaInstances.map((e) => e.toString()).join(', ')}');
     if (combinedNinjaInstances.isEmpty) {
-      logger?.severe(
-        'Failed to find ninja with version=${specificNinjaVersion ?? 'latest'}',
-      );
-      throw Exception(
-        'Failed to find ninja version: ${specificNinjaVersion ?? 'latest'}',
-      );
+      logger?.severe('Failed to find ninja with version=${specificNinjaVersion ?? 'latest'}');
+      throw Exception('Failed to find ninja version: ${specificNinjaVersion ?? 'latest'}');
     }
 
     return combinedNinjaInstances;
@@ -181,9 +159,7 @@ class _NinjaResolver implements ToolResolver {
       );
     }
     if (out.isNotEmpty) {
-      logger?.fine(
-        'Found ${out.length} Ninja binary(ies) under ${cmakeRoot.path}',
-      );
+      logger?.fine('Found ${out.length} Ninja binary(ies) under ${cmakeRoot.path}');
     }
     return out;
   }

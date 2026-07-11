@@ -4,7 +4,7 @@ import 'package:win32/win32.dart';
 class FolderPickerWindows {
   /// Shows a native folder picker dialog and returns selected folder path.
   /// Returns null when cancelled.
-  static String? pickFolder() {
+  static String? pickFolder({String title = 'フォルダを選択'}) {
     final hrInit = CoInitializeEx(COINIT_APARTMENTTHREADED);
     // RPC_E_CHANGED_MODE can happen if COM already initialized differently; continue.
     if (hrInit.isError && hrInit != HRESULT(RPC_E_CHANGED_MODE)) {
@@ -15,9 +15,13 @@ class FolderPickerWindows {
       return using((arena) {
         final dialog = arena.com<IFileOpenDialog>(FileOpenDialog);
 
-        final options = dialog.getOptions() | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
+        final options =
+            dialog.getOptions() |
+            FOS_PICKFOLDERS |
+            FOS_FORCEFILESYSTEM |
+            FOS_PATHMUSTEXIST;
         dialog.setOptions(options);
-        dialog.setTitle(arena.pcwstr('フォルダを選択'));
+        dialog.setTitle(arena.pcwstr(title));
 
         try {
           dialog.show(null);
@@ -32,9 +36,11 @@ class FolderPickerWindows {
         if (item == null) return null;
 
         final pwstr = item.getDisplayName(SIGDN_FILESYSPATH);
-        final path = pwstr.toDartString();
-        CoTaskMemFree(pwstr);
-        return path;
+        try {
+          return pwstr.toDartString();
+        } finally {
+          CoTaskMemFree(pwstr);
+        }
       });
     } finally {
       if (hrInit != HRESULT(RPC_E_CHANGED_MODE)) {
@@ -43,4 +49,3 @@ class FolderPickerWindows {
     }
   }
 }
-

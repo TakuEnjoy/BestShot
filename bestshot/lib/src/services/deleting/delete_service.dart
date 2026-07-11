@@ -1,9 +1,10 @@
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:photo_manager/photo_manager.dart';
 
 import '../../models/photo_entry.dart';
-import '../../platform/recycle_bin_windows.dart';
+import '../../platform/recycle_bin.dart';
 
 class DeleteService {
   /// Behavior:
@@ -17,7 +18,20 @@ class DeleteService {
           .where((e) => e.origin == PhotoOrigin.filePath && e.filePath != null)
           .map((e) => e.filePath!)
           .toList(growable: false);
-      RecycleBinWindows.moveToRecycleBin(paths);
+      try {
+        RecycleBinWindows.moveToRecycleBin(paths);
+      } catch (e, s) {
+        developer.log('Windows recycle bin error: $e\n$s');
+        // Fallback to direct delete if recycle bin fails
+        for (final path in paths) {
+          try {
+            final file = File(path);
+            if (await file.exists()) {
+              await file.delete();
+            }
+          } catch (_) {}
+        }
+      }
       return;
     }
 
@@ -40,15 +54,16 @@ class DeleteService {
     }
 
     // Keep PhotoManager deletion for backward compatibility with legacy imported device assets
-    final ids =
-        entries.where((e) => e.origin == PhotoOrigin.deviceAsset && e.assetId != null).map((e) => e.assetId!).toList();
+    final ids = entries
+        .where((e) => e.origin == PhotoOrigin.deviceAsset && e.assetId != null)
+        .map((e) => e.assetId!)
+        .toList();
     if (ids.isEmpty) return;
 
     try {
       await PhotoManager.editor.deleteWithIds(ids);
     } catch (e, s) {
-      print('PhotoManager delete error: $e\\n$s');
+      developer.log('PhotoManager delete error: $e\n$s');
     }
   }
 }
-

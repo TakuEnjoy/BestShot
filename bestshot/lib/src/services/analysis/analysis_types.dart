@@ -3,11 +3,7 @@ import 'dart:typed_data';
 enum DetectionMode { standard, portrait }
 
 class AnalyzeInput {
-  AnalyzeInput({
-    required this.key,
-    this.displayBytes,
-    this.filePath,
-  });
+  AnalyzeInput({required this.key, this.displayBytes, this.filePath});
 
   final String key;
   final Uint8List? displayBytes;
@@ -50,7 +46,6 @@ class AnalyzeOutput {
   final Uint8List histogram; // 256 bytes
   final Float32List? hueHistogram; // 180 floats
 
-
   /// Portrait-mode extras.
   final bool hasFace;
   final int faceX;
@@ -76,4 +71,3 @@ class AnalyzeOutput {
   /// Grid sharpness values (4x4, 16 elements).
   final List<double>? debugGridSharps;
 }
-
