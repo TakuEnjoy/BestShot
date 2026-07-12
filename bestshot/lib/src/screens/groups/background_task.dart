@@ -1,5 +1,11 @@
-class BackgroundTask {
-  BackgroundTask({required this.id, required this.title, required this.total});
+part of '../groups_screen.dart';
+
+class _BackgroundTask {
+  _BackgroundTask({
+    required this.id,
+    required this.title,
+    required this.total,
+  });
   final String id;
   final String title;
   final int total;

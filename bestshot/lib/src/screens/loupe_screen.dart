@@ -245,7 +245,8 @@ class _LoupeScreenState extends State<LoupeScreen> {
     }
 
     if (key == LogicalKeyboardKey.enter ||
-        key == LogicalKeyboardKey.numpadEnter) {
+        key == LogicalKeyboardKey.numpadEnter ||
+        key == LogicalKeyboardKey.escape) {
       Navigator.of(context).pop();
       return KeyEventResult.handled;
     }
@@ -414,7 +415,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
           color: const Color(
             0xFF111827,
           ).withValues(alpha: 0.92), // Deep Dark Card
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0xFF1F2937), width: 1.5),
           boxShadow: [
             BoxShadow(
@@ -460,7 +461,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
                 widget.onToggleDelete?.call(key, !selectedForDelete);
                 setState(() {});
               },
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(4),
               child: Container(
                 constraints: const BoxConstraints(minWidth: 100),
                 height: 48,
@@ -469,7 +470,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
                   color: selectedForDelete
                       ? Colors.red.withValues(alpha: 0.15)
                       : Colors.transparent,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(4),
                   border: Border.all(
                     color: selectedForDelete ? Colors.red : Colors.white30,
                     width: 1,
@@ -515,7 +516,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
                   }
                 });
               },
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(4),
               child: Container(
                 constraints: const BoxConstraints(minWidth: 100),
                 height: 48,
@@ -524,7 +525,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
                   color: isBest
                       ? Colors.amber.withValues(alpha: 0.15)
                       : Colors.white.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(4),
                   border: Border.all(
                     color: isBest ? Colors.amber : Colors.white30,
                     width: 1,
@@ -968,7 +969,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
                       ),
                       decoration: BoxDecoration(
                         color: Colors.black.withValues(alpha: 0.6),
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(4),
                         border: Border.all(color: Colors.white24),
                       ),
                       child: Column(
@@ -1061,7 +1062,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
                       padding: const EdgeInsets.all(4),
                       decoration: BoxDecoration(
                         color: Colors.black.withValues(alpha: 0.4),
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(4),
                         border: Border.all(color: Colors.white10),
                       ),
                       child: CustomPaint(
@@ -1092,16 +1093,8 @@ class _HistogramPainter extends CustomPainter {
     if (data.isEmpty) return;
 
     final rect = Offset.zero & size;
-    final gradient = LinearGradient(
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-      colors: [
-        barColor.withValues(alpha: 0.85),
-        barColor.withValues(alpha: 0.2),
-      ],
-    );
     final barPaint = Paint()
-      ..shader = gradient.createShader(rect)
+      ..color = barColor.withOpacity(0.85)
       ..style = PaintingStyle.fill
       ..isAntiAlias = false;
 

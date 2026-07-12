@@ -640,15 +640,8 @@ class _ImportScreenState extends State<ImportScreen> {
     final heroHeader = Container(
       padding: EdgeInsets.all(isSmallMobile ? 12 : 20),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            colorScheme.primary.withValues(alpha: 0.08),
-            colorScheme.secondary.withValues(alpha: 0.03),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(20),
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: colorScheme.primary.withValues(alpha: 0.15),
           width: 1,
@@ -727,7 +720,7 @@ class _ImportScreenState extends State<ImportScreen> {
               value: _detectionMode,
               decoration: InputDecoration(
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(4),
                 ),
                 isDense: true,
                 contentPadding: EdgeInsets.symmetric(
@@ -782,7 +775,7 @@ class _ImportScreenState extends State<ImportScreen> {
                     decoration: InputDecoration(
                       labelText: '分',
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(4),
                       ),
                       isDense: true,
                       contentPadding: isSmallMobile
@@ -815,7 +808,7 @@ class _ImportScreenState extends State<ImportScreen> {
                     decoration: InputDecoration(
                       labelText: '秒',
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(4),
                       ),
                       isDense: true,
                       contentPadding: isSmallMobile
@@ -856,7 +849,7 @@ class _ImportScreenState extends State<ImportScreen> {
               value: _maxCount,
               decoration: InputDecoration(
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(4),
                 ),
                 isDense: true,
                 contentPadding: isSmallMobile
@@ -887,26 +880,14 @@ class _ImportScreenState extends State<ImportScreen> {
     if (!_busy) {
       importButton = Container(
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF6366F1), Color(0xFF4F46E5)], // Indigo gradients
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF6366F1).withValues(alpha: 0.3),
-              blurRadius: 16,
-              spreadRadius: 2,
-              offset: const Offset(0, 4),
-            ),
-          ],
+          color: colorScheme.primary,
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Material(
           color: Colors.transparent,
           child: InkWell(
             onTap: () => _runFolderImportAndAnalyze(!isWindows),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(8),
             child: Padding(
               padding: EdgeInsets.symmetric(
                 vertical: isSmallMobile ? 16 : 24,
@@ -959,7 +940,7 @@ class _ImportScreenState extends State<ImportScreen> {
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           color: colorScheme.surface,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(color: colorScheme.primary.withValues(alpha: 0.2)),
         ),
         child: Column(
@@ -1038,7 +1019,7 @@ class _ImportScreenState extends State<ImportScreen> {
             color: _isError
                 ? colorScheme.error.withValues(alpha: 0.12)
                 : colorScheme.secondary.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(4),
             border: Border.all(
               color: _isError
                   ? colorScheme.error.withValues(alpha: 0.3)
@@ -1076,18 +1057,13 @@ class _ImportScreenState extends State<ImportScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: ShaderMask(
-          shaderCallback: (bounds) => const LinearGradient(
-            colors: [Color(0xFF818CF8), Color(0xFF34D399)], // Indigo to Emerald
-          ).createShader(bounds),
-          child: const Text(
-            'BestShot',
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              fontSize: 24,
-              letterSpacing: 1.5,
-              color: Colors.white,
-            ),
+        title: const Text(
+          'BestShot',
+          style: TextStyle(
+            fontWeight: FontWeight.w700, // Slightly less bold for pro look
+            fontSize: 22,
+            letterSpacing: 1.2,
+            color: Colors.white,
           ),
         ),
       ),

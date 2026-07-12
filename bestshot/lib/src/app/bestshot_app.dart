@@ -10,16 +10,15 @@ class BestShotApp extends StatefulWidget {
   State<BestShotApp> createState() => _BestShotAppState();
 }
 
-final _colorScheme =
-    ColorScheme.fromSeed(
-      seedColor: const Color(0xFF6366F1), // Neon Indigo
-      brightness: Brightness.dark,
-    ).copyWith(
-      surface: const Color(0xFF111827), // Deep Card Charcoal
-      primary: const Color(0xFF6366F1),
-      secondary: const Color(0xFF10B981), // Emerald Accent
-      error: const Color(0xFFEF4444),
-    );
+final _colorScheme = ColorScheme.fromSeed(
+  seedColor: const Color(0xFF3B82F6), // Calm Blue
+  brightness: Brightness.dark,
+).copyWith(
+  surface: const Color(0xFF252526), // Panel Charcoal (VSCode-like)
+  primary: const Color(0xFF3B82F6),
+  secondary: const Color(0xFF3B82F6), // Use single accent color
+  error: const Color(0xFFEF4444),
+);
 
 class _BestShotAppState extends State<BestShotApp> with WidgetsBindingObserver {
   @override
@@ -51,17 +50,17 @@ class _BestShotAppState extends State<BestShotApp> with WidgetsBindingObserver {
       theme: ThemeData(
         colorScheme: _colorScheme,
         useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFF090D16),
+        scaffoldBackgroundColor: const Color(0xFF1E1E1E), // App Base Dark Grey
         cardTheme: CardThemeData(
-          color: const Color(0xFF111827),
-          elevation: 4,
+          color: const Color(0xFF252526),
+          elevation: 2,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFF1F2937), width: 1),
+            borderRadius: BorderRadius.circular(8),
+            side: const BorderSide(color: Color(0xFF333333), width: 1),
           ),
         ),
         appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF090D16),
+          backgroundColor: Color(0xFF1E1E1E),
           elevation: 0,
           centerTitle: true,
           scrolledUnderElevation: 0,

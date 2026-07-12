@@ -8,6 +8,12 @@ class RecycleBinWindows {
   static void moveToRecycleBin(List<String> filePaths) {
     if (filePaths.isEmpty) return;
 
+    for (final path in filePaths) {
+      if (path.length > 259) {
+        throw Exception('File path is too long for Recycle Bin (MAX_PATH limit): $path');
+      }
+    }
+
     // SHFileOperation expects a double-null terminated list of paths.
     final buffer = '${filePaths.join('\u0000')}\u0000\u0000';
     final pFrom = buffer.toNativeUtf16();

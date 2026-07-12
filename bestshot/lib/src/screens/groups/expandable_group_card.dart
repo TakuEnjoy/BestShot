@@ -1,10 +1,7 @@
-import 'package:flutter/material.dart';
-import '../../models/photo_group.dart';
-import 'photo_tile.dart';
+part of '../groups_screen.dart';
 
-class ExpandableGroupCard extends StatelessWidget {
-  const ExpandableGroupCard({
-    super.key,
+class _ExpandableGroupCard extends StatelessWidget {
+  const _ExpandableGroupCard({
     required this.group,
     required this.selectedForDelete,
     required this.onToggleDelete,
@@ -45,15 +42,13 @@ class ExpandableGroupCard extends StatelessWidget {
     return Material(
       color: theme.colorScheme.surface,
       elevation: isKeyboardGroupFocused ? 4 : 0,
-      shadowColor: isKeyboardGroupFocused
-          ? theme.colorScheme.primary.withValues(alpha: 0.3)
-          : null,
+      shadowColor: isKeyboardGroupFocused ? theme.colorScheme.primary.withOpacity(0.3) : null,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(8),
         side: BorderSide(
           color: isKeyboardGroupFocused
               ? theme.colorScheme.primary
-              : theme.dividerColor.withValues(alpha: 0.12),
+              : theme.dividerColor.withOpacity(0.12),
           width: isKeyboardGroupFocused ? 2 : 1,
         ),
       ),
@@ -66,10 +61,7 @@ class ExpandableGroupCard extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: isKeyboardGroupFocused
                         ? theme.colorScheme.primary
@@ -93,29 +85,17 @@ class ExpandableGroupCard extends StatelessWidget {
                     children: [
                       Text(
                         '${group.items.length} 枚',
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(width: 8),
-                      Semantics(
-                        label: 'ベストショット以外の写真をすべて削除候補に設定する',
-                        button: true,
-                        child: TextButton.icon(
-                          onPressed: onSelectBestOnly,
-                          icon: const Icon(Icons.playlist_remove, size: 16),
-                          label: const Text(
-                            'Best以外を削除候補に',
-                            style: TextStyle(fontSize: 11),
-                          ),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
+                      TextButton.icon(
+                        onPressed: onSelectBestOnly,
+                        icon: const Icon(Icons.playlist_remove, size: 16),
+                        label: const Text('Best以外を削除候補に', style: TextStyle(fontSize: 11)),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
                       ),
                     ],
@@ -138,9 +118,7 @@ class ExpandableGroupCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               '最高鮮明度: ${best.sharpness.toStringAsFixed(0)}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.hintColor,
-              ),
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
             ),
             const SizedBox(height: 10),
             SizedBox(
@@ -152,7 +130,7 @@ class ExpandableGroupCard extends StatelessWidget {
                     for (final e in group.items) ...[
                       SizedBox(
                         width: 140,
-                        child: PhotoTile(
+                        child: _PhotoTile(
                           bytes: e.displayBytes,
                           sharpness: e.sharpness,
                           exposureScore: e.exposureScore,

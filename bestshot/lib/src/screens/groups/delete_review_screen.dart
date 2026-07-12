@@ -1,6 +1,4 @@
-import 'package:flutter/material.dart';
-import '../../models/photo_entry.dart';
-import '../loupe_screen.dart';
+part of '../groups_screen.dart';
 
 class DeleteReviewScreen extends StatefulWidget {
   const DeleteReviewScreen({
@@ -62,7 +60,7 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
                       final items = _loupeSelection
                           .map(
                             (key) =>
-                                _currentItems.where((e) => e.key == key).firstOrNull,
+                                _currentItems.firstWhere((e) => e.key == key),
                           )
                           .toList();
                       Navigator.of(context).push(
@@ -101,10 +99,11 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
                   children: [
                     Positioned.fill(
                       child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(8),
                         child: Image.memory(
                           item.displayBytes,
                           fit: BoxFit.cover,
+                          cacheWidth: 400,
                         ),
                       ),
                     ),
@@ -113,14 +112,12 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
                       Positioned.fill(
                         child: Container(
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(8),
                             border: Border.all(
                               color: theme.colorScheme.primary,
                               width: 3,
                             ),
-                            color: theme.colorScheme.primary.withValues(
-                              alpha: 0.1,
-                            ),
+                            color: theme.colorScheme.primary.withOpacity(0.1),
                           ),
                         ),
                       ),
@@ -198,7 +195,7 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
               color: theme.colorScheme.surface,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
+                  color: Colors.black.withOpacity(0.1),
                   blurRadius: 10,
                   offset: const Offset(0, -5),
                 ),
