@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -38,7 +39,8 @@ class _BestShotAppState extends State<BestShotApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.detached) {
       // ウィンドウが閉じられアプリが破棄される際、
       // バックグラウンドのIsolateがReceivePortで待機したままプロセスがゾンビ化するのを防ぐため強制終了する
-      SystemNavigator.pop();
+      // SystemNavigator.pop() ではなく exit(0) を使ってOSレベルでプロセスを終了させる
+      exit(0);
     }
   }
 
