@@ -1,57 +1,111 @@
 # BestShot 📸
 
-BestShot は、デバイスやPC内に溜まった大量の写真を自動で解析し、類似写真をグループ化して「ベストショット」を厳選する写真整理アプリです。
-Flutterで構築されており、OpenCVとGoogle ML Kitを活用した高度な画像解析ロジックを備えています。
+**BestShot** は、デジタル一眼カメラ（ミラーレス・一眼レフ）やスマートフォンで撮影された大量の連写・類似写真から、OpenCV（コンピュータビジョン）と機械学習（ML Kit）を用いて被写体のピントや表情（顔・目開き度合い）を自動解析し、最も優れた「ベストショット」を厳選・提案して不要な写真を高速に整理する写真選別・整理アプリケーションです。
 
-## もしAndroidで写真が読み込まれない場合は、写真と動画へのアクセスを常にアクセス許可に変更してください。
+Flutterで構築されており、デスクトップ（Windows）およびモバイル（Android）の両方でネイティブ高速動作します。
+
+---
+
+> [!TIP]
+> **Androidで写真が読み込まれない場合**
+> Androidの設定アプリから、BestShotの権限で「写真と動画へのアクセス」を「常に許可」に変更してください。
+
+---
 
 ## ✨ 主な機能 (Features)
 
-* **スマートなグループ化 (Smart Grouping)**
-  * **バースト撮影の検知:** EXIFの撮影日時を元にしたミリ秒単位のグループ化
-  * **視覚的類似度の判定:** pHash（Perceptual Hash）およびORB特徴量マッチングによる構図の似た写真の特定
-  * **セマンティック分析:** ML Kitによる被写体（オブジェクト）認識とIoU（Intersection over Union）を用いたシーン判定
-* **ベストショット選出 (Best Shot Selection)**
-  * **鮮明度（ピント）評価:** OpenCVのラプラシアン分散（Laplacian Variance）を用いた画像のシャープネス計算
-  * **露出スコア:** ヒストグラム解析による白飛び・黒つぶれのペナルティ評価
-  * **ポートレート特化:** ML Kitを用いた顔認識。顔領域のピント評価、および「目つぶり」の検知による大幅減点アルゴリズム
-* **高速な非同期処理 (High Performance)**
-  * Dartの `Isolate` を活用した別スレッドでの並列画像解析により、大量のファイルでもUIをブロックせずに処理可能
+### 1. スマートな自動グループ化 (Smart Grouping)
+* **バースト撮影（連写）の検知**: EXIF撮影日時をもとに、ミリ秒単位で一連の連写シーケンスを自動検出。
+* **適応型HSVカラー判定**:
+  * 背景（白壁やグラウンドなど）を除去し、主要被写体の色彩分布のみを動的マスクで抽出。
+  * 彩度や明度に応じた適応的加重平均（Bhattacharyya距離）により、背景が同一でも被写体が変われば誤結合しない極めて頑健な色彩類似度判定を実現。
+* **視覚的類似度・特徴点マッチング**: pHash（Perceptual Hash）およびORB特徴量マッチングによる構図の似た写真の精密な特定。
+
+### 2. インテリジェントなベストショット自動選出 (Best Shot Selection)
+* **鮮明度（ピント）スコア**: OpenCVのラプラシアン分散（Laplacian Variance）により、エッジの鋭さ・解像感を数値化。
+* **ポートレート（顔優先）特化評価**:
+  * Google ML Kit / OpenCV Cascade Classifier による顔・瞳の高精度検出。
+  * 顔ROIおよび瞳領域のピントを重点評価し、平均目開き度合いから「目つぶり・半目」の写真を自動検知して大幅減点。
+* **露出スコア**: 輝度ヒストグラムを解析し、露出オーバー（白飛び）やアンダー（黒つぶれ）のペナルティを自動加味。
+
+### 3. プロフェッショナル仕様のルーペモード（2画面〜4画面 比較プレビュー）
+* **超精細フォーカスマスク**:
+  * 元解像度（フルサイズ）のままエッジ検出を行い、まつ毛やテクスチャの合焦箇所をドットバイドットでハイライト表示。
+  * マスク色は被写体に合わせて「白・赤・黄・緑」にワンタップ切り替え可能。
+* **ピント位置マーク & 瞳AFレティクル**:
+  * ポートレート写真では検出された瞳位置に「瞳AF（グリーン）」、一般被写体では最も鮮明な合焦領域に「FOCUS（シアン）」の測距枠をオーバーレイ表示。
+* **ワンタップ連動オートズーム (3.0x Auto Zoom)**:
+  * ズームボタンを押すだけで、検出されたピント位置・瞳へ瞬時に3.0倍フォーカスズーム。ピント確認の手間を極限まで短縮。
+* **リッチカメラHUD & 手ブレ警告**:
+  * 撮影機材名（カメラ機種・レンズ名）および露出パラメーター（SS、F値、ISO、露出補正EV）をオーバーレイ表示。
+  * 焦点距離に対する安全シャッタースピード（`SS < 1/FocalLength`）を自動算出し、手ブレ危険性がある写真にアンバー警告を表示。
+* **256階調 輝度ヒストグラム波形 & クリッピング警告**:
+  * 輝度分布をグラデーション波形で美しく可視化。白飛び（255近傍）や黒つぶれ（0近傍）の度合いに応じたクリッピング警告を動的表示。
+* **キーボード操作対応 (デスクトップ最適化)**:
+  * `←` / `→`: ペイン（比較写真）の切り替え
+  * `Space`: 削除候補フラグのトグル
+  * `B`: 「Best」写真の手動指定
+  * `Enter` / `Esc`: ルーペ画面の終了
+
+### 4. 快適で直感的な仕分けUX (Selection & Curation UI)
+* **「Best以外を削除候補に」の一括操作**: グループヘッダーのボタンから、ベストショット以外の類似写真を1タップでゴミ箱（削除候補）へ一括指定。
+* **削除候補のフェードアウト**: 削除フラグを立てた写真は、サムネイルがモノクロ＋半透明（透過率45%）に変化し、残す写真と消す写真が一目で識別可能。
+* **ベスト写真のグロー強調**: ベストに選出された写真は、エメラルドグリーンの太枠と柔らかな光彩シャドウで強調表示。
+
+### 5. 高性能・高速バックグラウンド解析 (High Performance)
+* **Isolateワーカプール**: 重たい画像処理（RAWデコード、リサイズ、Laplacian分散、ORB特徴量抽出）をDartの別スレッド（Isolate）で並列分散実行し、大量の写真インポート時もUIフレームレートを維持。
+* **メモリキャッシュ機構**: ルーペ画面の高解像度マスクや抽出サムネイルはメモリ上にセッションキャッシュされ、切り替え時の待ち時間ゼロ（0ms）を実現。
+
+---
 
 ## 🛠 使用技術 (Tech Stack)
 
-* **フレームワーク:** [Flutter](https://flutter.dev/) (Dart)
-* **画像処理・コンピュータビジョン:**
-  * [opencv_dart](https://pub.dev/packages/opencv_dart) (OpenCVバインディング)
-  * [image](https://pub.dev/packages/image) (純粋なDartによる画像エンコード/デコード)
-* **機械学習 (Machine Learning):**
-  * [google_mlkit_face_detection](https://pub.dev/packages/google_mlkit_face_detection)
-  * [google_mlkit_object_detection](https://pub.dev/packages/google_mlkit_object_detection)
-* **類似度計算:** [image_compare](https://pub.dev/packages/image_compare) (pHash)
-* **メタデータ解析:** [exif](https://pub.dev/packages/exif)
+| カテゴリ | ライブラリ / ツール | 用途 |
+| :--- | :--- | :--- |
+| **フレームワーク** | [Flutter](https://flutter.dev/) (Dart 3.x) | クロスプラットフォームUI |
+| **コンピュータビジョン** | [opencv_dart](https://pub.dev/packages/opencv_dart) | C++ネイティブバインディングによる高速画像解析（Laplacian、エッジ検出、カラーマスク等） |
+| **画像デコード/処理** | [image](https://pub.dev/packages/image) | RAW内蔵JPEG抽出、フォールバック画像変換 |
+| **機械学習 (ML)** | [google_mlkit_face_detection](https://pub.dev/packages/google_mlkit_face_detection) | 顔認識、瞳・ランドマーク検出、目開き確率判定 (Android/iOS) |
+| **類似度ハッシュ** | [image_compare](https://pub.dev/packages/image_compare) | pHash（知覚ハッシュ）による構図比較 |
+| **メタデータ抽出** | [exif](https://pub.dev/packages/exif) | 撮影日時、カメラ/レンズ情報、F値、SS、ISO、焦点距離、露出補正値のパース |
+
+---
 
 ## 💻 対応プラットフォーム (Supported Platforms)
 
-* Android (Storage API / MediaStore 対応)
-* Windows (File / Folder Explorer 対応)
-* *iOS (対応予定)*
+* **Windows**: Windows 10 / 11 (64-bit) - フォルダ一括インポート、RAW（内蔵JPEG）対応、キーボードショートカット対応
+* **Android**: Android 8.0 (API 26) 以上 - ストレージアクセスフレームワーク (SAF) およびシステムメディアストア対応
+* *(iOS: 対応予定)*
 
-## 🚀 導入手順 (Getting Started)
+---
 
-このリポジトリをクローンして手元で動かす方法です。
+## 🚀 導入・実行手順 (Getting Started)
+
+### 必要要件
+* [Flutter SDK](https://docs.flutter.dev/get-started/install) (Stable 3.24+ 推奨)
+* [Visual Studio 2022](https://visualstudio.microsoft.com/)（「C++によるデスクトップ開発」ワークロード必須 / Windowsビルド時）
+* [Android Studio](https://developer.android.com/studio) / Android SDK (API 34+) / JDK 21 (Androidビルド時)
+
+### ビルド手順
 
 ```bash
-# リポジトリのクローン
-git clone [https://github.com/TakuEnjoy/BestShot.git](https://github.com/TakuEnjoy/BestShot.git)
+# 1. リポジトリのクローン
+git clone https://github.com/TakuEnjoy/BestShot.git
+cd BestShot/bestshot
 
-# ディレクトリへ移動
-cd BestShot
-
-# パッケージのインストール
+# 2. 依存パッケージの取得
 flutter pub get
 
-# アプリの起動 (接続されたデバイスまたはエミュレータ)
+# 3. アプリの起動（接続されたデバイスまたはWindowsデスクトップ）
 flutter run
+
+# 4. リリースバイナリのビルド
+# Windows Release EXE
+flutter build windows --release
+
+# Android Release APK
+flutter build apk --release
+```
 
 ---
 
@@ -60,8 +114,8 @@ flutter run
 本アプリを独自にビルドして配布する際、悪意ある第三者による改変やなりすまし配布を防ぐためにデジタル署名を設定できます。
 具体的な署名手順については、以下の手順書を参照してください。
 
-*   **[デジタル署名セットアップ手順 (bestshot/SIGNING_SETUP.md)](bestshot/SIGNING_SETUP.md)**
-*   Windows環境における Smart App Control や SmartScreen 警告の回避策については、**[Windowsセキュリティ警告対策 (bestshot/WINDOWS_SETUP.md)](bestshot/WINDOWS_SETUP.md)** をご覧ください。
+* **[デジタル署名セットアップ手順 (bestshot/SIGNING_SETUP.md)](bestshot/SIGNING_SETUP.md)**
+* Windows環境における Smart App Control や SmartScreen 警告の回避策については、**[Windowsセキュリティ警告対策 (bestshot/WINDOWS_SETUP.md)](bestshot/WINDOWS_SETUP.md)** をご覧ください。
 
 ---
 
@@ -71,8 +125,9 @@ flutter run
 
 本プロジェクトは **専有ライセンス（Proprietary License / All Rights Reserved）** の下で管理されています。
 利用にあたっては以下のルールが厳格に適用されます：
-*   **二次配布の完全禁止**: 本ソフトウェアの全部または一部を、著作者の明示的な許可なく複製、再配布、公開、転載、または販売することは一切禁止します。
-*   **改変・派生物の禁止**: ソースコードの改変、またはそれに基づく派生アプリの作成・配布は一切禁止します。
-*   **ストア登録の禁止**: Google Play Store、Apple App Store、Microsoft Store 等のアプリストアや配布プラットフォームに無断で登録、公開、配布することは一切禁止します。
+
+* **二次配布の完全禁止**: 本ソフトウェアの全部または一部を、著作者の明示的な許可なく複製、再配布、公開、転載、または販売することは一切禁止します。
+* **改変・派生物の禁止**: ソースコードの改変、またはそれに基づく派生アプリの作成・配布は一切禁止します。
+* **ストア登録の禁止**: Google Play Store、Apple App Store、Microsoft Store 等のアプリストアや配布プラットフォームに無断で登録、公開、配布することは一切禁止します。
 
 個人的な学習や検証を目的とするローカル環境でのクローンおよび動作確認のみを許容します。詳細な利用規約および法的措置については、プロジェクトルートの **[LICENSE](LICENSE)** ファイルをご参照ください。
