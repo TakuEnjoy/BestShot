@@ -92,8 +92,8 @@ hooks:
         - objdetect
         - features2d
       android:
-        android_home: "C:\\android-sdk"
-        ndk_version: "28.2.13676358"
+        android_home: "C:\\Users\\makww\\AppData\\Local\\Android\\Sdk"
+        ndk_version: "30.0.16138531"
 
   # To add custom fonts to your application, add a fonts section here,
   # in this "flutter" section. Each entry in this list should have a

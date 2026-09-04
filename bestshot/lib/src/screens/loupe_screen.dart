@@ -1,6 +1,5 @@
 import 'dart:collection';
 import 'dart:io';
-import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:image/image.dart' as img;
@@ -47,6 +46,11 @@ class _LoupeScreenState extends State<LoupeScreen> {
   final Map<String, Uint8List?> _focusMaskPngByKey = {};
   Color _focusMaskColor = Colors.white; // Non-final to allow color cycle
   double _focusMaskOpacity = 0.8;
+
+  bool _showFocusPoint = true;
+  bool _showHistogram = true;
+  final Map<String, int> _imageWidths = {};
+  final Map<String, int> _imageHeights = {};
 
   // Keyboard focus management
   late final FocusNode _focusNode;
@@ -265,6 +269,27 @@ class _LoupeScreenState extends State<LoupeScreen> {
           title: const Text('ルーペモード'),
           actions: [
             IconButton(
+              tooltip: _showFocusPoint ? 'ピント位置マークを隠す' : 'ピント位置マークを表示',
+              onPressed: () => setState(() => _showFocusPoint = !_showFocusPoint),
+              icon: Icon(
+                _showFocusPoint ? Icons.filter_center_focus : Icons.center_focus_weak,
+                color: _showFocusPoint ? const Color(0xFF00E676) : null,
+              ),
+            ),
+            IconButton(
+              tooltip: _showHistogram ? 'ヒストグラムを隠す' : 'ヒストグラムを表示',
+              onPressed: () => setState(() => _showHistogram = !_showHistogram),
+              icon: Icon(
+                _showHistogram ? Icons.bar_chart : Icons.bar_chart_outlined,
+                color: _showHistogram ? Colors.cyanAccent : null,
+              ),
+            ),
+            IconButton(
+              tooltip: 'ピント位置へズーム / リセット',
+              onPressed: _zoomActivePaneToFocusPoint,
+              icon: const Icon(Icons.zoom_in_map, color: Colors.amberAccent),
+            ),
+            IconButton(
               tooltip: 'デバッグ表示を切り替え',
               onPressed: () =>
                   setState(() => _showDebugOverlay = !_showDebugOverlay),
@@ -328,6 +353,46 @@ class _LoupeScreenState extends State<LoupeScreen> {
         bottomNavigationBar: _buildBottomBar(),
       ),
     );
+  }
+
+  void _zoomActivePaneToFocusPoint() {
+    if (_activePaneIndex < 0 || _activePaneIndex >= widget.items.length) return;
+    final item = widget.items[_activePaneIndex];
+    final controller = _controllers[_activePaneIndex];
+
+    Offset? pt;
+    final w = _imageWidths[item.key];
+    final h = _imageHeights[item.key];
+    if (item.portrait.hasFace &&
+        item.portrait.faceW > 0 &&
+        item.portrait.faceH > 0 &&
+        w != null &&
+        h != null) {
+      pt = Offset(
+        (item.portrait.faceX + item.portrait.faceW * 0.5) / w,
+        (item.portrait.faceY + item.portrait.faceH * 0.35) / h,
+      );
+    } else {
+      pt = item.focusPoint;
+    }
+    if (pt == null) return;
+
+    if (controller.value.getMaxScaleOnAxis() > 1.2) {
+      // 既に拡大中の場合は等倍へリセット
+      controller.value = Matrix4.identity();
+    } else {
+      // ピント位置を中心にして3.0倍に拡大
+      const scale = 3.0;
+      final renderBox = context.findRenderObject() as RenderBox?;
+      final viewport = renderBox?.size ?? const Size(800, 600);
+      final tx = (viewport.width / 2) - (pt.dx * viewport.width * scale);
+      final ty = (viewport.height / 2) - (pt.dy * viewport.height * scale);
+      final m = Matrix4.identity()
+        ..translateByDouble(tx, ty, 0.0, 1.0)
+        ..scaleByDouble(scale, scale, 1.0, 1.0);
+      controller.value = m;
+    }
+    _onInteractionUpdate(_activePaneIndex);
   }
 
   Widget _buildBody() {
@@ -573,24 +638,25 @@ class _LoupeScreenState extends State<LoupeScreen> {
 
   Widget _buildPane(int index) {
     if (index >= widget.items.length) return const SizedBox.shrink();
-    final key = widget.items[index].key;
+    final item = widget.items[index];
+    final key = item.key;
     final bytes = _loadedBytes[key];
     if (bytes == null) {
       return const Center(child: Text('画像読み込み失敗'));
     }
     return _ZoomPane(
+      item: item,
       bytes: bytes,
       maskPng: _focusMaskPngByKey[key],
       showFocusMask: _showFocusMask,
       maskColor: _focusMaskColor,
       maskOpacity: _focusMaskOpacity,
-      title: _getFileName(widget.items[index]),
-      exif: widget.items[index].exifText,
+      showFocusPoint: _showFocusPoint,
+      showHistogram: _showHistogram,
+      title: _getFileName(item),
       score: widget.scores[index],
-      histogram: widget.items[index].histogram,
       controller: _controllers[index],
       onInteractionUpdate: () => _onInteractionUpdate(index),
-      itemKey: key,
       isFocused: index == _activePaneIndex,
       onTap: () {
         setState(() {
@@ -598,69 +664,56 @@ class _LoupeScreenState extends State<LoupeScreen> {
         });
       },
       showDebugOverlay: _showDebugOverlay,
-      debugGridSharps: widget.items[index].debugGridSharps,
-      semanticObjects: widget.items[index].semanticObjects,
-      faceX: widget.items[index].portrait.faceX,
-      faceY: widget.items[index].portrait.faceY,
-      faceW: widget.items[index].portrait.faceW,
-      faceH: widget.items[index].portrait.faceH,
-      faceScore: widget.items[index].faceQualityScore,
-      exposureScore: widget.items[index].exposureScore,
+      onImageSizeResolved: (w, h) {
+        _imageWidths[key] = w;
+        _imageHeights[key] = h;
+      },
+      onZoomToPoint: () {
+        setState(() => _activePaneIndex = index);
+        _zoomActivePaneToFocusPoint();
+      },
     );
   }
 }
 
 class _ZoomPane extends StatefulWidget {
   const _ZoomPane({
+    required this.item,
     required this.bytes,
     required this.maskPng,
     required this.showFocusMask,
     required this.maskColor,
     required this.maskOpacity,
+    required this.showFocusPoint,
+    required this.showHistogram,
     required this.title,
-    required this.exif,
     required this.score,
-    required this.histogram,
     required this.controller,
     required this.onInteractionUpdate,
-    required this.itemKey,
     required this.isFocused,
     required this.onTap,
     required this.showDebugOverlay,
-    this.debugGridSharps,
-    this.semanticObjects,
-    this.faceX,
-    this.faceY,
-    this.faceW,
-    this.faceH,
-    this.faceScore,
-    this.exposureScore,
+    required this.onImageSizeResolved,
+    required this.onZoomToPoint,
   });
 
+  final PhotoEntry item;
   final Uint8List bytes;
   final Uint8List? maskPng;
   final bool showFocusMask;
   final Color maskColor;
   final double maskOpacity;
+  final bool showFocusPoint;
+  final bool showHistogram;
   final String title;
-  final String exif;
   final double score;
-  final Uint8List histogram;
   final TransformationController controller;
   final VoidCallback onInteractionUpdate;
-  final String itemKey;
   final bool isFocused;
   final VoidCallback onTap;
-
   final bool showDebugOverlay;
-  final List<double>? debugGridSharps;
-  final List<SemanticObject>? semanticObjects;
-  final int? faceX;
-  final int? faceY;
-  final int? faceW;
-  final int? faceH;
-  final double? faceScore;
-  final double? exposureScore;
+  final void Function(int width, int height) onImageSizeResolved;
+  final VoidCallback onZoomToPoint;
 
   @override
   State<_ZoomPane> createState() => _ZoomPaneState();
@@ -693,25 +746,19 @@ class _ZoomPaneState extends State<_ZoomPane> {
           _imageWidth = info.width;
           _imageHeight = info.height;
         });
+        widget.onImageSizeResolved(info.width, info.height);
       }
-    } catch (e) {
+    } catch (_) {
       // ignore
     }
   }
 
-  @override
-  void dispose() {
-    super.dispose();
-  }
-
-
-
   List<Widget> _buildGridOverlay(double w, double h) {
-    final sharps = widget.debugGridSharps!;
-    if (sharps.length != 16) return [];
+    final sharps = widget.item.debugGridSharps;
+    if (sharps == null || sharps.length != 16) return [];
 
-    final indexValues = List.generate(16, (i) => MapEntry(i, sharps[i]));
-    indexValues.sort((a, b) => b.value.compareTo(a.value));
+    final indexValues = List.generate(16, (i) => MapEntry(i, sharps[i]))
+      ..sort((a, b) => b.value.compareTo(a.value));
     final top4Indices = indexValues.take(4).map((e) => e.key).toSet();
 
     final cellW = w / 4.0;
@@ -744,10 +791,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
               ),
               child: Center(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 4,
-                    vertical: 2,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.6),
                     borderRadius: BorderRadius.circular(4),
@@ -771,7 +815,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
   }
 
   List<Widget> _buildObjectsOverlay(double w, double h) {
-    final list = widget.semanticObjects!;
+    final list = widget.item.semanticObjects;
     return list.map((obj) {
       final left = obj.x * w;
       final top = obj.y * h;
@@ -794,10 +838,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
                 left: 0,
                 top: -16,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 4,
-                    vertical: 2,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                   color: Colors.cyanAccent.withValues(alpha: 0.85),
                   child: Text(
                     obj.label,
@@ -819,10 +860,11 @@ class _ZoomPaneState extends State<_ZoomPane> {
   Widget _buildFaceOverlay(double w, double h) {
     final imgW = _imageWidth!;
     final imgH = _imageHeight!;
-    final fx = widget.faceX! / imgW * w;
-    final fy = widget.faceY! / imgH * h;
-    final fw = widget.faceW! / imgW * w;
-    final fh = widget.faceH! / imgH * h;
+    final p = widget.item.portrait;
+    final fx = p.faceX / imgW * w;
+    final fy = p.faceY / imgH * h;
+    final fw = p.faceW / imgW * w;
+    final fh = p.faceH / imgH * h;
 
     return Positioned(
       left: fx,
@@ -849,6 +891,329 @@ class _ZoomPaneState extends State<_ZoomPane> {
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
                   ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// ピント位置マーク（カメラのAFフレーム / 瞳AFレティクル）
+  Widget _buildFocusMarker(double w, double h) {
+    if (!widget.showFocusPoint) return const SizedBox.shrink();
+
+    Offset? pt;
+    bool isEyeAf = false;
+    final item = widget.item;
+    final p = item.portrait;
+    if (p.hasFace &&
+        p.faceW > 0 &&
+        p.faceH > 0 &&
+        _imageWidth != null &&
+        _imageHeight != null) {
+      final cx = (p.faceX + p.faceW * 0.5) / _imageWidth!;
+      final cy = (p.faceY + p.faceH * 0.35) / _imageHeight!;
+      pt = Offset(cx, cy);
+      isEyeAf = true;
+    } else {
+      pt = item.focusPoint;
+    }
+    if (pt == null) {
+      return const Positioned(left: 0, top: 0, child: SizedBox.shrink());
+    }
+
+    final posX = pt.dx * w;
+    final posY = pt.dy * h;
+    const boxSize = 44.0;
+    final maxLeft = (w - boxSize) < 0.0 ? 0.0 : (w - boxSize);
+    final maxTop = (h - boxSize) < 0.0 ? 0.0 : (h - boxSize);
+
+    return Positioned(
+      left: (posX - boxSize / 2).clamp(0.0, maxLeft),
+      top: (posY - boxSize / 2).clamp(0.0, maxTop),
+      width: boxSize,
+      height: boxSize,
+      child: GestureDetector(
+        onTap: widget.onZoomToPoint,
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: isEyeAf ? const Color(0xFF00E676) : const Color(0xFF00E5FF),
+              width: 2.0,
+            ),
+            borderRadius: BorderRadius.circular(4),
+            color: (isEyeAf ? const Color(0xFF00E676) : const Color(0xFF00E5FF))
+                .withValues(alpha: 0.12),
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              // 中心十字ドット
+              Container(
+                width: 4,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: isEyeAf ? const Color(0xFF00E676) : const Color(0xFF00E5FF),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              // 上部ラベル
+              Positioned(
+                top: -15,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: (isEyeAf ? const Color(0xFF00E676) : const Color(0xFF00E5FF))
+                        .withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                  child: Text(
+                    isEyeAf ? '瞳 AF' : 'FOCUS',
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontSize: 8,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// カメラ情報 HUD（左上）
+  Widget _buildCameraHud() {
+    final exif = widget.item.exif;
+    final hasCameraInfo = exif?.cameraModel != null || exif?.lensModel != null;
+    final isShakeRisk = _isCameraShakeRisk(exif);
+
+    return Positioned(
+      left: 12,
+      top: 12,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 340),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.white24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 6,
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 機材名（カメラ + レンズ）
+            if (hasCameraInfo) ...[
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.photo_camera, size: 12, color: Colors.cyanAccent),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      [
+                        if (exif?.cameraModel != null) exif!.cameraModel!,
+                        if (exif?.lensModel != null) exif!.lensModel!,
+                      ].join('  /  '),
+                      style: const TextStyle(
+                        color: Colors.cyanAccent,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 5),
+            ],
+            // 撮影パラメーター（焦点距離・絞り・SS・ISO・EV）
+            Wrap(
+              spacing: 5,
+              runSpacing: 3,
+              children: [
+                if (exif?.focalLength != null)
+                  _buildParamChip(Icons.straighten, exif!.focalLength!),
+                if (exif?.fNumber != null)
+                  _buildParamChip(Icons.camera, 'F${exif!.fNumber!}'),
+                if (exif?.shutter != null)
+                  _buildParamChip(Icons.timer, exif!.shutter!),
+                if (exif?.iso != null)
+                  _buildParamChip(Icons.iso, 'ISO${exif!.iso!}'),
+                if (exif?.exposureBias != null)
+                  _buildParamChip(Icons.exposure, exif!.exposureBias!),
+              ],
+            ),
+            const SizedBox(height: 4),
+            // スコア & 手ブレ警告表示
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '鮮鋭度: ${widget.score.toStringAsFixed(0)}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                if (isShakeRisk) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.withValues(alpha: 0.25),
+                      border: Border.all(color: Colors.amber, width: 0.8),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.warning_amber_rounded, size: 10, color: Colors.amber),
+                        SizedBox(width: 2),
+                        Text(
+                          '手ブレ注意 (低SS)',
+                          style: TextStyle(
+                            color: Colors.amber,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            // デバッグ表示
+            if (widget.showDebugOverlay) ...[
+              const SizedBox(height: 4),
+              Container(height: 1, color: Colors.white24),
+              const SizedBox(height: 4),
+              Text(
+                '露出スコア: ${widget.item.exposureScore.toStringAsFixed(2)} | 顔スコア: ${widget.item.faceQualityScore.toStringAsFixed(2)}',
+                style: const TextStyle(color: Colors.white70, fontSize: 9),
+              ),
+              Text(
+                '解像度: ${_imageWidth ?? "?"} x ${_imageHeight ?? "?"}',
+                style: const TextStyle(color: Colors.white70, fontSize: 9),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildParamChip(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 9.5,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  bool _isCameraShakeRisk(ExifSummary? exif) {
+    if (exif == null) return false;
+    final flStr = exif.focalLength;
+    final ssStr = exif.shutter;
+    if (flStr == null || ssStr == null) return false;
+
+    final flMatch = RegExp(r'\d+').firstMatch(flStr);
+    if (flMatch == null) return false;
+    final fl = double.tryParse(flMatch.group(0)!);
+    if (fl == null || fl <= 0) return false;
+
+    double? ss;
+    if (ssStr.contains('/')) {
+      final parts = ssStr.split('/');
+      final num = double.tryParse(parts[0]);
+      final den = double.tryParse(parts[1]);
+      if (num != null && den != null && den > 0) ss = num / den;
+    } else {
+      ss = double.tryParse(ssStr);
+    }
+    if (ss == null) return false;
+
+    // 手ブレ限界速度: SS > 1/焦点距離 * 1.25
+    final limit = 1.0 / fl;
+    return ss > limit * 1.25;
+  }
+
+  /// ヒストグラムオーバーレイ（右上）
+  Widget _buildHistogramOverlay() {
+    return Positioned(
+      right: 12,
+      top: 12,
+      child: Container(
+        width: 110,
+        height: 64,
+        padding: const EdgeInsets.all(5),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.white24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 6,
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'HISTOGRAM',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                Text(
+                  'Luma',
+                  style: TextStyle(
+                    color: Colors.cyanAccent,
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Expanded(
+              child: CustomPaint(
+                painter: _HistogramPainter(
+                  widget.item.histogram,
+                  barColor: const Color(0xFF38BDF8),
                 ),
               ),
             ),
@@ -891,6 +1256,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
             ),
             Expanded(
               child: Stack(
+                fit: StackFit.expand,
                 children: [
                   Positioned.fill(
                     child: InteractiveViewer(
@@ -922,157 +1288,48 @@ class _ZoomPaneState extends State<_ZoomPane> {
                                   colorBlendMode: BlendMode.srcIn,
                                 ),
                               ),
-                            if (widget.showDebugOverlay)
-                              Positioned.fill(
-                                child: LayoutBuilder(
-                                  builder: (context, constraints) {
-                                    final w = constraints.maxWidth;
-                                    final h = constraints.maxHeight;
-                                    if (w == 0 || h == 0) {
-                                      return const SizedBox.shrink();
-                                    }
-                                    return Stack(
-                                      children: [
-                                        if (widget.debugGridSharps != null &&
-                                            widget.debugGridSharps!.length ==
-                                                16)
+                            // ピント位置マークおよびオーバーレイ枠（画像サイズに追従）
+                            Positioned.fill(
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final w = constraints.maxWidth;
+                                  final h = constraints.maxHeight;
+                                  if (w <= 0 || h <= 0) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return Stack(
+                                    fit: StackFit.passthrough,
+                                    children: [
+                                      if (widget.showFocusPoint)
+                                        _buildFocusMarker(w, h),
+                                      if (widget.showDebugOverlay) ...[
+                                        if (widget.item.debugGridSharps != null &&
+                                            widget.item.debugGridSharps!.length == 16)
                                           ..._buildGridOverlay(w, h),
-                                        if (widget.semanticObjects != null)
+                                        if (widget.item.semanticObjects.isNotEmpty)
                                           ..._buildObjectsOverlay(w, h),
-                                        if (widget.faceX != null &&
-                                            widget.faceY != null &&
-                                            widget.faceW != null &&
-                                            widget.faceH != null &&
-                                            widget.faceW! > 0 &&
-                                            widget.faceH! > 0 &&
+                                        if (widget.item.portrait.hasFace &&
+                                            widget.item.portrait.faceW > 0 &&
+                                            widget.item.portrait.faceH > 0 &&
                                             _imageWidth != null &&
                                             _imageHeight != null)
                                           _buildFaceOverlay(w, h),
                                       ],
-                                    );
-                                  },
-                                ),
+                                    ],
+                                  );
+                                },
                               ),
+                            ),
                           ],
                         ),
                       ),
                     ),
                   ),
-                  // Overlay Info (Top Left)
-                  Positioned(
-                    left: 12,
-                    top: 12,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.6),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: Colors.white24),
-                      ),
-                      child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (widget.exif.isNotEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 2),
-                                  child: Text(
-                                    widget.exif,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ),
-                              Text(
-                                '鮮明度: ${widget.score.toStringAsFixed(0)}',
-                                style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.9),
-                                  fontSize: 10,
-                                ),
-                              ),
-                              if (widget.showDebugOverlay) ...[
-                                const SizedBox(height: 6),
-                                Container(
-                                  height: 1,
-                                  width: 120,
-                                  color: Colors.white24,
-                                ),
-                                const SizedBox(height: 4),
-                                const Text(
-                                  '【Debug Info】',
-                                  style: TextStyle(
-                                    color: Colors.amberAccent,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                Text(
-                                  'ピント: ${widget.score.toStringAsFixed(1)}',
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 9,
-                                  ),
-                                ),
-                                Text(
-                                  '露出: ${(widget.exposureScore ?? 0).toStringAsFixed(2)}',
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 9,
-                                  ),
-                                ),
-                                Text(
-                                  '顔スコア: ${(widget.faceScore ?? 0).toStringAsFixed(2)}',
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 9,
-                                  ),
-                                ),
-                                Text(
-                                  '解像度: ${_imageWidth ?? "?"} x ${_imageHeight ?? "?"}',
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 9,
-                                  ),
-                                ),
-                                if (widget.semanticObjects != null &&
-                                    widget.semanticObjects!.isNotEmpty)
-                                  Text(
-                                    '検出数: ${widget.semanticObjects!.length} (例: ${widget.semanticObjects!.first.label})',
-                                    style: const TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 9,
-                                    ),
-                                  ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                  // Histogram (Top Right)
-                  Positioned(
-                    right: 12,
-                    top: 12,
-                    child: Container(
-                      width: 100,
-                      height: 60,
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.4),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: Colors.white10),
-                      ),
-                      child: CustomPaint(
-                        painter: _HistogramPainter(
-                          widget.histogram,
-                          barColor: Theme.of(context).colorScheme.primary,
-                        ),
-                      ),
-                    ),
-                  ),
+                  // カメラ情報 HUD（左上）
+                  _buildCameraHud(),
+                  // ヒストグラム（右上）
+                  if (widget.showHistogram && widget.item.histogram.isNotEmpty)
+                    _buildHistogramOverlay(),
                 ],
               ),
             ),
@@ -1092,21 +1349,59 @@ class _HistogramPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (data.isEmpty) return;
 
-    final rect = Offset.zero & size;
-    final barPaint = Paint()
-      ..color = barColor.withOpacity(0.85)
-      ..style = PaintingStyle.fill
-      ..isAntiAlias = false;
+    // 0と255のクリッピング除いた最大頻度値を探索して正規化
+    int maxVal = 1;
+    for (var i = 1; i < 255; i++) {
+      if (data[i] > maxVal) maxVal = data[i];
+    }
 
-    // 256 bins => draw as bars; keep at least 1px wide bars.
-    final binW = size.width / 256.0;
-    final w = binW < 1 ? 1.0 : binW;
+    final path = Path();
+    final fillPath = Path()..moveTo(0, size.height);
+
+    final step = size.width / 256.0;
     for (var i = 0; i < 256; i++) {
-      final h = (data[i] / 255) * size.height;
-      if (h <= 0) continue;
-      final x = i * binW;
-      final rect = Rect.fromLTWH(x, size.height - h, w, h);
-      canvas.drawRect(rect, barPaint);
+      final normalized = (data[i] / maxVal).clamp(0.0, 1.0);
+      final x = i * step;
+      final y = size.height - (normalized * (size.height - 2));
+      if (i == 0) {
+        path.moveTo(x, y);
+        fillPath.lineTo(x, y);
+      } else {
+        path.lineTo(x, y);
+        fillPath.lineTo(x, y);
+      }
+    }
+    fillPath.lineTo(size.width, size.height);
+    fillPath.close();
+
+    // 塗りつぶしグラデーション
+    final fillPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          barColor.withValues(alpha: 0.55),
+          barColor.withValues(alpha: 0.08),
+        ],
+      ).createShader(Offset.zero & size);
+    canvas.drawPath(fillPath, fillPaint);
+
+    // 輪郭線
+    final strokePaint = Paint()
+      ..color = barColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    canvas.drawPath(path, strokePaint);
+
+    // 白飛び警告（255が閾値超え）
+    if (data[255] > maxVal * 0.7) {
+      final warnPaint = Paint()..color = Colors.redAccent;
+      canvas.drawCircle(Offset(size.width - 3, 3), 2.5, warnPaint);
+    }
+    // 黒つぶれ警告（0が閾値超え）
+    if (data[0] > maxVal * 0.7) {
+      final warnPaint = Paint()..color = Colors.blueAccent;
+      canvas.drawCircle(const Offset(3, 3), 2.5, warnPaint);
     }
   }
 

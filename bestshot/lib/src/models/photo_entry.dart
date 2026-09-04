@@ -1,8 +1,10 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
 
 import 'exif_summary.dart';
 import 'semantic_object.dart';
 import 'portrait_analysis.dart';
+export 'exif_summary.dart';
 export 'semantic_object.dart';
 export 'portrait_analysis.dart';
 
@@ -81,6 +83,54 @@ class PhotoEntry {
 
   DateTime? get capturedAt => exif?.capturedAt;
 
+  /// Focus point in normalized coordinates (0.0 .. 1.0) derived from local Laplacian variance.
+  Offset? get focusPoint {
+    final sharps = debugGridSharps;
+    if (sharps == null || sharps.length != 16) return null;
+
+    int bestIdx = 0;
+    double maxVal = -1;
+    for (int i = 0; i < 16; i++) {
+      if (sharps[i] > maxVal) {
+        maxVal = sharps[i];
+        bestIdx = i;
+      }
+    }
+    if (maxVal <= 0) return null;
+
+    // Calculate center of mass for top-3 sharpest cells for sub-grid accuracy
+    final entries = List.generate(16, (i) => MapEntry(i, sharps[i]))
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    double totalWeight = 0;
+    double weightedX = 0;
+    double weightedY = 0;
+    final topN = entries.take(3);
+    for (final e in topN) {
+      if (e.value <= 0) continue;
+      final c = e.key % 4;
+      final r = e.key ~/ 4;
+      final cx = (c + 0.5) / 4.0;
+      final cy = (r + 0.5) / 4.0;
+      // Exponential weighting to favor the absolute sharpest region
+      final w = e.value * e.value;
+      weightedX += cx * w;
+      weightedY += cy * w;
+      totalWeight += w;
+    }
+
+    if (totalWeight <= 0) {
+      final c = bestIdx % 4;
+      final r = bestIdx ~/ 4;
+      return Offset((c + 0.5) / 4.0, (r + 0.5) / 4.0);
+    }
+
+    return Offset(
+      (weightedX / totalWeight).clamp(0.08, 0.92),
+      (weightedY / totalWeight).clamp(0.08, 0.92),
+    );
+  }
+
   String get exifText {
     final e = exif;
     if (e == null) return '';
@@ -97,6 +147,7 @@ class PhotoEntry {
     if (e.fNumber != null && e.fNumber!.isNotEmpty) parts.add('F${e.fNumber}');
     if (e.shutter != null && e.shutter!.isNotEmpty) parts.add(e.shutter!);
     if (e.iso != null && e.iso!.isNotEmpty) parts.add('ISO${e.iso}');
+    if (e.focalLength != null && e.focalLength!.isNotEmpty) parts.add(e.focalLength!);
     return parts.join('  ');
   }
 

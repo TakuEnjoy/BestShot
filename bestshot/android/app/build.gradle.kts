@@ -17,16 +17,14 @@ if (keystorePropertiesFile.exists()) {
 android {
     namespace = "com.takuenjoy.bestshot"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "30.0.16138531"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
+
 
     defaultConfig {
         applicationId = "com.takuenjoy.bestshot"

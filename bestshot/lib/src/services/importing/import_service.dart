@@ -7,7 +7,6 @@ import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
 import '../../models/photo_entry.dart';
-import '../../models/exif_summary.dart';
 import '../../utils/jpeg_utils.dart';
 import '../analysis/analysis_types.dart';
 
@@ -256,15 +255,93 @@ Future<ExifSummary?> _readExifSummary(File f) async {
         getTag('Image DateTime') ??
         getTag('DateTime');
     final capturedAt = _parseExifDateTime(dt);
+    final focalLength = _parseFocalLength(
+      getTag('EXIF FocalLength') ??
+          getTag('Image FocalLength') ??
+          getTag('FocalLength'),
+    );
+    final cameraModel = _cleanExifString(
+      getTag('Image Model') ?? getTag('EXIF Model') ?? getTag('Model'),
+    );
+    final lensModel = _cleanExifString(
+      getTag('EXIF LensModel') ??
+          getTag('Image LensModel') ??
+          getTag('LensModel'),
+    );
+    final exposureBias = _parseExposureBias(
+      getTag('EXIF ExposureBiasValue') ?? getTag('ExposureBiasValue'),
+    );
+
     return ExifSummary(
       fNumber: fnum,
       shutter: expo,
       iso: iso,
       capturedAt: capturedAt,
+      focalLength: focalLength,
+      cameraModel: cameraModel,
+      lensModel: lensModel,
+      exposureBias: exposureBias,
     );
   } catch (_) {
     return null;
   }
+}
+
+String? _cleanExifString(String? raw) {
+  if (raw == null) return null;
+  final cleaned = raw.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '').trim();
+  return cleaned.isEmpty ? null : cleaned;
+}
+
+String? _parseFocalLength(String? raw) {
+  if (raw == null) return null;
+  raw = raw.trim();
+  if (raw.isEmpty) return null;
+
+  final parts = raw.split('/');
+  if (parts.length == 2) {
+    final num = double.tryParse(parts[0].trim());
+    final den = double.tryParse(parts[1].trim());
+    if (num != null && den != null && den != 0) {
+      final val = (num / den).round();
+      return '$val mm';
+    }
+  }
+
+  final numMatch = RegExp(r'^\d+(\.\d+)?').firstMatch(raw);
+  if (numMatch != null) {
+    final val = double.tryParse(numMatch.group(0)!);
+    if (val != null) {
+      return '${val.round()} mm';
+    }
+  }
+
+  return raw.endsWith('mm') ? raw : '$raw mm';
+}
+
+String? _parseExposureBias(String? raw) {
+  if (raw == null) return null;
+  raw = raw.trim();
+  if (raw.isEmpty) return null;
+
+  double? val;
+  final parts = raw.split('/');
+  if (parts.length == 2) {
+    final num = double.tryParse(parts[0].trim());
+    final den = double.tryParse(parts[1].trim());
+    if (num != null && den != null && den != 0) {
+      val = num / den;
+    }
+  } else {
+    val = double.tryParse(raw);
+  }
+
+  if (val != null) {
+    if (val.abs() < 0.05) return '±0.0 EV';
+    final sign = val > 0 ? '+' : '';
+    return '$sign${val.toStringAsFixed(1)} EV';
+  }
+  return raw;
 }
 
 String? _parseFNumber(String? raw) {
