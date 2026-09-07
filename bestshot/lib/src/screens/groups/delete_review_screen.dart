@@ -117,7 +117,7 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
                               color: theme.colorScheme.primary,
                               width: 3,
                             ),
-                            color: theme.colorScheme.primary.withOpacity(0.1),
+                            color: theme.colorScheme.primary.withValues(alpha: 0.1),
                           ),
                         ),
                       ),
@@ -195,7 +195,7 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
               color: theme.colorScheme.surface,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withValues(alpha: 0.1),
                   blurRadius: 10,
                   offset: const Offset(0, -5),
                 ),

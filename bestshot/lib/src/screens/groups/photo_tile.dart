@@ -60,7 +60,7 @@ class _PhotoTileState extends State<_PhotoTile> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            color: hasFolder ? getFolderColor(sortFolder, widget.customFolders) : Colors.black.withOpacity(0.5),
+            color: hasFolder ? getFolderColor(sortFolder, widget.customFolders) : Colors.black.withValues(alpha: 0.5),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.white24),
           ),
@@ -174,21 +174,21 @@ class _PhotoTileState extends State<_PhotoTile> {
                                       ? Border.all(color: getFolderColor(widget.sortFolder!, widget.customFolders), width: 3)
                                       : Border.all(
                                           color: _isHovered
-                                              ? Colors.white.withOpacity(0.4)
-                                              : Colors.white.withOpacity(0.1),
+                                              ? Colors.white.withValues(alpha: 0.4)
+                                              : Colors.white.withValues(alpha: 0.1),
                                           width: _isHovered ? 1.5 : 1,
                                         ))),
                           boxShadow: widget.isKeyboardFocused
                               ? [
                                   BoxShadow(
-                                    color: colorScheme.primary.withOpacity(0.5),
+                                    color: colorScheme.primary.withValues(alpha: 0.5),
                                     blurRadius: 10,
                                     spreadRadius: 1.5,
                                   )
                                 ]
                               : null,
                           color: widget.selectedForDelete
-                              ? colorScheme.error.withOpacity(0.1)
+                              ? colorScheme.error.withValues(alpha: 0.1)
                               : Colors.transparent,
                         ),
                       ),
@@ -206,7 +206,7 @@ class _PhotoTileState extends State<_PhotoTile> {
                         if (!widget.isBest)
                           _Badge(
                             label: widget.sharpness.toStringAsFixed(0),
-                            color: Colors.black.withOpacity(0.6),
+                            color: Colors.black.withValues(alpha: 0.6),
                           ),
                       ],
                     ),
@@ -235,7 +235,7 @@ class _PhotoTileState extends State<_PhotoTile> {
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(4),
                         child: Container(
-                          color: Colors.black.withOpacity(0.65),
+                          color: Colors.black.withValues(alpha: 0.65),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
                             vertical: 3,
@@ -269,7 +269,7 @@ class _PhotoTileState extends State<_PhotoTile> {
                           decoration: BoxDecoration(
                             color: widget.loupeSelected
                                 ? colorScheme.primary
-                                : Colors.black.withOpacity(0.5),
+                                : Colors.black.withValues(alpha: 0.5),
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
@@ -294,7 +294,7 @@ class _PhotoTileState extends State<_PhotoTile> {
                     Positioned.fill(
                       child: Container(
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.55),
+                          color: Colors.black.withValues(alpha: 0.55),
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: const Center(

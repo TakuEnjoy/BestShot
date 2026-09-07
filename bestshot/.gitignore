@@ -55,8 +55,6 @@ bestshot/.idea/
 .dart_tool/
 .idea/
 
-test/
-
 .flutter-plugins-dependencies
 .metadata
 

@@ -10,6 +10,50 @@ export 'portrait_analysis.dart';
 
 enum PhotoOrigin { deviceAsset, filePath }
 
+/// スコア算出の詳細内訳（XAI / デバッグ可視化用）
+class ScoreExplanation {
+  const ScoreExplanation({
+    required this.totalScore,
+    required this.rawSharpness,
+    required this.effectiveSharpness,
+    required this.normalizedSharpness,
+    required this.exposureScore,
+    required this.faceQualityScore,
+    required this.ruleName,
+    required this.formulaText,
+  });
+
+  final double totalScore;
+  final double rawSharpness;
+  final double effectiveSharpness;
+  final double normalizedSharpness;
+  final double exposureScore;
+  final double faceQualityScore;
+  final String ruleName;
+  final String formulaText;
+}
+
+/// グループ化の判定根拠（XAI / デバッグ可視化用）
+class GroupMatchExplanation {
+  const GroupMatchExplanation({
+    required this.matchType,
+    required this.description,
+    this.diffSeconds,
+    this.pHashDistance,
+    this.colorDistance,
+    this.orbMatches,
+    this.referenceKey,
+  });
+
+  final String matchType;
+  final String description;
+  final double? diffSeconds;
+  final int? pHashDistance;
+  final double? colorDistance;
+  final int? orbMatches;
+  final String? referenceKey;
+}
+
 class PhotoEntry {
   PhotoEntry({
     required this.key,
@@ -30,6 +74,8 @@ class PhotoEntry {
     this.faceQualityScore = 0,
     this.portrait = const PortraitAnalysis(),
     this.debugGridSharps,
+    this.scoreExplanation,
+    this.groupExplanation,
   });
 
   /// Unique key across all imported items.
@@ -80,6 +126,12 @@ class PhotoEntry {
 
   /// Debug info: Laplacian variance for each of the 4x4 grid cells.
   final List<double>? debugGridSharps;
+
+  /// スコア算出根拠（デバッグ・XAI表示用）
+  final ScoreExplanation? scoreExplanation;
+
+  /// グループ化判定根拠（デバッグ・XAI表示用）
+  final GroupMatchExplanation? groupExplanation;
 
   DateTime? get capturedAt => exif?.capturedAt;
 
@@ -170,6 +222,8 @@ class PhotoEntry {
     double? faceQualityScore,
     PortraitAnalysis? portrait,
     ValueGetter<List<double>?>? debugGridSharps,
+    ValueGetter<ScoreExplanation?>? scoreExplanation,
+    ValueGetter<GroupMatchExplanation?>? groupExplanation,
   }) {
     return PhotoEntry(
       key: key ?? this.key,
@@ -192,6 +246,12 @@ class PhotoEntry {
       debugGridSharps: debugGridSharps != null
           ? debugGridSharps()
           : this.debugGridSharps,
+      scoreExplanation: scoreExplanation != null
+          ? scoreExplanation()
+          : this.scoreExplanation,
+      groupExplanation: groupExplanation != null
+          ? groupExplanation()
+          : this.groupExplanation,
     );
   }
 

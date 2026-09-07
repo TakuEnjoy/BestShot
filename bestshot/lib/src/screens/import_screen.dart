@@ -717,7 +717,7 @@ class _ImportScreenState extends State<ImportScreen> {
             const SizedBox(height: 8),
             DropdownButtonFormField<DetectionMode>(
               isExpanded: true,
-              value: _detectionMode,
+              initialValue: _detectionMode,
               decoration: InputDecoration(
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(4),
@@ -771,7 +771,7 @@ class _ImportScreenState extends State<ImportScreen> {
               children: [
                 Expanded(
                   child: DropdownButtonFormField<int>(
-                    value: _burstMinutes.clamp(0, 60),
+                    initialValue: _burstMinutes.clamp(0, 60),
                     decoration: InputDecoration(
                       labelText: '分',
                       border: OutlineInputBorder(
@@ -804,7 +804,7 @@ class _ImportScreenState extends State<ImportScreen> {
                 SizedBox(width: isSmallMobile ? 8 : 12),
                 Expanded(
                   child: DropdownButtonFormField<int>(
-                    value: _burstSeconds.clamp(0, 59),
+                    initialValue: _burstSeconds.clamp(0, 59),
                     decoration: InputDecoration(
                       labelText: '秒',
                       border: OutlineInputBorder(
@@ -846,7 +846,7 @@ class _ImportScreenState extends State<ImportScreen> {
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<int>(
-              value: _maxCount,
+              initialValue: _maxCount,
               decoration: InputDecoration(
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(4),

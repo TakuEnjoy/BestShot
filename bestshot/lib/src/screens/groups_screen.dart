@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -133,8 +132,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
     
     final items = _entryByKey.values.toList();
     items.sort((a, b) {
-      final fa = a.portrait?.hasFace == true ? 0 : 1;
-      final fb = b.portrait?.hasFace == true ? 0 : 1;
+      final fa = a.portrait.hasFace ? 0 : 1;
+      final fb = b.portrait.hasFace ? 0 : 1;
       final faceCmp = fa.compareTo(fb);
       if (faceCmp != 0) return faceCmp;
       final ta = a.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -892,7 +891,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            color: hasFolder ? getFolderColor(sortFolder, _customFolders) : Colors.black.withOpacity(0.5),
+            color: hasFolder ? getFolderColor(sortFolder, _customFolders) : Colors.black.withValues(alpha: 0.5),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.white24),
           ),
@@ -1013,12 +1012,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
             children: [
               const Text('本画面およびルーペ画面は、キーボードで高速に操作可能です。'),
               const SizedBox(height: 16),
-              _buildShortcutRow('← / →', '同じグループ内での写真選択の移動'),
+              _buildShortcutRow('← / →', '同じグループ内での写真選択の移動 / ルーペのペイン移動'),
               _buildShortcutRow('↑ / ↓', 'グループ間の移動'),
-              _buildShortcutRow('Space', '選択中の写真を削除候補（ゴミ箱マーク）に設定 / 解除'),
+              _buildShortcutRow('1 〜 4', 'ルーペ画面でペインを直接選択'),
+              _buildShortcutRow('Space', '選択中の写真を削除候補に設定 / 解除'),
               _buildShortcutRow('Enter', '選択中の写真をルーペ（詳細比較）で表示'),
               _buildShortcutRow('B', '選択中の写真をこのグループの「Best」に設定'),
               _buildShortcutRow('L', '選択中の写真をルーペ比較対象に設定 / 解除（最大4枚）'),
+              _buildShortcutRow('I', '情報HUDモード切り替え（コンパクト ⇄ 詳細 ⇄ クリーン）'),
+              _buildShortcutRow('H', 'ヒストグラム表示のオン / オフ'),
+              _buildShortcutRow('M', 'フォーカスマスクのオン / オフ'),
+              _buildShortcutRow('Z', 'ピント位置へズーム / リセット（ダブルタップでも可）'),
               _buildShortcutRow('S', '連動拡大のオン / オフ切り替え（ルーペ画面）'),
               _buildShortcutRow('Esc', 'ルーペ画面を閉じる / 選択解除'),
             ],
@@ -1077,9 +1081,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
       final timeStr = t == null
           ? ''
           : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
-      final eyeText = (e.portrait?.bothEyesDetected ?? false)
+      final eyeText = e.portrait.bothEyesDetected
           ? '目閉じなし'
-          : ((e.portrait?.eyesClosed ?? false) ? '目閉じ' : '');
+          : (e.portrait.eyesClosed ? '目閉じ' : '');
 
       final loupeSelected = _loupeSelection.contains(e.key);
       final selectedForDelete = _selectedForDelete.contains(e.key);
@@ -1103,7 +1107,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         child: Container(
           decoration: BoxDecoration(
             color: selectedForDelete
-                ? theme.colorScheme.error.withOpacity(0.08)
+                ? theme.colorScheme.error.withValues(alpha: 0.08)
                 : theme.colorScheme.surface,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
@@ -1114,14 +1118,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
                       : (hasFolder
                           ? getFolderColor(sortFolder, _customFolders)
                           : (loupeSelected
-                              ? theme.colorScheme.primary.withOpacity(0.5)
-                              : theme.dividerColor.withOpacity(0.12)))),
+                              ? theme.colorScheme.primary.withValues(alpha: 0.5)
+                              : theme.dividerColor.withValues(alpha: 0.12)))),
               width: isKeyboardFocused ? 2.5 : (selectedForDelete || hasFolder || loupeSelected ? 2 : 1),
             ),
             boxShadow: isKeyboardFocused
                 ? [
                     BoxShadow(
-                      color: theme.colorScheme.primary.withOpacity(0.25),
+                      color: theme.colorScheme.primary.withValues(alpha: 0.25),
                       blurRadius: 8,
                       spreadRadius: 1,
                     )
@@ -1218,7 +1222,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                             decoration: BoxDecoration(
                               color: loupeSelected
                                   ? theme.colorScheme.primary
-                                  : Colors.black.withOpacity(0.5),
+                                  : Colors.black.withValues(alpha: 0.5),
                               shape: BoxShape.circle,
                             ),
                             child: Icon(
@@ -1254,7 +1258,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '鮮明度: ${e.sharpness.toStringAsFixed(0)}（顔ROI: ${(e.portrait?.faceSharpness ?? 0).toStringAsFixed(0)}）',
+                        '鮮明度: ${e.sharpness.toStringAsFixed(0)}（顔ROI: ${e.portrait.faceSharpness.toStringAsFixed(0)}）',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                       if (eyeText.isNotEmpty) ...[
@@ -1263,16 +1267,16 @@ class _GroupsScreenState extends State<GroupsScreen> {
                           eyeText,
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                 fontWeight: FontWeight.w700,
-                                color: (e.portrait?.bothEyesDetected ?? false)
+                                color: e.portrait.bothEyesDetected
                                     ? const Color(0xFF16A34A)
                                     : const Color(0xFFDC2626),
                               ),
                         ),
                       ],
-                      if ((e.portrait?.eyeOpenAvg ?? -1.0) >= 0) ...[
+                      if ((e.portrait.eyeOpenAvg ?? -1.0) >= 0) ...[
                         const SizedBox(height: 2),
                         Text(
-                          '目開き平均: ${(e.portrait?.eyeOpenAvg ?? 0.0).toStringAsFixed(2)}',
+                          '目開き平均: ${(e.portrait.eyeOpenAvg ?? 0.0).toStringAsFixed(2)}',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
@@ -1293,9 +1297,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
       final timeStr = t == null
           ? ''
           : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
-      final eyeText = (e.portrait?.bothEyesDetected ?? false)
+      final eyeText = e.portrait.bothEyesDetected
           ? '目閉じなし'
-          : ((e.portrait?.eyesClosed ?? false) ? '目閉じ' : '');
+          : (e.portrait.eyesClosed ? '目閉じ' : '');
 
       final loupeSelected = _loupeSelection.contains(e.key);
       final selectedForDelete = _selectedForDelete.contains(e.key);
@@ -1319,7 +1323,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         child: Container(
           decoration: BoxDecoration(
             color: selectedForDelete
-                ? theme.colorScheme.error.withOpacity(0.08)
+                ? theme.colorScheme.error.withValues(alpha: 0.08)
                 : theme.colorScheme.surface,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
@@ -1330,14 +1334,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
                       : (hasFolder
                           ? getFolderColor(sortFolder, _customFolders)
                           : (loupeSelected
-                              ? theme.colorScheme.primary.withOpacity(0.5)
-                              : theme.dividerColor.withOpacity(0.12)))),
+                              ? theme.colorScheme.primary.withValues(alpha: 0.5)
+                              : theme.dividerColor.withValues(alpha: 0.12)))),
               width: isKeyboardFocused ? 2.5 : (selectedForDelete || hasFolder || loupeSelected ? 2 : 1),
             ),
             boxShadow: isKeyboardFocused
                 ? [
                     BoxShadow(
-                      color: theme.colorScheme.primary.withOpacity(0.25),
+                      color: theme.colorScheme.primary.withValues(alpha: 0.25),
                       blurRadius: 8,
                       spreadRadius: 1,
                     )
@@ -1435,7 +1439,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                               decoration: BoxDecoration(
                                 color: loupeSelected
                                     ? theme.colorScheme.primary
-                                    : Colors.black.withOpacity(0.5),
+                                    : Colors.black.withValues(alpha: 0.5),
                                 shape: BoxShape.circle,
                               ),
                               child: Icon(
@@ -1482,7 +1486,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '顔ROI: ${(e.portrait?.faceSharpness ?? 0).toStringAsFixed(0)}',
+                      '顔ROI: ${e.portrait.faceSharpness.toStringAsFixed(0)}',
                       style: theme.textTheme.bodySmall?.copyWith(fontSize: 10),
                     ),
                     if (eyeText.isNotEmpty) ...[
@@ -1492,7 +1496,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         style: theme.textTheme.bodySmall?.copyWith(
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
-                              color: (e.portrait?.bothEyesDetected ?? false)
+                              color: e.portrait.bothEyesDetected
                                   ? const Color(0xFF16A34A)
                                   : const Color(0xFFDC2626),
                             ),
@@ -1682,7 +1686,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       autofocus: true,
       onKeyEvent: (node, event) => _handleKeyEvent(event),
       child: Scaffold(
-        backgroundColor: colorScheme.surfaceContainer.withOpacity(0.3),
+        backgroundColor: colorScheme.surfaceContainer.withValues(alpha: 0.3),
         appBar: AppBar(
           title: isMobile
               ? const Text(
@@ -1695,7 +1699,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     const Text('整理・比較'),
                     Text(
                       isPortrait
-                          ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.portrait?.hasFace == true).length} / 削除候補: $_selectedCount'
+                          ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.portrait.hasFace).length} / 削除候補: $_selectedCount'
                           : 'グループ: ${_groups.length} / 削除候補: $_selectedCount',
                       style: const TextStyle(
                         fontSize: 12,
@@ -1869,12 +1873,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.85),
+        color: Colors.black.withValues(alpha: 0.85),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white10),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.5),
+            color: Colors.black.withValues(alpha: 0.5),
             blurRadius: 12,
             spreadRadius: 2,
           ),

@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:typed_data';
 
 import 'package:exif/exif.dart';
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
@@ -198,7 +198,7 @@ class ImportService {
             if (res != null) {
               if (res.error != null) {
                 if (firstError.isEmpty) firstError = 'File: ${res.path}\nError: ${res.error}';
-                print('Error processing ${res.path}: ${res.error}');
+                debugPrint('Error processing ${res.path}: ${res.error}');
               } else if (res.jpg != null) {
                 out.add(
                   ImportedItem(

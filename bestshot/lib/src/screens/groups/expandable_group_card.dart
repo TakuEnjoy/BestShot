@@ -42,13 +42,13 @@ class _ExpandableGroupCard extends StatelessWidget {
     return Material(
       color: theme.colorScheme.surface,
       elevation: isKeyboardGroupFocused ? 4 : 0,
-      shadowColor: isKeyboardGroupFocused ? theme.colorScheme.primary.withOpacity(0.3) : null,
+      shadowColor: isKeyboardGroupFocused ? theme.colorScheme.primary.withValues(alpha: 0.3) : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(
           color: isKeyboardGroupFocused
               ? theme.colorScheme.primary
-              : theme.dividerColor.withOpacity(0.12),
+              : theme.dividerColor.withValues(alpha: 0.12),
           width: isKeyboardGroupFocused ? 2 : 1,
         ),
       ),

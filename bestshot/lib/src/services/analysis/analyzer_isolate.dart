@@ -13,9 +13,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'analysis_types.dart';
-import '../../models/photo_entry.dart';
 import '../../utils/jpeg_utils.dart';
-import '../semantic/mlkit_semantic_service.dart';
 
 class AnalyzerIsolate {
   static Future<List<AnalyzeOutput>> analyzeAll(
@@ -334,7 +332,6 @@ class AnalyzerIsolate {
 
     cv.Mat? mat;
     late cv.Mat work;
-    Uint8List? workBytes;
 
     try {
       mat = cv.imdecode(rawBytes, cv.IMREAD_COLOR);

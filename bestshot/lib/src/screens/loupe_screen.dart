@@ -9,6 +9,16 @@ import 'package:flutter/services.dart';
 import '../models/photo_entry.dart';
 import '../services/analysis/focus_mask_service.dart';
 
+enum LoupeHudMode {
+  compact('コンパクト', Icons.subtitles_outlined),
+  detailed('詳細', Icons.info_outline),
+  clean('クリーン', Icons.visibility_off_outlined);
+
+  const LoupeHudMode(this.label, this.icon);
+  final String label;
+  final IconData icon;
+}
+
 class LoupeScreen extends StatefulWidget {
   const LoupeScreen({
     super.key,
@@ -40,6 +50,8 @@ class _LoupeScreenState extends State<LoupeScreen> {
   bool _loading = true;
   Object? _error;
   final Map<String, Uint8List> _loadedBytes = {};
+
+  LoupeHudMode _hudMode = LoupeHudMode.compact;
 
   bool _showFocusMask = false;
   bool _focusMaskBusy = false;
@@ -200,6 +212,41 @@ class _LoupeScreenState extends State<LoupeScreen> {
     return e.displayBytes;
   }
 
+  void _cycleHudMode() {
+    setState(() {
+      switch (_hudMode) {
+        case LoupeHudMode.compact:
+          _hudMode = LoupeHudMode.detailed;
+          break;
+        case LoupeHudMode.detailed:
+          _hudMode = LoupeHudMode.clean;
+          break;
+        case LoupeHudMode.clean:
+          _hudMode = LoupeHudMode.compact;
+          break;
+      }
+    });
+  }
+
+  void _toggleHistogram() {
+    setState(() {
+      _showHistogram = !_showHistogram;
+    });
+  }
+
+  void _toggleSync() {
+    setState(() {
+      _syncEnabled = !_syncEnabled;
+      if (_syncEnabled) {
+        // Snapshot current positions as initial
+        _initialMatrices.clear();
+        for (final c in _controllers) {
+          _initialMatrices.add(c.value.clone());
+        }
+      }
+    });
+  }
+
   KeyEventResult _handleKeyEvent(KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
@@ -221,6 +268,54 @@ class _LoupeScreenState extends State<LoupeScreen> {
           _activePaneIndex++;
         });
       }
+      return KeyEventResult.handled;
+    }
+
+    // 数字キー 1〜4 でアクティブペイン選択切り替え
+    if (key == LogicalKeyboardKey.digit1 || key == LogicalKeyboardKey.numpad1) {
+      if (count > 0) setState(() => _activePaneIndex = 0);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.digit2 || key == LogicalKeyboardKey.numpad2) {
+      if (count > 1) setState(() => _activePaneIndex = 1);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.digit3 || key == LogicalKeyboardKey.numpad3) {
+      if (count > 2) setState(() => _activePaneIndex = 2);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.digit4 || key == LogicalKeyboardKey.numpad4) {
+      if (count > 3) setState(() => _activePaneIndex = 3);
+      return KeyEventResult.handled;
+    }
+
+    // I キー: HUD表示モード切り替え (Compact → Detailed → Clean)
+    if (key == LogicalKeyboardKey.keyI) {
+      _cycleHudMode();
+      return KeyEventResult.handled;
+    }
+
+    // H キー: ヒストグラム表示トグル
+    if (key == LogicalKeyboardKey.keyH) {
+      _toggleHistogram();
+      return KeyEventResult.handled;
+    }
+
+    // M キー: フォーカスマスク表示トグル
+    if (key == LogicalKeyboardKey.keyM) {
+      _toggleFocusMask();
+      return KeyEventResult.handled;
+    }
+
+    // S キー: 連動拡大トグル
+    if (key == LogicalKeyboardKey.keyS) {
+      _toggleSync();
+      return KeyEventResult.handled;
+    }
+
+    // Z キー: ピント位置へのズーム / リセット
+    if (key == LogicalKeyboardKey.keyZ) {
+      _zoomActivePaneToFocusPoint();
       return KeyEventResult.handled;
     }
 
@@ -260,14 +355,31 @@ class _LoupeScreenState extends State<LoupeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isCompactAppBar = screenWidth < 720;
+
     return Focus(
       focusNode: _focusNode,
       autofocus: true,
       onKeyEvent: (node, event) => _handleKeyEvent(event),
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('ルーペモード'),
+          title: Text(isCompactAppBar ? 'ルーペ' : 'ルーペ比較'),
           actions: [
+            // HUD モード切替（Compact / Detailed / Clean）
+            IconButton(
+              tooltip: 'HUD切替: ${_hudMode.label} [I]',
+              onPressed: _cycleHudMode,
+              icon: Icon(
+                _hudMode.icon,
+                color: _hudMode == LoupeHudMode.clean
+                    ? Colors.white38
+                    : (_hudMode == LoupeHudMode.compact
+                        ? Colors.cyanAccent
+                        : Colors.amberAccent),
+              ),
+            ),
+            // ピント位置マーク
             IconButton(
               tooltip: _showFocusPoint ? 'ピント位置マークを隠す' : 'ピント位置マークを表示',
               onPressed: () => setState(() => _showFocusPoint = !_showFocusPoint),
@@ -276,32 +388,24 @@ class _LoupeScreenState extends State<LoupeScreen> {
                 color: _showFocusPoint ? const Color(0xFF00E676) : null,
               ),
             ),
+            // ヒストグラム表示トグル
             IconButton(
-              tooltip: _showHistogram ? 'ヒストグラムを隠す' : 'ヒストグラムを表示',
-              onPressed: () => setState(() => _showHistogram = !_showHistogram),
+              tooltip: _showHistogram ? 'ヒストグラムを隠す [H]' : 'ヒストグラムを表示 [H]',
+              onPressed: _toggleHistogram,
               icon: Icon(
                 _showHistogram ? Icons.bar_chart : Icons.bar_chart_outlined,
                 color: _showHistogram ? Colors.cyanAccent : null,
               ),
             ),
+            // ピント位置へズーム / リセット
             IconButton(
-              tooltip: 'ピント位置へズーム / リセット',
+              tooltip: 'ピント位置へズーム / リセット [Z]',
               onPressed: _zoomActivePaneToFocusPoint,
               icon: const Icon(Icons.zoom_in_map, color: Colors.amberAccent),
             ),
+            // フォーカスマスク
             IconButton(
-              tooltip: 'デバッグ表示を切り替え',
-              onPressed: () =>
-                  setState(() => _showDebugOverlay = !_showDebugOverlay),
-              icon: Icon(
-                _showDebugOverlay
-                    ? Icons.bug_report
-                    : Icons.bug_report_outlined,
-                color: _showDebugOverlay ? Colors.redAccent : null,
-              ),
-            ),
-            IconButton(
-              tooltip: _showFocusMask ? 'フォーカスマスクを隠す' : 'フォーカスマスクを表示',
+              tooltip: _showFocusMask ? 'フォーカスマスクを隠す [M]' : 'フォーカスマスクを表示 [M]',
               onPressed: _loading || _error != null ? null : _toggleFocusMask,
               icon: _focusMaskBusy
                   ? const SizedBox(
@@ -317,36 +421,50 @@ class _LoupeScreenState extends State<LoupeScreen> {
                 icon: Icon(Icons.color_lens, color: _focusMaskColor),
                 onPressed: _cycleMaskColor,
               ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 100,
-                child: Slider(
-                  value: _focusMaskOpacity,
-                  onChanged: (v) => setState(() => _focusMaskOpacity = v),
-                ),
-              ),
-            ],
-            Row(
-              children: [
-                const Text('連動拡大'),
-                Switch(
-                  value: _syncEnabled,
-                  onChanged: (v) {
-                    setState(() {
-                      _syncEnabled = v;
-                      if (_syncEnabled) {
-                        // Snapshot current positions as initial
-                        _initialMatrices.clear();
-                        for (final c in _controllers) {
-                          _initialMatrices.add(c.value.clone());
-                        }
-                      }
-                    });
-                  },
+              if (!isCompactAppBar) ...[
+                const SizedBox(width: 4),
+                SizedBox(
+                  width: 80,
+                  child: Slider(
+                    value: _focusMaskOpacity,
+                    onChanged: (v) => setState(() => _focusMaskOpacity = v),
+                  ),
                 ),
               ],
-            ),
-            const SizedBox(width: 16),
+            ],
+            // 連動拡大
+            if (isCompactAppBar)
+              IconButton(
+                tooltip: '連動拡大: ${_syncEnabled ? "ON" : "OFF"} [S]',
+                icon: Icon(
+                  _syncEnabled ? Icons.sync : Icons.sync_disabled,
+                  color: _syncEnabled ? Colors.cyanAccent : null,
+                ),
+                onPressed: _toggleSync,
+              )
+            else
+              Row(
+                children: [
+                  const Text('連動拡大', style: TextStyle(fontSize: 12)),
+                  Switch(
+                    value: _syncEnabled,
+                    onChanged: (_) => _toggleSync(),
+                  ),
+                ],
+              ),
+            if (!isCompactAppBar)
+              IconButton(
+                tooltip: 'デバッグ表示を切り替え',
+                onPressed: () =>
+                    setState(() => _showDebugOverlay = !_showDebugOverlay),
+                icon: Icon(
+                  _showDebugOverlay
+                      ? Icons.bug_report
+                      : Icons.bug_report_outlined,
+                  color: _showDebugOverlay ? Colors.redAccent : null,
+                ),
+              ),
+            const SizedBox(width: 8),
           ],
         ),
         body: _buildBody(),
@@ -472,14 +590,23 @@ class _LoupeScreenState extends State<LoupeScreen> {
     final selectedForDelete =
         widget.initialSelectedForDelete?.contains(key) ?? false;
 
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isNarrow = screenWidth < 500;
+
     return SafeArea(
       child: Container(
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        margin: EdgeInsets.fromLTRB(
+          isNarrow ? 8 : 16,
+          0,
+          isNarrow ? 8 : 16,
+          isNarrow ? 6 : 12,
+        ),
+        padding: EdgeInsets.symmetric(
+          horizontal: isNarrow ? 10 : 16,
+          vertical: isNarrow ? 6 : 10,
+        ),
         decoration: BoxDecoration(
-          color: const Color(
-            0xFF111827,
-          ).withValues(alpha: 0.92), // Deep Dark Card
+          color: const Color(0xFF111827).withValues(alpha: 0.92), // Deep Dark Card
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0xFF1F2937), width: 1.5),
           boxShadow: [
@@ -500,10 +627,12 @@ class _LoupeScreenState extends State<LoupeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '選択中: ${_getFileName(item)}',
-                    style: const TextStyle(
+                    '${isNarrow ? "" : "選択中: "}${_getFileName(item)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
                       fontWeight: FontWeight.bold,
-                      fontSize: 13,
+                      fontSize: isNarrow ? 12 : 13,
                       color: Colors.white,
                     ),
                   ),
@@ -511,7 +640,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
                   Text(
                     'ピント値: ${widget.scores[_activePaneIndex].toStringAsFixed(0)}',
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: isNarrow ? 10 : 11,
                       color: Colors.white.withValues(alpha: 0.6),
                     ),
                   ),
@@ -528,9 +657,9 @@ class _LoupeScreenState extends State<LoupeScreen> {
               },
               borderRadius: BorderRadius.circular(4),
               child: Container(
-                constraints: const BoxConstraints(minWidth: 100),
-                height: 48,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                constraints: BoxConstraints(minWidth: isNarrow ? 64 : 100),
+                height: isNarrow ? 38 : 46,
+                padding: EdgeInsets.symmetric(horizontal: isNarrow ? 8 : 12),
                 decoration: BoxDecoration(
                   color: selectedForDelete
                       ? Colors.red.withValues(alpha: 0.15)
@@ -550,16 +679,16 @@ class _LoupeScreenState extends State<LoupeScreen> {
                           ? Icons.delete_forever
                           : Icons.delete_outline,
                       color: selectedForDelete ? Colors.red : Colors.white70,
-                      size: 20,
+                      size: isNarrow ? 18 : 20,
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 4),
                     Text(
-                      '削除候補',
+                      isNarrow ? '削除' : '削除候補',
                       style: TextStyle(
                         color: selectedForDelete
                             ? Colors.redAccent
                             : Colors.white70,
-                        fontSize: 12,
+                        fontSize: isNarrow ? 11 : 12,
                         fontWeight: selectedForDelete
                             ? FontWeight.bold
                             : FontWeight.normal,
@@ -569,7 +698,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
                 ),
               ),
             ),
-            const SizedBox(width: 10),
+            SizedBox(width: isNarrow ? 6 : 10),
 
             // Toggle Best button
             InkWell(
@@ -583,9 +712,9 @@ class _LoupeScreenState extends State<LoupeScreen> {
               },
               borderRadius: BorderRadius.circular(4),
               child: Container(
-                constraints: const BoxConstraints(minWidth: 100),
-                height: 48,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                constraints: BoxConstraints(minWidth: isNarrow ? 64 : 100),
+                height: isNarrow ? 38 : 46,
+                padding: EdgeInsets.symmetric(horizontal: isNarrow ? 8 : 12),
                 decoration: BoxDecoration(
                   color: isBest
                       ? Colors.amber.withValues(alpha: 0.15)
@@ -603,14 +732,14 @@ class _LoupeScreenState extends State<LoupeScreen> {
                     Icon(
                       isBest ? Icons.star : Icons.star_border,
                       color: isBest ? Colors.amber : Colors.white70,
-                      size: 20,
+                      size: isNarrow ? 18 : 20,
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 4),
                     Text(
-                      isBest ? 'Best' : 'Bestに設定',
+                      isNarrow ? 'Best' : (isBest ? 'Best' : 'Bestに設定'),
                       style: TextStyle(
                         color: isBest ? Colors.amber : Colors.white70,
-                        fontSize: 12,
+                        fontSize: isNarrow ? 11 : 12,
                         fontWeight: isBest
                             ? FontWeight.bold
                             : FontWeight.normal,
@@ -646,6 +775,9 @@ class _LoupeScreenState extends State<LoupeScreen> {
     }
     return _ZoomPane(
       item: item,
+      paneIndex: index,
+      totalPanes: widget.items.length,
+      hudMode: _hudMode,
       bytes: bytes,
       maskPng: _focusMaskPngByKey[key],
       showFocusMask: _showFocusMask,
@@ -679,6 +811,9 @@ class _LoupeScreenState extends State<LoupeScreen> {
 class _ZoomPane extends StatefulWidget {
   const _ZoomPane({
     required this.item,
+    required this.paneIndex,
+    required this.totalPanes,
+    required this.hudMode,
     required this.bytes,
     required this.maskPng,
     required this.showFocusMask,
@@ -698,6 +833,9 @@ class _ZoomPane extends StatefulWidget {
   });
 
   final PhotoEntry item;
+  final int paneIndex;
+  final int totalPanes;
+  final LoupeHudMode hudMode;
   final Uint8List bytes;
   final Uint8List? maskPng;
   final bool showFocusMask;
@@ -987,133 +1125,495 @@ class _ZoomPaneState extends State<_ZoomPane> {
     );
   }
 
-  /// カメラ情報 HUD（左上）
-  Widget _buildCameraHud() {
+  Widget _buildPaneHeader(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final exif = widget.item.exif;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      color: widget.isFocused
+          ? colorScheme.primaryContainer
+          : const Color(0xFF181E29),
+      child: Row(
+        children: [
+          // ペイン番号インジケータ [1]
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+            decoration: BoxDecoration(
+              color: widget.isFocused ? colorScheme.primary : Colors.white24,
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(
+              '${widget.paneIndex + 1}',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: widget.isFocused ? colorScheme.onPrimary : Colors.white,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // ファイル名
+          Flexible(
+            child: Text(
+              widget.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: widget.isFocused
+                        ? colorScheme.onPrimaryContainer
+                        : Colors.white,
+                    fontWeight: widget.isFocused ? FontWeight.bold : FontWeight.w500,
+                  ),
+            ),
+          ),
+          // コンパクトモード時: 写真上ではなくヘッダーに露出値と鮮鋭度をドッキング表示
+          if (widget.hudMode == LoupeHudMode.compact) ...[
+            const SizedBox(width: 8),
+            _buildCompactHeaderChips(exif, widget.score),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactHeaderChips(ExifSummary? exif, double score) {
+    final items = <String>[];
+    if (exif?.shutter != null) items.add(exif!.shutter!);
+    if (exif?.fNumber != null) items.add('F${exif!.fNumber!}');
+    if (exif?.iso != null) items.add('ISO${exif!.iso!}');
+    if (exif?.focalLength != null) items.add(exif!.focalLength!);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (items.isNotEmpty)
+          Text(
+            items.join(' · '),
+            style: const TextStyle(
+              color: Colors.cyanAccent,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: Text(
+            'S: ${score.toStringAsFixed(0)}',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 重なり防止＆HUDモード連動オーバーレイ
+  Widget _buildOverlays(BoxConstraints constraints) {
+    final showHisto = widget.showHistogram && widget.item.histogram.isNotEmpty;
+    final showDebug = widget.showDebugOverlay;
+
+    // クリーンモード: デバッグオーバーレイON時のみデバッグカードを表示、それ以外は非表示
+    if (widget.hudMode == LoupeHudMode.clean) {
+      if (!showDebug) return const SizedBox.shrink();
+      return Positioned(
+        left: 10,
+        top: 10,
+        right: 10,
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: _buildDebugExplanationCard(maxWidth: constraints.maxWidth - 20),
+        ),
+      );
+    }
+
+    // コンパクトモード: ヘッダーに主要露出値は表示済み。
+    // ヒストグラムがONなら右上、デバッグがONなら左上に配置
+    if (widget.hudMode == LoupeHudMode.compact) {
+      if (!showHisto && !showDebug) return const SizedBox.shrink();
+      final paneWidth = constraints.maxWidth;
+      return Positioned(
+        left: 10,
+        top: 10,
+        right: 10,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            if (showDebug)
+              Flexible(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: paneWidth >= 500 ? 360 : 280),
+                  child: _buildDebugExplanationCard(
+                    maxWidth: paneWidth >= 500 ? 360 : 280,
+                  ),
+                ),
+              )
+            else
+              const Spacer(),
+            if (showHisto) ...[
+              const SizedBox(width: 8),
+              _buildHistogramContent(),
+            ],
+          ],
+        ),
+      );
+    }
+
+    // 詳細モード (Detailed):
+    // ペイン幅に応じてレイアウトを動的に調整し、絶対に衝突・重なり合わない構造
+    final paneWidth = constraints.maxWidth;
+
+    return Positioned(
+      left: 10,
+      top: 10,
+      right: 10,
+      child: paneWidth >= 480
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 360),
+                    child: _buildCameraHudContent(),
+                  ),
+                ),
+                if (showHisto) ...[
+                  const SizedBox(width: 10),
+                  _buildHistogramContent(),
+                ],
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildCameraHudContent(),
+                if (showHisto) ...[
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.topRight,
+                    child: _buildHistogramContent(),
+                  ),
+                ],
+              ],
+            ),
+    );
+  }
+
+  /// カメラ情報 HUDカード
+  Widget _buildCameraHudContent() {
     final exif = widget.item.exif;
     final hasCameraInfo = exif?.cameraModel != null || exif?.lensModel != null;
     final isShakeRisk = _isCameraShakeRisk(exif);
 
-    return Positioned(
-      left: 12,
-      top: 12,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 340),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.72),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.white24),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.35),
-              blurRadius: 6,
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 機材名（カメラ + レンズ）
-            if (hasCameraInfo) ...[
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.photo_camera, size: 12, color: Colors.cyanAccent),
-                  const SizedBox(width: 4),
-                  Flexible(
-                    child: Text(
-                      [
-                        if (exif?.cameraModel != null) exif!.cameraModel!,
-                        if (exif?.lensModel != null) exif!.lensModel!,
-                      ].join('  /  '),
-                      style: const TextStyle(
-                        color: Colors.cyanAccent,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 5),
-            ],
-            // 撮影パラメーター（焦点距離・絞り・SS・ISO・EV）
-            Wrap(
-              spacing: 5,
-              runSpacing: 3,
-              children: [
-                if (exif?.focalLength != null)
-                  _buildParamChip(Icons.straighten, exif!.focalLength!),
-                if (exif?.fNumber != null)
-                  _buildParamChip(Icons.camera, 'F${exif!.fNumber!}'),
-                if (exif?.shutter != null)
-                  _buildParamChip(Icons.timer, exif!.shutter!),
-                if (exif?.iso != null)
-                  _buildParamChip(Icons.iso, 'ISO${exif!.iso!}'),
-                if (exif?.exposureBias != null)
-                  _buildParamChip(Icons.exposure, exif!.exposureBias!),
-              ],
-            ),
-            const SizedBox(height: 4),
-            // スコア & 手ブレ警告表示
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 360),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.82),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.white24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 8,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 機材名（カメラ + レンズ）
+          if (hasCameraInfo) ...[
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  '鮮鋭度: ${widget.score.toStringAsFixed(0)}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
+                const Icon(Icons.photo_camera, size: 12, color: Colors.cyanAccent),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    [
+                      if (exif?.cameraModel != null) exif!.cameraModel!,
+                      if (exif?.lensModel != null) exif!.lensModel!,
+                    ].join('  /  '),
+                    style: const TextStyle(
+                      color: Colors.cyanAccent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (isShakeRisk) ...[
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                    decoration: BoxDecoration(
-                      color: Colors.amber.withValues(alpha: 0.25),
-                      border: Border.all(color: Colors.amber, width: 0.8),
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.warning_amber_rounded, size: 10, color: Colors.amber),
-                        SizedBox(width: 2),
-                        Text(
-                          '手ブレ注意 (低SS)',
-                          style: TextStyle(
-                            color: Colors.amber,
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
               ],
             ),
-            // デバッグ表示
-            if (widget.showDebugOverlay) ...[
-              const SizedBox(height: 4),
-              Container(height: 1, color: Colors.white24),
-              const SizedBox(height: 4),
-              Text(
-                '露出スコア: ${widget.item.exposureScore.toStringAsFixed(2)} | 顔スコア: ${widget.item.faceQualityScore.toStringAsFixed(2)}',
-                style: const TextStyle(color: Colors.white70, fontSize: 9),
-              ),
-              Text(
-                '解像度: ${_imageWidth ?? "?"} x ${_imageHeight ?? "?"}',
-                style: const TextStyle(color: Colors.white70, fontSize: 9),
-              ),
-            ],
+            const SizedBox(height: 5),
           ],
-        ),
+          // 撮影パラメーター（焦点距離・絞り・SS・ISO・EV）
+          Wrap(
+            spacing: 5,
+            runSpacing: 3,
+            children: [
+              if (exif?.focalLength != null)
+                _buildParamChip(Icons.straighten, exif!.focalLength!),
+              if (exif?.fNumber != null)
+                _buildParamChip(Icons.camera, 'F${exif!.fNumber!}'),
+              if (exif?.shutter != null)
+                _buildParamChip(Icons.timer, exif!.shutter!),
+              if (exif?.iso != null)
+                _buildParamChip(Icons.iso, 'ISO${exif!.iso!}'),
+              if (exif?.exposureBias != null)
+                _buildParamChip(Icons.exposure, exif!.exposureBias!),
+            ],
+          ),
+          const SizedBox(height: 4),
+          // スコア & 手ブレ警告表示
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'ピント値: ${widget.score.toStringAsFixed(0)}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              if (isShakeRisk) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withValues(alpha: 0.25),
+                    border: Border.all(color: Colors.amber, width: 0.8),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.warning_amber_rounded, size: 10, color: Colors.amber),
+                      SizedBox(width: 2),
+                      Text(
+                        '手ブレ注意 (低SS)',
+                        style: TextStyle(
+                          color: Colors.amber,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+          // デバッグ表示（XAI・判定理由・メトリクス詳細）
+          if (widget.showDebugOverlay) ...[
+            const SizedBox(height: 6),
+            _buildDebugExplanationCard(maxWidth: 340),
+            const SizedBox(height: 4),
+            Text(
+              '解像度: ${_imageWidth ?? "?"} x ${_imageHeight ?? "?"}',
+              style: const TextStyle(color: Colors.white70, fontSize: 8.5),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// AIスコア・グループ判定理由カード（XAI / デバッグ可視化）
+  Widget _buildDebugExplanationCard({double maxWidth = 340}) {
+    final sExp = widget.item.scoreExplanation;
+    final gExp = widget.item.groupExplanation;
+
+    return Container(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      padding: const EdgeInsets.all(7),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B132B).withValues(alpha: 0.92), // Deep Navy Card
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: Colors.redAccent.withValues(alpha: 0.7), width: 1.0),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.5),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header: タイトル & 総合点バッジ
+          Row(
+            children: [
+              const Icon(Icons.psychology_outlined, size: 13, color: Colors.redAccent),
+              const SizedBox(width: 4),
+              const Text(
+                'AI判定・スコア算出根拠',
+                style: TextStyle(
+                  color: Colors.redAccent,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              if (sExp != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent.withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(3),
+                    border: Border.all(color: Colors.redAccent.withValues(alpha: 0.6), width: 0.8),
+                  ),
+                  child: Text(
+                    '総合 ${(sExp.totalScore * 100).toStringAsFixed(1)}点',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Container(height: 0.8, color: Colors.white12),
+          const SizedBox(height: 5),
+
+          // 1. グループ化判定理由 (Grouping Explanation)
+          if (gExp != null) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.tealAccent.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(2.5),
+                  ),
+                  child: Text(
+                    gExp.matchType,
+                    style: const TextStyle(
+                      color: Colors.tealAccent,
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    gExp.description,
+                    style: const TextStyle(color: Colors.white, fontSize: 9),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 4,
+              runSpacing: 2,
+              children: [
+                if (gExp.diffSeconds != null)
+                  _buildDebugTag('Δt', '${gExp.diffSeconds!.toStringAsFixed(1)}s'),
+                if (gExp.pHashDistance != null)
+                  _buildDebugTag('pHash距離', '${gExp.pHashDistance}'),
+                if (gExp.colorDistance != null)
+                  _buildDebugTag('色距離', gExp.colorDistance!.toStringAsFixed(3)),
+                if (gExp.orbMatches != null)
+                  _buildDebugTag('ORB特徴点', '${gExp.orbMatches}点一致'),
+                if (gExp.referenceKey != null)
+                  _buildDebugTag(
+                    '基準写真',
+                    gExp.referenceKey!.split(RegExp(r'[\\/]')).last,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            Container(height: 0.8, color: Colors.white12),
+            const SizedBox(height: 5),
+          ],
+
+          // 2. スコア算出理由 (Score Calculation)
+          if (sExp != null) ...[
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.amberAccent.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(2.5),
+                  ),
+                  child: Text(
+                    sExp.ruleName,
+                    style: const TextStyle(
+                      color: Colors.amberAccent,
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 3),
+            Text(
+              sExp.formulaText,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.9),
+                fontSize: 8.5,
+                fontFamily: 'monospace',
+              ),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 4,
+              runSpacing: 2,
+              children: [
+                _buildDebugTag('生鮮鋭度', sExp.rawSharpness.toStringAsFixed(0)),
+                _buildDebugTag('ISO補正後', sExp.effectiveSharpness.toStringAsFixed(0)),
+                _buildDebugTag('正規化鮮鋭度', '${(sExp.normalizedSharpness * 100).toStringAsFixed(1)}%'),
+                _buildDebugTag('露出点', '${(sExp.exposureScore * 100).toStringAsFixed(1)}%'),
+                if (sExp.faceQualityScore > 0)
+                  _buildDebugTag('顔品質点', '${(sExp.faceQualityScore * 100).toStringAsFixed(1)}%'),
+              ],
+            ),
+          ] else ...[
+            Text(
+              '生鮮鋭度: ${widget.item.sharpness.toStringAsFixed(0)} | 露出: ${widget.item.exposureScore.toStringAsFixed(2)}',
+              style: const TextStyle(color: Colors.white70, fontSize: 8.5),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDebugTag(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(2.5),
+        border: Border.all(color: Colors.white12, width: 0.5),
+      ),
+      child: Text(
+        '$label: $value',
+        style: const TextStyle(color: Colors.white70, fontSize: 8),
       ),
     );
   }
@@ -1163,62 +1663,58 @@ class _ZoomPaneState extends State<_ZoomPane> {
     return ss > limit * 1.25;
   }
 
-  /// ヒストグラムオーバーレイ（右上）
-  Widget _buildHistogramOverlay() {
-    return Positioned(
-      right: 12,
-      top: 12,
-      child: Container(
-        width: 110,
-        height: 64,
-        padding: const EdgeInsets.all(5),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.72),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.white24),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.35),
-              blurRadius: 6,
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'HISTOGRAM',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 8,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                Text(
-                  'Luma',
-                  style: TextStyle(
-                    color: Colors.cyanAccent,
-                    fontSize: 8,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 2),
-            Expanded(
-              child: CustomPaint(
-                painter: _HistogramPainter(
-                  widget.item.histogram,
-                  barColor: const Color(0xFF38BDF8),
+  /// ヒストグラムカード
+  Widget _buildHistogramContent() {
+    return Container(
+      width: 110,
+      height: 64,
+      padding: const EdgeInsets.all(5),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.white24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 6,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'HISTOGRAM',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 8,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
                 ),
               ),
+              Text(
+                'Luma',
+                style: TextStyle(
+                  color: Colors.cyanAccent,
+                  fontSize: 8,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Expanded(
+            child: CustomPaint(
+              painter: _HistogramPainter(
+                widget.item.histogram,
+                barColor: const Color(0xFF38BDF8),
+              ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1229,6 +1725,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
 
     return GestureDetector(
       onTap: widget.onTap,
+      onDoubleTap: widget.onZoomToPoint, // ダブルタップで等倍 / 3倍ズーム
       child: Container(
         decoration: BoxDecoration(
           border: Border.all(
@@ -1238,99 +1735,85 @@ class _ZoomPaneState extends State<_ZoomPane> {
         ),
         child: Column(
           children: [
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              color: widget.isFocused
-                  ? colorScheme.primaryContainer
-                  : Colors.black12,
-              child: Text(
-                widget.title,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: widget.isFocused
-                      ? colorScheme.onPrimaryContainer
-                      : null,
-                  fontWeight: widget.isFocused ? FontWeight.bold : null,
-                ),
-              ),
-            ),
+            _buildPaneHeader(context),
             Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Positioned.fill(
-                    child: InteractiveViewer(
-                      transformationController: widget.controller,
-                      minScale: 1,
-                      maxScale: 12,
-                      onInteractionUpdate: (_) => widget.onInteractionUpdate(),
-                      child: Center(
-                        child: Stack(
-                          alignment: Alignment.center,
-                          fit: StackFit.passthrough,
-                          children: [
-                            Image(
-                              image: ResizeImage(
-                                MemoryImage(widget.bytes),
-                                width: 3840,
-                                height: 3840,
-                                policy: ResizeImagePolicy.fit,
-                              ),
-                              filterQuality: FilterQuality.high,
-                            ),
-                            if (widget.showFocusMask && widget.maskPng != null)
-                              Opacity(
-                                opacity: widget.maskOpacity,
-                                child: Image.memory(
-                                  widget.maskPng!,
-                                  filterQuality: FilterQuality.low,
-                                  color: widget.maskColor,
-                                  colorBlendMode: BlendMode.srcIn,
+              child: LayoutBuilder(
+                builder: (context, paneConstraints) {
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Positioned.fill(
+                        child: InteractiveViewer(
+                          transformationController: widget.controller,
+                          minScale: 1,
+                          maxScale: 12,
+                          onInteractionUpdate: (_) => widget.onInteractionUpdate(),
+                          child: Center(
+                            child: Stack(
+                              alignment: Alignment.center,
+                              fit: StackFit.passthrough,
+                              children: [
+                                Image(
+                                  image: ResizeImage(
+                                    MemoryImage(widget.bytes),
+                                    width: 3840,
+                                    height: 3840,
+                                    policy: ResizeImagePolicy.fit,
+                                  ),
+                                  filterQuality: FilterQuality.high,
                                 ),
-                              ),
-                            // ピント位置マークおよびオーバーレイ枠（画像サイズに追従）
-                            Positioned.fill(
-                              child: LayoutBuilder(
-                                builder: (context, constraints) {
-                                  final w = constraints.maxWidth;
-                                  final h = constraints.maxHeight;
-                                  if (w <= 0 || h <= 0) {
-                                    return const SizedBox.shrink();
-                                  }
-                                  return Stack(
-                                    fit: StackFit.passthrough,
-                                    children: [
-                                      if (widget.showFocusPoint)
-                                        _buildFocusMarker(w, h),
-                                      if (widget.showDebugOverlay) ...[
-                                        if (widget.item.debugGridSharps != null &&
-                                            widget.item.debugGridSharps!.length == 16)
-                                          ..._buildGridOverlay(w, h),
-                                        if (widget.item.semanticObjects.isNotEmpty)
-                                          ..._buildObjectsOverlay(w, h),
-                                        if (widget.item.portrait.hasFace &&
-                                            widget.item.portrait.faceW > 0 &&
-                                            widget.item.portrait.faceH > 0 &&
-                                            _imageWidth != null &&
-                                            _imageHeight != null)
-                                          _buildFaceOverlay(w, h),
-                                      ],
-                                    ],
-                                  );
-                                },
-                              ),
+                                if (widget.showFocusMask && widget.maskPng != null)
+                                  Opacity(
+                                    opacity: widget.maskOpacity,
+                                    child: Image.memory(
+                                      widget.maskPng!,
+                                      filterQuality: FilterQuality.low,
+                                      color: widget.maskColor,
+                                      colorBlendMode: BlendMode.srcIn,
+                                    ),
+                                  ),
+                                // ピント位置マークおよびオーバーレイ枠（画像サイズに追従）
+                                Positioned.fill(
+                                  child: LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      final w = constraints.maxWidth;
+                                      final h = constraints.maxHeight;
+                                      if (w <= 0 || h <= 0) {
+                                        return const SizedBox.shrink();
+                                      }
+                                      return Stack(
+                                        fit: StackFit.passthrough,
+                                        children: [
+                                          if (widget.showFocusPoint)
+                                            _buildFocusMarker(w, h),
+                                          if (widget.showDebugOverlay) ...[
+                                            if (widget.item.debugGridSharps != null &&
+                                                widget.item.debugGridSharps!.length == 16)
+                                              ..._buildGridOverlay(w, h),
+                                            if (widget.item.semanticObjects.isNotEmpty)
+                                              ..._buildObjectsOverlay(w, h),
+                                            if (widget.item.portrait.hasFace &&
+                                                widget.item.portrait.faceW > 0 &&
+                                                widget.item.portrait.faceH > 0 &&
+                                                _imageWidth != null &&
+                                                _imageHeight != null)
+                                              _buildFaceOverlay(w, h),
+                                          ],
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                  // カメラ情報 HUD（左上）
-                  _buildCameraHud(),
-                  // ヒストグラム（右上）
-                  if (widget.showHistogram && widget.item.histogram.isNotEmpty)
-                    _buildHistogramOverlay(),
-                ],
+                      // 重なり防止＆HUDモード連動オーバーレイ
+                      _buildOverlays(paneConstraints),
+                    ],
+                  );
+                },
               ),
             ),
           ],
