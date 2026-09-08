@@ -10,8 +10,8 @@ import '../models/photo_group.dart';
 import '../services/analysis/analysis_types.dart';
 import '../services/deleting/delete_service.dart';
 import '../services/sorting/sort_service.dart';
-import '../widgets/global_background.dart';
-import '../widgets/glass_container.dart';
+import '../theme/bestshot_theme.dart';
+import 'group_detail_screen.dart';
 import 'loupe_screen.dart';
 
 part 'groups/background_task.dart';
@@ -48,6 +48,29 @@ class _GroupsScreenState extends State<GroupsScreen> {
   // バックグラウンド処理用の状態
   final Set<String> _processingKeys = {};
   final List<_BackgroundTask> _backgroundTasks = [];
+
+  // フィルター・ナビゲーション状態 (Section 2.1 & 4.1)
+  String _filterQuery = '';
+  bool _filterBurstOnly = false;
+  bool _filterReviewOnly = false;
+  bool _isFilterDrawerOpen = false;
+  int _bottomNavIndex = 0;
+
+  List<PhotoGroup> get _filteredGroups {
+    return _groups.where((g) {
+      if (_filterBurstOnly && !g.isBurst) return false;
+      if (_filterReviewOnly && !g.needsReview) return false;
+      if (_filterQuery.isNotEmpty) {
+        final q = _filterQuery.toLowerCase();
+        final matchesId = g.id.toLowerCase().contains(q);
+        final matchesItem = g.items.any((e) => (e.filePath ?? '').toLowerCase().contains(q));
+        if (!matchesId && !matchesItem) return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  int get _recommendedBestCount => _groups.where((g) => g.bestKey.isNotEmpty).length;
 
   // Keyboard focus management
   late final FocusNode _focusNode;
@@ -240,6 +263,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
           onRemoveFromDelete: (key) {
             setState(() => _selectedForDelete.remove(key));
           },
+          groups: _groups,
         ),
       ),
     );
@@ -1565,8 +1589,39 @@ class _GroupsScreenState extends State<GroupsScreen> {
   }
 
   Widget _buildGroupBody(BuildContext context, bool isWide, double width, int crossAxisCount) {
+    final displayGroups = _filteredGroups;
+
+    if (displayGroups.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.filter_list_off, size: 48, color: BestShotTheme.textSecondary),
+            const SizedBox(height: 12),
+            const Text(
+              '該当するグループがありません',
+              style: TextStyle(fontSize: 14, color: BestShotTheme.textSecondary),
+            ),
+            if (_filterQuery.isNotEmpty || _filterBurstOnly || _filterReviewOnly) ...[
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _filterQuery = '';
+                    _filterBurstOnly = false;
+                    _filterReviewOnly = false;
+                  });
+                },
+                child: const Text('フィルターをリセット'),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
     Widget buildItem(int index) {
-      final g = _groups[index];
+      final g = displayGroups[index];
       final isKeyboardGroupFocused = index == _keyboardGroupIndex;
 
       return _ExpandableGroupCard(
@@ -1605,6 +1660,16 @@ class _GroupsScreenState extends State<GroupsScreen> {
             }
           });
         },
+        onSetBest: (k) {
+          setState(() {
+            for (var i = 0; i < _groups.length; i++) {
+              if (_groups[i].items.any((item) => item.key == k)) {
+                _groups[i] = _groups[i].copyWith(bestKey: k);
+                break;
+              }
+            }
+          });
+        },
         isKeyboardGroupFocused: isKeyboardGroupFocused,
         keyboardPhotoKey: isKeyboardGroupFocused ? _keyboardPhotoKey : null,
         onPhotoTileFocused: (key) {
@@ -1629,19 +1694,85 @@ class _GroupsScreenState extends State<GroupsScreen> {
             });
           }
         },
+        onOpenDetail: () {
+          Navigator.of(context).push(
+            PageRouteBuilder(
+              transitionDuration: const Duration(milliseconds: 300),
+              pageBuilder: (context, animation, secondaryAnimation) => GroupDetailScreen(
+                group: g,
+                selectedForDelete: _selectedForDelete,
+                onToggleDelete: (key, v) {
+                  setState(() {
+                    if (v) {
+                      _selectedForDelete.add(key);
+                    } else {
+                      _selectedForDelete.remove(key);
+                    }
+                  });
+                },
+                loupeSelection: _loupeSelection,
+                onToggleLoupe: (key) {
+                  setState(() {
+                    if (_loupeSelection.contains(key)) {
+                      _loupeSelection.remove(key);
+                    } else {
+                      if (_loupeSelection.length >= 4) {
+                        _loupeSelection.removeAt(0);
+                      }
+                      _loupeSelection.add(key);
+                    }
+                  });
+                },
+                onSetBest: (k) {
+                  setState(() {
+                    for (var i = 0; i < _groups.length; i++) {
+                      if (_groups[i].items.any((item) => item.key == k)) {
+                        _groups[i] = _groups[i].copyWith(bestKey: k);
+                        break;
+                      }
+                    }
+                  });
+                },
+                selectedSortFolders: _selectedSortFolders,
+                customFolders: _customFolders,
+                onSortFolderChanged: (key, folder) {
+                  setState(() {
+                    if (folder == null) {
+                      _selectedSortFolders.remove(key);
+                    } else {
+                      _selectedSortFolders[key] = folder;
+                    }
+                  });
+                },
+                processingKeys: _processingKeys,
+              ),
+              transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                return FadeTransition(
+                  opacity: animation,
+                  child: ScaleTransition(
+                    scale: Tween<double>(begin: 0.98, end: 1.0).animate(
+                      CurvedAnimation(parent: animation, curve: Curves.easeOut),
+                    ),
+                    child: child,
+                  ),
+                );
+              },
+            ),
+          );
+        },
       );
     }
 
     if (isWide) {
       return ListView.builder(
         controller: _scrollController,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        itemCount: (_groups.length / crossAxisCount).ceil(),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        itemCount: (displayGroups.length / crossAxisCount).ceil(),
         itemBuilder: (context, index) {
           final children = <Widget>[];
           for (int i = 0; i < crossAxisCount; i++) {
             final itemIndex = index * crossAxisCount + i;
-            if (itemIndex < _groups.length) {
+            if (itemIndex < displayGroups.length) {
               children.add(Expanded(child: buildItem(itemIndex)));
             } else {
               children.add(const Expanded(child: SizedBox.shrink()));
@@ -1651,7 +1782,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
             }
           }
           return Padding(
-            padding: const EdgeInsets.only(bottom: 16),
+            padding: const EdgeInsets.only(bottom: 8),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: children,
@@ -1662,11 +1793,11 @@ class _GroupsScreenState extends State<GroupsScreen> {
     } else {
       return ListView.builder(
         controller: _scrollController,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        itemCount: _groups.length,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        itemCount: displayGroups.length,
         itemBuilder: (context, index) {
           return Padding(
-            padding: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.only(bottom: 8),
             child: buildItem(index),
           );
         },
@@ -1674,9 +1805,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
+
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     final size = MediaQuery.of(context).size;
     final isWide = size.width >= 800;
     final isMobile = size.width < 600;
@@ -1694,177 +1825,440 @@ class _GroupsScreenState extends State<GroupsScreen> {
       autofocus: true,
       onKeyEvent: (node, event) => _handleKeyEvent(event),
       child: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: GlobalBackground(
-          child: Stack(
+        backgroundColor: BestShotTheme.backgroundPrimary,
+        body: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Main content
-              Positioned.fill(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 80), // Space for floating app bar
-                  child: isPortrait
-                      ? _buildPortraitBody(context, portraitItems, isWide, size.width, crossAxisCount)
-                      : _buildGroupBody(context, isWide, size.width, crossAxisCount),
-                ),
-              ),
-              
-              // Floating App Bar (Glass)
-              Positioned(
-                top: 16,
-                left: 16,
-                right: 16,
-                child: GlassContainer(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  borderRadius: BorderRadius.circular(999),
-                  child: Row(
-                    children: [
-                      // Title & Info
-                      Expanded(
-                        child: isMobile
-                            ? const Text('整理・比較', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white))
-                            : Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Text('整理・比較', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-                                  Text(
-                                    isPortrait
-                                        ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.portrait.hasFace).length} / 削除: $_selectedCount'
-                                        : 'グループ: ${_groups.length} / 削除候補: $_selectedCount',
-                                    style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.7)),
-                                  ),
-                                ],
-                              ),
-                      ),
-                      
-                      // Actions
-                      if (!Platform.isAndroid && !Platform.isIOS)
-                        IconButton(
-                          tooltip: 'キーボード操作ガイド',
-                          icon: const Icon(Icons.keyboard_command_key_rounded, color: Colors.white70),
-                          onPressed: () => _showKeyboardShortcutsDialog(context),
-                        ),
-                      
-                      if (!isPortrait)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: FilledButton.tonalIcon(
-                            onPressed: canExport ? _exportBestShots : null,
-                            icon: const Icon(Icons.folder_shared, size: 16),
-                            label: isMobile ? const SizedBox.shrink() : const Text('保存'),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                              foregroundColor: Colors.white,
-                              padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 16),
-                            ),
-                          ),
-                        ),
-                      
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: Badge(
-                          label: Text('${_selectedSortFolders.length}'),
-                          isLabelVisible: _selectedSortFolders.isNotEmpty,
-                          child: FilledButton.tonalIcon(
-                            onPressed: canSort ? _runSortAndProcess : null,
-                            icon: const Icon(Icons.folder_copy, size: 16),
-                            label: isMobile ? const SizedBox.shrink() : const Text('仕分け'),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                              foregroundColor: Colors.white,
-                              padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 16),
-                            ),
+              // 1. トップバー (高さ56dp, Section 2.1)
+              _buildTopBar(context, canExport, canSort, canDelete, isMobile),
+
+              // 2. フィルターバー (高さ48dp, Section 2.1 & 4.1)
+              _buildFilterBar(context, isMobile),
+
+              // 3. メインコンテンツ & フィルタードロワー
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: isPortrait
+                          ? _buildPortraitBody(context, portraitItems, isWide, size.width, crossAxisCount)
+                          : _buildGroupBody(context, isWide, size.width, crossAxisCount),
+                    ),
+
+                    // フィルタードロワー (スライド幅280dp, 250ms, easeOut, オーバーレイOpacity 0.3)
+                    if (_isFilterDrawerOpen) ...[
+                      // オーバーレイ
+                      Positioned.fill(
+                        child: GestureDetector(
+                          onTap: () => setState(() => _isFilterDrawerOpen = false),
+                          child: Container(
+                            color: Colors.black.withValues(alpha: 0.3),
                           ),
                         ),
                       ),
-                      
-                      if (_loupeSelection.isNotEmpty) ...[
-                        Padding(
-                          padding: const EdgeInsets.only(right: 6),
-                          child: FilledButton.icon(
-                            onPressed: () {
-                              final items = _loupeSelection.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList();
-                              _openLoupe(items);
-                            },
-                            icon: const Icon(Icons.zoom_in, size: 16),
-                            label: Text(isMobile ? '${_loupeSelection.length}' : 'ルーペ (${_loupeSelection.length}/4)'),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: colorScheme.primary.withValues(alpha: 0.8),
-                              foregroundColor: colorScheme.onPrimary,
-                              padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 16),
-                            ),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: Tooltip(
-                            message: 'ルーペ選択を一括解除 (Esc)',
-                            child: FilledButton.tonalIcon(
-                              onPressed: () {
-                                setState(() {
-                                  _loupeSelection.clear();
-                                });
-                              },
-                              icon: const Icon(Icons.layers_clear, size: 16),
-                              label: isMobile ? const SizedBox.shrink() : const Text('ルーペ解除'),
-                              style: FilledButton.styleFrom(
-                                backgroundColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                                foregroundColor: Colors.white70,
-                                padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 12),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                        
-                      FilledButton.icon(
-                        onPressed: canDelete ? _reviewAndDelete : null,
-                        icon: const Icon(Icons.delete_outline, size: 16),
-                        label: Text(isMobile ? '$_selectedCount' : 'ゴミ箱へ'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _selectedCount > 0 
-                              ? colorScheme.errorContainer.withValues(alpha: 0.8) 
-                              : colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                          foregroundColor: _selectedCount > 0 
-                              ? colorScheme.onErrorContainer 
-                              : Colors.white70,
-                          padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 16),
-                        ),
+                      // ドロワー本体
+                      Positioned(
+                        top: 0,
+                        bottom: 0,
+                        left: 0,
+                        width: 280,
+                        child: _buildFilterDrawer(),
                       ),
                     ],
-                  ),
+
+                    // バックグラウンドタスク進捗オーバーレイ
+                    if (_backgroundTasks.isNotEmpty)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: 16,
+                        child: _buildBottomProgressOverlay(),
+                      ),
+                  ],
                 ),
               ),
-              
-              // Background tasks overlay
-              if (_backgroundTasks.isNotEmpty)
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  bottom: 16,
-                  child: _buildBottomProgressOverlay(colorScheme),
-                ),
             ],
           ),
+        ),
+        // 4. ボトムナビゲーション (高さ64dp, Section 2.1)
+        bottomNavigationBar: _buildBottomNav(context),
+      ),
+    );
+  }
+
+  Widget _buildTopBar(
+    BuildContext context,
+    bool canExport,
+    bool canSort,
+    bool canDelete,
+    bool isMobile,
+  ) {
+    return Container(
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: const BoxDecoration(
+        color: BestShotTheme.backgroundPrimary,
+        border: Border(bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+      ),
+      child: Row(
+        children: [
+          // [ロゴ] BestShot
+          const Icon(Icons.camera, size: 22, color: BestShotTheme.accentBlue),
+          const SizedBox(width: 8),
+          const Text(
+            'BestShot',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: BestShotTheme.textPrimary,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(width: 16),
+
+          // ⭐ N件推薦
+          if (!isMobile) ...[
+            _Badge(
+              label: '⭐ $_recommendedBestCount件推薦',
+              color: const Color(0xFF332600),
+              textColor: BestShotTheme.accentGold,
+            ),
+            const SizedBox(width: 12),
+            // 📊 全グループ M件
+            Text(
+              '📊 全グループ ${_groups.length}件',
+              style: const TextStyle(fontSize: 12, color: BestShotTheme.textSecondary),
+            ),
+          ],
+
+          const Spacer(),
+
+          // キーボードガイド
+          if (!Platform.isAndroid && !Platform.isIOS)
+            IconButton(
+              tooltip: 'キーボード操作ガイド',
+              icon: const Icon(Icons.keyboard_command_key_rounded, size: 20, color: BestShotTheme.textSecondary),
+              onPressed: () => _showKeyboardShortcutsDialog(context),
+            ),
+
+          // 再インポート / フォルダ変更
+          IconButton(
+            tooltip: 'フォルダ変更 / 再インポート',
+            icon: const Icon(Icons.folder_open, size: 20, color: BestShotTheme.textSecondary),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+
+          // エクスポート
+          IconButton(
+            tooltip: 'ベストショットをエクスポート',
+            icon: const Icon(Icons.folder_shared, size: 20, color: BestShotTheme.textSecondary),
+            onPressed: canExport ? _exportBestShots : null,
+          ),
+
+          // 仕分け実行
+          Badge(
+            label: Text('${_selectedSortFolders.length}'),
+            isLabelVisible: _selectedSortFolders.isNotEmpty,
+            child: IconButton(
+              tooltip: '仕分けを実行',
+              icon: const Icon(Icons.folder_copy, size: 20, color: BestShotTheme.textSecondary),
+              onPressed: canSort ? _runSortAndProcess : null,
+            ),
+          ),
+
+          const SizedBox(width: 8),
+
+          // 削除レビューボタン (ゴミ箱へ)
+          if (_selectedCount > 0)
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: BestShotTheme.accentRed,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              onPressed: canDelete ? _reviewAndDelete : null,
+              icon: const Icon(Icons.delete_outline, size: 16),
+              label: Text('$_selectedCount枚 削除確認'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterBar(BuildContext context, bool isMobile) {
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: const BoxDecoration(
+        color: BestShotTheme.surfaceColor,
+        border: Border(bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+      ),
+      child: Row(
+        children: [
+          // [ 🔍 フィルター ] ボタン
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              minimumSize: const Size(0, 32),
+              side: BorderSide(
+                color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+              ),
+              backgroundColor: _isFilterDrawerOpen
+                  ? BestShotTheme.accentBlue.withValues(alpha: 0.15)
+                  : Colors.transparent,
+            ),
+            onPressed: () => setState(() => _isFilterDrawerOpen = !_isFilterDrawerOpen),
+            icon: Icon(
+              Icons.tune,
+              size: 14,
+              color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
+            ),
+            label: Text(
+              'フィルター',
+              style: TextStyle(
+                fontSize: 12,
+                color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.textPrimary,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+
+          // [ 📷 連写のみ ] チップ
+          FilterChip(
+            label: const Text('連写のみ', style: TextStyle(fontSize: 11)),
+            selected: _filterBurstOnly,
+            onSelected: (v) => setState(() => _filterBurstOnly = v),
+            selectedColor: BestShotTheme.accentBlue.withValues(alpha: 0.2),
+            checkmarkColor: BestShotTheme.accentBlue,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+            side: BorderSide(
+              color: _filterBurstOnly ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+          ),
+          const SizedBox(width: 6),
+
+          // [ ⚠ 要確認のみ ] チップ
+          FilterChip(
+            label: const Text('要確認のみ', style: TextStyle(fontSize: 11)),
+            selected: _filterReviewOnly,
+            onSelected: (v) => setState(() => _filterReviewOnly = v),
+            selectedColor: BestShotTheme.accentRed.withValues(alpha: 0.2),
+            checkmarkColor: BestShotTheme.accentRed,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+            side: BorderSide(
+              color: _filterReviewOnly ? BestShotTheme.accentRed : BestShotTheme.dividerColor,
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+          ),
+
+          const Spacer(),
+
+          // ルーペ選択状態表示
+          if (_loupeSelection.isNotEmpty) ...[
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: BestShotTheme.accentBlue,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                minimumSize: const Size(0, 30),
+              ),
+              onPressed: () {
+                final items = _loupeSelection.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList();
+                _openLoupe(items);
+              },
+              icon: const Icon(Icons.zoom_in, size: 14),
+              label: Text('比較 (${_loupeSelection.length}/4)', style: const TextStyle(fontSize: 11)),
+            ),
+            const SizedBox(width: 6),
+            TextButton(
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                minimumSize: const Size(0, 30),
+              ),
+              onPressed: () => setState(() => _loupeSelection.clear()),
+              child: const Text('解除', style: TextStyle(fontSize: 11, color: BestShotTheme.textSecondary)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterDrawer() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: BestShotTheme.surfaceColor,
+        border: Border(right: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'フィルター設定',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: BestShotTheme.textPrimary,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 18, color: BestShotTheme.textSecondary),
+                onPressed: () => setState(() => _isFilterDrawerOpen = false),
+              ),
+            ],
+          ),
+          const Divider(color: BestShotTheme.dividerColor, height: 20),
+
+          // 検索入力
+          const Text('🔍 グループ検索', style: TextStyle(fontSize: 12, color: BestShotTheme.textSecondary)),
+          const SizedBox(height: 6),
+          TextField(
+            style: const TextStyle(fontSize: 13, color: BestShotTheme.textPrimary),
+            decoration: const InputDecoration(
+              hintText: 'グループID / ファイル名...',
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            ),
+            onChanged: (v) => setState(() => _filterQuery = v),
+          ),
+          const SizedBox(height: 16),
+
+          // 撮影モードフィルター
+          const Text('📷 撮影モード', style: TextStyle(fontSize: 12, color: BestShotTheme.textSecondary)),
+          const SizedBox(height: 6),
+          CheckboxListTile(
+            title: const Text('連写グループのみ', style: TextStyle(fontSize: 13, color: BestShotTheme.textPrimary)),
+            value: _filterBurstOnly,
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            onChanged: (v) => setState(() => _filterBurstOnly = v ?? false),
+          ),
+          CheckboxListTile(
+            title: const Text('要確認グループのみ', style: TextStyle(fontSize: 13, color: BestShotTheme.textPrimary)),
+            value: _filterReviewOnly,
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            onChanged: (v) => setState(() => _filterReviewOnly = v ?? false),
+          ),
+          const Spacer(),
+
+          // リセットボタン
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: () {
+                setState(() {
+                  _filterQuery = '';
+                  _filterBurstOnly = false;
+                  _filterReviewOnly = false;
+                  _isFilterDrawerOpen = false;
+                });
+              },
+              child: const Text('すべてのフィルターを解除'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomNav(BuildContext context) {
+    return Container(
+      height: 64,
+      decoration: const BoxDecoration(
+        color: BestShotTheme.surfaceColor,
+        border: Border(top: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildNavItem(
+            icon: Icons.grid_view_rounded,
+            label: 'グループ',
+            isSelected: _bottomNavIndex == 0,
+            onTap: () => setState(() => _bottomNavIndex = 0),
+          ),
+          // 比較: タップでルーペ、長押しでフィルタードロワー展開 (Section 2.1 & 4.1)
+          _buildNavItem(
+            icon: Icons.compare_arrows_rounded,
+            label: '比較',
+            isSelected: _bottomNavIndex == 1,
+            onTap: () {
+              final targets = _loupeSelection.isNotEmpty
+                  ? _loupeSelection.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList()
+                  : (_groups.isNotEmpty ? _groups.first.items.take(4).toList() : <PhotoEntry>[]);
+              if (targets.isNotEmpty) {
+                _openLoupe(targets);
+              }
+            },
+            onLongPress: () {
+              HapticFeedback.mediumImpact();
+              setState(() => _isFilterDrawerOpen = !_isFilterDrawerOpen);
+            },
+          ),
+          _buildNavItem(
+            icon: Icons.tune_rounded,
+            label: '設定',
+            isSelected: _bottomNavIndex == 2,
+            onTap: () => _showKeyboardShortcutsDialog(context),
+          ),
+          _buildNavItem(
+            icon: Icons.folder_shared_outlined,
+            label: '保存',
+            isSelected: _bottomNavIndex == 3,
+            onTap: _exportBestShots,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNavItem({
+    required IconData icon,
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+    VoidCallback? onLongPress,
+  }) {
+    final color = isSelected ? BestShotTheme.accentBlue : BestShotTheme.textSecondary;
+    return GestureDetector(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 70,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 22, color: color),
+            const SizedBox(height: 3),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                color: color,
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildBottomProgressOverlay(ColorScheme colorScheme) {
+  Widget _buildBottomProgressOverlay() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.95),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.3)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.4),
-            blurRadius: 16,
-            spreadRadius: 2,
-          ),
-        ],
+        color: BestShotTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: BestShotTheme.dividerColor, width: 1),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1872,15 +2266,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
           for (final task in _backgroundTasks) ...[
             Row(
               children: [
-                SizedBox(
-                  width: 18,
-                  height: 18,
+                const SizedBox(
+                  width: 16,
+                  height: 16,
                   child: CircularProgressIndicator(
-                    strokeWidth: 2.5,
-                    valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(BestShotTheme.accentBlue),
                   ),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1888,45 +2282,42 @@ class _GroupsScreenState extends State<GroupsScreen> {
                       Text(
                         task.title,
                         style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13.5,
+                          color: BestShotTheme.textPrimary,
+                          fontSize: 12,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 2),
                       Text(
                         task.statusText,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.7),
-                          fontSize: 11.5,
+                        style: const TextStyle(
+                          color: BestShotTheme.textSecondary,
+                          fontSize: 10,
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 12),
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(999),
+                  borderRadius: BorderRadius.circular(2),
                   child: SizedBox(
                     width: 70,
-                    height: 8,
+                    height: 6,
                     child: LinearProgressIndicator(
                       value: task.progress,
-                      backgroundColor: Colors.white12,
-                      valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                      backgroundColor: BestShotTheme.dividerColor,
+                      valueColor: const AlwaysStoppedAnimation<Color>(BestShotTheme.accentBlue),
                     ),
                   ),
                 ),
               ],
             ),
             if (task != _backgroundTasks.last)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Divider(color: colorScheme.outlineVariant.withValues(alpha: 0.2), height: 1),
-              ),
+              const Divider(color: BestShotTheme.dividerColor, height: 12),
           ],
         ],
       ),
     );
   }
 }
+

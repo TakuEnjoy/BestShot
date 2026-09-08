@@ -1,22 +1,34 @@
 part of '../groups_screen.dart';
 
 class _Badge extends StatelessWidget {
-  const _Badge({required this.label, required this.color});
+  const _Badge({
+    required this.label,
+    required this.color,
+    this.textColor = Colors.white,
+  });
 
   final String label;
   final Color color;
+  final Color textColor;
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
+    return Container(
+      height: 20,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
       decoration: BoxDecoration(
         color: color,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white24),
+        borderRadius: BorderRadius.circular(2),
       ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+      alignment: Alignment.center,
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          color: textColor,
+          height: 1.1,
+        ),
       ),
     );
   }
@@ -24,20 +36,20 @@ class _Badge extends StatelessWidget {
 
 Color getFolderColor(String folder, List<String> customFolders) {
   final index = customFolders.indexOf(folder);
-  if (index < 0) return Colors.grey;
+  if (index < 0) return const Color(0xFF3A3A3C);
 
-  // Professional, distinct label colors (Lightroom/Capture One style)
+  // Professional distinct palette (Section 1 & Lightroom/Capture One)
   const colors = [
-    Color(0xFFE53E3E), // Red
-    Color(0xFFD69E2E), // Yellow/Ochre
-    Color(0xFF38A169), // Green
-    Color(0xFF3182CE), // Blue
-    Color(0xFF805AD5), // Purple
-    Color(0xFFDD6B20), // Orange
-    Color(0xFF319795), // Teal
-    Color(0xFFD53F8C), // Pink
-    Color(0xFF718096), // Slate
-    Color(0xFF4A5568), // Dark Gray
+    Color(0xFF3A86FF), // Blue
+    Color(0xFFFF006E), // Red
+    Color(0xFFFFBE0B), // Gold
+    Color(0xFF00D084), // Green
+    Color(0xFF8338EC), // Purple
+    Color(0xFFFB5607), // Orange
+    Color(0xFF06D6A0), // Teal
+    Color(0xFFFF70A6), // Pink
+    Color(0xFF70D6FF), // Sky Blue
+    Color(0xFF8A8A8E), // Slate
   ];
 
   return colors[index % colors.length];

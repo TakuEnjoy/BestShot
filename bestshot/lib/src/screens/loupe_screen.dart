@@ -58,8 +58,8 @@ class _LoupeScreenState extends State<LoupeScreen> {
   bool _showFocusMask = false;
   bool _focusMaskBusy = false;
   final Map<String, Uint8List?> _focusMaskPngByKey = {};
-  Color _focusMaskColor = Colors.white; // Non-final to allow color cycle
-  double _focusMaskOpacity = 0.8;
+  Color _focusMaskColor = const Color(0xFF00D084); // Pro Mode green accent
+  double _focusMaskOpacity = 0.25; // Pro Mode 0.25 opacity
 
   bool _showFocusPoint = true;
   bool _showHistogram = true;
@@ -184,10 +184,11 @@ class _LoupeScreenState extends State<LoupeScreen> {
   }
 
   final List<Color> _maskColors = [
+    const Color(0xFF00D084),
+    const Color(0xFF3A86FF),
+    const Color(0xFFFFBE0B),
+    const Color(0xFFFF006E),
     Colors.white,
-    Colors.red,
-    Colors.yellow,
-    Colors.green,
   ];
 
   void _cycleMaskColor() {
@@ -366,7 +367,12 @@ class _LoupeScreenState extends State<LoupeScreen> {
       onKeyEvent: (node, event) => _handleKeyEvent(event),
       child: Scaffold(
         appBar: AppBar(
-          title: Text(isCompactAppBar ? 'ルーペ' : 'ルーペ比較'),
+          title: Text(
+            isCompactAppBar
+                ? '🔍 比較モード'
+                : '🔍 比較モード  (${_syncEnabled ? "🔒 同期ロック ON" : "🔓 同期ロック OFF"})',
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+          ),
           actions: [
             // HUD モード切替（Compact / Detailed / Clean）
             IconButton(
@@ -589,183 +595,260 @@ class _LoupeScreenState extends State<LoupeScreen> {
     final screenWidth = MediaQuery.of(context).size.width;
     final isNarrow = screenWidth < 500;
 
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
     return SafeArea(
       child: Container(
         margin: EdgeInsets.fromLTRB(
-          isNarrow ? 10 : 20,
+          isNarrow ? 8 : 16,
           0,
-          isNarrow ? 10 : 20,
-          isNarrow ? 8 : 14,
+          isNarrow ? 8 : 16,
+          isNarrow ? 6 : 12,
         ),
         padding: EdgeInsets.symmetric(
-          horizontal: isNarrow ? 14 : 20,
-          vertical: isNarrow ? 8 : 12,
+          horizontal: isNarrow ? 10 : 16,
+          vertical: isNarrow ? 6 : 10,
         ),
         decoration: BoxDecoration(
-          color: colorScheme.surfaceContainerHigh.withValues(alpha: 0.94),
-          borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.25), width: 1.2),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.4),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-          ],
+          color: const Color(0xFF1C1C1E),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: const Color(0xFF2C2C2E), width: 1),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            // Active photo indicator info
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${isNarrow ? "" : "選択中: "}${_getFileName(item)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: isNarrow ? 12.5 : 13.5,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'ピント値: ${widget.scores[_activePaneIndex].toStringAsFixed(0)}',
-                    style: TextStyle(
-                      fontSize: isNarrow ? 10.5 : 11.5,
-                      color: Colors.white.withValues(alpha: 0.65),
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-
-            // Toggle Delete button (Pill)
-            InkWell(
-              onTap: () {
-                widget.onToggleDelete?.call(key, !selectedForDelete);
-                setState(() {});
-              },
-              borderRadius: BorderRadius.circular(999),
-              child: Container(
-                constraints: BoxConstraints(minWidth: isNarrow ? 70 : 105),
-                height: isNarrow ? 36 : 42,
-                padding: EdgeInsets.symmetric(horizontal: isNarrow ? 10 : 14),
-                decoration: BoxDecoration(
-                  color: selectedForDelete
-                      ? colorScheme.errorContainer.withValues(alpha: 0.85)
-                      : colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: selectedForDelete
-                        ? colorScheme.error
-                        : colorScheme.outlineVariant.withValues(alpha: 0.3),
-                    width: 1.2,
+            Row(
+              children: [
+                // Active photo indicator info
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${isNarrow ? "" : "選択中: "}${_getFileName(item)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: isNarrow ? 12 : 13,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '鮮明度: ${widget.scores[_activePaneIndex].toStringAsFixed(0)}  │  ペイン #${_activePaneIndex + 1}/${widget.items.length}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF8A8A8E),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      selectedForDelete
-                          ? Icons.delete_forever
-                          : Icons.delete_outline,
-                      color: selectedForDelete ? colorScheme.onErrorContainer : Colors.white70,
-                      size: isNarrow ? 17 : 19,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      isNarrow ? '削除' : '削除候補',
-                      style: TextStyle(
+                const SizedBox(width: 8),
+
+                // Toggle Delete button
+                InkWell(
+                  onTap: () {
+                    widget.onToggleDelete?.call(key, !selectedForDelete);
+                    setState(() {});
+                  },
+                  borderRadius: BorderRadius.circular(4),
+                  child: Container(
+                    height: 34,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: selectedForDelete
+                          ? const Color(0xFFFF006E).withValues(alpha: 0.2)
+                          : const Color(0xFF2C2C2E),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
                         color: selectedForDelete
-                            ? colorScheme.onErrorContainer
-                            : Colors.white70,
-                        fontSize: isNarrow ? 11.5 : 12.5,
-                        fontWeight: selectedForDelete
-                            ? FontWeight.bold
-                            : FontWeight.w600,
+                            ? const Color(0xFFFF006E)
+                            : const Color(0xFF3A3A3C),
+                        width: 1,
                       ),
                     ),
-                  ],
-                ),
-              ),
-            ),
-            SizedBox(width: isNarrow ? 8 : 12),
-
-            // Toggle Best button (Pill)
-            InkWell(
-              onTap: () {
-                widget.onSetBest?.call(key);
-                setState(() {
-                  for (var j = 0; j < _isBests.length; j++) {
-                    _isBests[j] = (j == _activePaneIndex);
-                  }
-                });
-              },
-              borderRadius: BorderRadius.circular(999),
-              child: Container(
-                constraints: BoxConstraints(minWidth: isNarrow ? 70 : 105),
-                height: isNarrow ? 36 : 42,
-                padding: EdgeInsets.symmetric(horizontal: isNarrow ? 10 : 14),
-                decoration: BoxDecoration(
-                  color: isBest
-                      ? const Color(0xFF10B981).withValues(alpha: 0.25)
-                      : colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: isBest
-                        ? const Color(0xFF10B981)
-                        : colorScheme.outlineVariant.withValues(alpha: 0.3),
-                    width: 1.2,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          selectedForDelete ? Icons.delete_forever : Icons.delete_outline,
+                          color: selectedForDelete ? const Color(0xFFFF006E) : Colors.white70,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          isNarrow ? '削除' : '削除候補',
+                          style: TextStyle(
+                            color: selectedForDelete ? const Color(0xFFFF006E) : Colors.white70,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  boxShadow: isBest
-                      ? [
-                          BoxShadow(
-                            color: const Color(0xFF10B981).withValues(alpha: 0.35),
-                            blurRadius: 8,
-                            spreadRadius: 1,
-                          )
-                        ]
-                      : null,
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      isBest ? Icons.star_rounded : Icons.star_outline_rounded,
-                      color: isBest ? const Color(0xFF10B981) : Colors.white70,
-                      size: isNarrow ? 18 : 20,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      isNarrow ? 'Best' : (isBest ? 'Best' : 'Bestに設定'),
-                      style: TextStyle(
-                        color: isBest ? const Color(0xFF10B981) : Colors.white70,
-                        fontSize: isNarrow ? 11.5 : 12.5,
-                        fontWeight: isBest
-                            ? FontWeight.bold
-                            : FontWeight.w600,
+                const SizedBox(width: 8),
+
+                // Toggle Best button
+                InkWell(
+                  onTap: () {
+                    widget.onSetBest?.call(key);
+                    setState(() {
+                      for (var j = 0; j < _isBests.length; j++) {
+                        _isBests[j] = (j == _activePaneIndex);
+                      }
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(4),
+                  child: Container(
+                    height: 34,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: isBest
+                          ? const Color(0xFFFFBE0B).withValues(alpha: 0.2)
+                          : const Color(0xFF2C2C2E),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: isBest ? const Color(0xFFFFBE0B) : const Color(0xFF3A3A3C),
+                        width: 1,
                       ),
                     ),
-                  ],
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isBest ? Icons.star : Icons.star_border,
+                          color: isBest ? const Color(0xFFFFBE0B) : Colors.white70,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          isBest ? 'Best' : 'Bestに設定',
+                          style: TextStyle(
+                            color: isBest ? const Color(0xFFFFBE0B) : Colors.white70,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Section 2.3 アクションフッター: [⬅ 画像を入れ替え] [📊 比較スコア] [🔄 マスク] [✖ 一括解除]
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: const Size(0, 28),
+                    side: const BorderSide(color: Color(0xFF2C2C2E)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _activePaneIndex = (_activePaneIndex + 1) % widget.items.length;
+                    });
+                  },
+                  icon: const Icon(Icons.swap_horiz, size: 14, color: Color(0xFF8A8A8E)),
+                  label: const Text('入替', style: TextStyle(fontSize: 11, color: Colors.white)),
+                ),
+                const SizedBox(width: 6),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: const Size(0, 28),
+                    side: const BorderSide(color: Color(0xFF2C2C2E)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                  ),
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        backgroundColor: const Color(0xFF1C1C1E),
+                        title: const Text('比較スコア一覧', style: TextStyle(color: Colors.white, fontSize: 15)),
+                        content: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (int i = 0; i < widget.items.length; i++)
+                              ListTile(
+                                dense: true,
+                                leading: Text('#${i + 1}', style: const TextStyle(color: Color(0xFF3A86FF), fontWeight: FontWeight.bold)),
+                                title: Text(_getFileName(widget.items[i]), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                                trailing: Text(
+                                  '${widget.scores[i].toStringAsFixed(0)}点',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: _isBests[i] ? const Color(0xFFFFBE0B) : Colors.white70,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: const Text('閉じる'),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.bar_chart, size: 14, color: Color(0xFFFFBE0B)),
+                  label: const Text('比較スコア', style: TextStyle(fontSize: 11, color: Colors.white)),
+                ),
+                const SizedBox(width: 6),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: const Size(0, 28),
+                    side: BorderSide(
+                      color: _showFocusMask ? const Color(0xFF00D084) : const Color(0xFF2C2C2E),
+                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                  ),
+                  onPressed: _toggleFocusMask,
+                  icon: Icon(
+                    _showFocusMask ? Icons.blur_on : Icons.blur_off,
+                    size: 14,
+                    color: _showFocusMask ? const Color(0xFF00D084) : const Color(0xFF8A8A8E),
+                  ),
+                  label: Text(
+                    'マスク ${_showFocusMask ? "ON" : "OFF"}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: _showFocusMask ? const Color(0xFF00D084) : Colors.white,
+                    ),
+                  ),
+                ),
+                const Spacer(),
+                // 一括解除
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: const Size(0, 28),
+                  ),
+                  onPressed: () {
+                    for (final item in widget.items) {
+                      widget.onToggleDelete?.call(item.key, false);
+                    }
+                    setState(() {});
+                  },
+                  icon: const Icon(Icons.clear_all, size: 14, color: Color(0xFFFF006E)),
+                  label: const Text('一括解除', style: TextStyle(fontSize: 11, color: Color(0xFFFF006E))),
+                ),
+              ],
             ),
           ],
         ),
       ),
     );
+
   }
 
   String _getFileName(PhotoEntry item) {

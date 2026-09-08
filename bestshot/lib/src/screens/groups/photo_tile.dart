@@ -50,48 +50,34 @@ class _PhotoTileState extends State<_PhotoTile> {
       child: PopupMenuButton<String?>(
         tooltip: 'フォルダに仕分ける',
         onSelected: (folder) {
-          if (folder == '__NEW_FOLDER__') {
-            widget.onSortFolderChanged(folder);
-          } else {
-            widget.onSortFolderChanged(folder);
-          }
+          widget.onSortFolderChanged(folder);
         },
-        offset: const Offset(0, 30),
+        offset: const Offset(0, 24),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
           decoration: BoxDecoration(
             color: hasFolder
                 ? getFolderColor(sortFolder, widget.customFolders)
                 : Colors.black.withValues(alpha: 0.6),
-            borderRadius: BorderRadius.circular(999),
+            borderRadius: BorderRadius.circular(2),
             border: Border.all(
-              color: hasFolder
-                  ? Colors.white.withValues(alpha: 0.4)
-                  : Colors.white.withValues(alpha: 0.2),
+              color: hasFolder ? Colors.white38 : Colors.white24,
+              width: 1,
             ),
-            boxShadow: hasFolder
-                ? [
-                    BoxShadow(
-                      color: getFolderColor(sortFolder, widget.customFolders).withValues(alpha: 0.4),
-                      blurRadius: 6,
-                      spreadRadius: 1,
-                    )
-                  ]
-                : null,
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 hasFolder ? Icons.folder : Icons.folder_open,
-                size: 15,
+                size: 12,
                 color: Colors.white,
               ),
               if (hasFolder) ...[
-                const SizedBox(width: 4),
+                const SizedBox(width: 3),
                 Text(
                   sortFolder,
-                  style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold),
+                  style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
                 ),
               ],
             ],
@@ -103,7 +89,7 @@ class _PhotoTileState extends State<_PhotoTile> {
               value: '__NEW_FOLDER__',
               child: Row(
                 children: [
-                  Icon(Icons.create_new_folder, size: 16, color: theme.colorScheme.primary),
+                  const Icon(Icons.create_new_folder, size: 16, color: BestShotTheme.accentBlue),
                   const SizedBox(width: 8),
                   const Text('新規フォルダを追加...'),
                 ],
@@ -111,11 +97,11 @@ class _PhotoTileState extends State<_PhotoTile> {
             ),
             PopupMenuItem<String?>(
               value: null,
-              child: Row(
+              child: const Row(
                 children: [
-                  Icon(Icons.folder_off, size: 16, color: theme.hintColor),
-                  const SizedBox(width: 8),
-                  const Text('仕分けを解除'),
+                  Icon(Icons.folder_off, size: 16, color: BestShotTheme.textSecondary),
+                  SizedBox(width: 8),
+                  Text('仕分けを解除'),
                 ],
               ),
             ),
@@ -140,7 +126,27 @@ class _PhotoTileState extends State<_PhotoTile> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
+    final isBest = widget.isBest;
+    final isDelete = widget.selectedForDelete;
+    final sortFolder = widget.sortFolder;
+    final hasFolder = sortFolder != null;
+
+    // ボーダー（Pro Mode: 2px、純色、フラット、角丸4dp）
+    Color borderColor = BestShotTheme.dividerColor;
+    double borderWidth = 1.0;
+    if (widget.isKeyboardFocused) {
+      borderColor = BestShotTheme.accentBlue;
+      borderWidth = 2.0;
+    } else if (isDelete) {
+      borderColor = BestShotTheme.accentRed;
+      borderWidth = 2.0;
+    } else if (hasFolder) {
+      borderColor = getFolderColor(sortFolder, widget.customFolders);
+      borderWidth = 2.0;
+    } else if (_isHovered) {
+      borderColor = BestShotTheme.hoverColor;
+      borderWidth = 1.5;
+    }
 
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
@@ -149,190 +155,173 @@ class _PhotoTileState extends State<_PhotoTile> {
         ignoring: widget.isProcessing,
         child: InkWell(
           onTap: () => widget.onChanged(!widget.selectedForDelete),
-          borderRadius: BorderRadius.circular(18),
-          child: AnimatedScale(
-            scale: _isHovered ? 1.02 : 1.0,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOutCubic,
+          borderRadius: BorderRadius.circular(4),
+          child: Container(
+            decoration: BoxDecoration(
+              color: BestShotTheme.surfaceColor,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: borderColor, width: borderWidth),
+            ),
+            clipBehavior: Clip.antiAlias,
             child: Stack(
-            children: [
-              // Image and its clipping
-              Positioned.fill(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
-                      child: Opacity(
-                        opacity: widget.selectedForDelete ? 0.4 : 1.0,
-                        child: ColorFiltered(
-                          colorFilter: ColorFilter.mode(
-                            widget.selectedForDelete ? Colors.grey : Colors.transparent,
-                            BlendMode.saturation,
-                          ),
-                          child: Image.memory(
-                            widget.bytes,
-                            fit: BoxFit.cover,
-                            gaplessPlayback: true,
-                            cacheWidth: 400,
-                          ),
-                        ),
-                      ),
-                    ),
+              fit: StackFit.expand,
+              children: [
+                // サムネイル画像
+                Opacity(
+                  opacity: isDelete ? 0.45 : 1.0,
+                  child: Image.memory(
+                    widget.bytes,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                    cacheWidth: 400,
                   ),
+                ),
 
-                  // Selection Overlay (Border) - Placed outside ClipRRect to avoid clipping
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(18),
-                          border: widget.isKeyboardFocused
-                              ? Border.all(color: colorScheme.primary, width: 3)
-                              : (widget.selectedForDelete
-                                  ? Border.all(color: colorScheme.error, width: 3)
-                                  : (widget.sortFolder != null
-                                      ? Border.all(color: getFolderColor(widget.sortFolder!, widget.customFolders), width: 3)
-                                      : Border.all(
-                                          color: _isHovered
-                                              ? Colors.white.withValues(alpha: 0.45)
-                                              : Colors.white.withValues(alpha: 0.12),
-                                          width: _isHovered ? 1.5 : 1,
-                                        ))),
-                          boxShadow: widget.isKeyboardFocused
-                              ? [
-                                  BoxShadow(
-                                    color: colorScheme.primary.withValues(alpha: 0.5),
-                                    blurRadius: 10,
-                                    spreadRadius: 1.5,
-                                  )
-                                ]
-                              : null,
-                          color: widget.selectedForDelete
-                              ? colorScheme.error.withValues(alpha: 0.12)
-                              : Colors.transparent,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // Badges (Top Left)
+                // Best Shot ゴールド角バッジ (⭐)
+                if (isBest)
                   Positioned(
-                    left: 8,
-                    top: 8,
-                    child: Row(
-                      children: [
-                        if (widget.isBest)
-                          const _Badge(label: '★ Best', color: Color(0xFF10B981)),
-                        if (!widget.isBest)
-                          _Badge(
-                            label: widget.sharpness.toStringAsFixed(0),
-                            color: Colors.black.withValues(alpha: 0.65),
-                          ),
-                      ],
-                    ),
-                  ),
-
-                  // Checkbox (Top Right)
-                  Positioned(
-                    right: 4,
-                    top: 4,
-                    child: Checkbox(
-                      value: widget.selectedForDelete,
-                      onChanged: (v) => widget.onChanged(v ?? false),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(6),
+                    top: 0,
+                    left: 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      decoration: const BoxDecoration(
+                        color: BestShotTheme.accentGold,
+                        borderRadius: BorderRadius.only(bottomRight: Radius.circular(4)),
                       ),
-                      side: const BorderSide(color: Colors.white, width: 1.5),
-                    ),
-                  ),
-
-                  // EXIF Overlay (Bottom)
-                  if (widget.exifText.isNotEmpty)
-                    Positioned(
-                      left: 6,
-                      right: 6,
-                      bottom: 34,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(999),
-                        child: Container(
-                          color: Colors.black.withValues(alpha: 0.68),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          child: Text(
-                            widget.exifText,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 10,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.star, size: 11, color: BestShotTheme.backgroundPrimary),
+                          SizedBox(width: 2),
+                          Text(
+                            'Best',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              color: BestShotTheme.backgroundPrimary,
                             ),
                           ),
-                        ),
-                      ),
-                    ),
-
-                  // Loupe Button (Bottom Right)
-                  Positioned(
-                    right: 4,
-                    bottom: 4,
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: widget.onToggleLoupe,
-                        borderRadius: BorderRadius.circular(20),
-                        child: Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: widget.loupeSelected
-                                ? colorScheme.primary
-                                : Colors.black.withValues(alpha: 0.5),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            widget.loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
-                            size: 16,
-                            color: Colors.white,
-                          ),
-                        ),
+                        ],
                       ),
                     ),
                   ),
 
-                  // Folder Button (Bottom Left)
+                // 鮮鋭度バッジ (Best以外で左上)
+                if (!isBest)
                   Positioned(
                     left: 4,
-                    bottom: 4,
-                    child: _buildSortFolderButtonForTile(theme),
+                    top: 4,
+                    child: Container(
+                      height: 18,
+                      padding: const EdgeInsets.symmetric(horizontal: 5),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.65),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        widget.sharpness.toStringAsFixed(0),
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: BestShotTheme.textPrimary,
+                        ),
+                      ),
+                    ),
                   ),
 
-                  // Processing Overlay
-                  if (widget.isProcessing)
-                    Positioned.fill(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.55),
-                          borderRadius: BorderRadius.circular(16),
+                // 削除チェック (右上)
+                Positioned(
+                  right: 2,
+                  top: 2,
+                  child: Checkbox(
+                    value: widget.selectedForDelete,
+                    onChanged: (v) => widget.onChanged(v ?? false),
+                    activeColor: BestShotTheme.accentRed,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
+                    side: const BorderSide(color: Colors.white, width: 1.5),
+                  ),
+                ),
+
+                // 写真上オーバーレイ: #000000 40% Opacity 半透明バー (EXIFテキスト)
+                if (widget.exifText.isNotEmpty)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 26,
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      child: Text(
+                        widget.exifText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 9,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w500,
                         ),
-                        child: const Center(
-                          child: SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                            ),
+                      ),
+                    ),
+                  ),
+
+                // ルーペ比較ボタン (右下)
+                Positioned(
+                  right: 4,
+                  bottom: 4,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: widget.onToggleLoupe,
+                      borderRadius: BorderRadius.circular(2),
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: widget.loupeSelected
+                              ? BestShotTheme.accentBlue
+                              : Colors.black.withValues(alpha: 0.6),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        child: Icon(
+                          widget.loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
+                          size: 14,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // 仕分けフォルダボタン (左下)
+                Positioned(
+                  left: 4,
+                  bottom: 4,
+                  child: _buildSortFolderButtonForTile(theme),
+                ),
+
+                // バックグラウンド処理中オーバーレイ
+                if (widget.isProcessing)
+                  Positioned.fill(
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.6),
+                      child: const Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                           ),
                         ),
                       ),
                     ),
-                ],
-              ),
+                  ),
+              ],
             ),
           ),
         ),
+      ),
     );
   }
 }
