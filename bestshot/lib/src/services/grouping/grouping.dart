@@ -1,11 +1,16 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
-
 import '../../models/photo_entry.dart';
 import '../../models/photo_group.dart';
+import 'pair_evaluator.dart';
+
+enum GroupingAlgorithm {
+  legacy,   // Baseline implementation
+  advanced, // Multi-candidate generation + PairEvaluator + Constrained Agglomerative Clustering
+}
 
 class GroupingConfig {
   const GroupingConfig({
+    this.algorithm = GroupingAlgorithm.advanced,
     this.burstWindowSeconds = 15,
     this.relaxedTimeWindowMinutes = 1,
     this.semanticTimeWindowMinutes = 3,
@@ -18,52 +23,41 @@ class GroupingConfig {
     this.maxColorBhattacharyyaDistance = 0.50,
     this.maxDriftPHashDistance = 18,
     this.maxDriftColorDistance = 0.40,
+    this.maxCandidatesPerPhoto = 25,
   });
 
-  /// Window in seconds for considering nearby photos as a single shooting event.
+  final GroupingAlgorithm algorithm;
   final int burstWindowSeconds;
-
-  /// Window in minutes for relaxed grouping of very similar compositions.
   final int relaxedTimeWindowMinutes;
-
-  /// Semantic grouping window (minutes) when ML Kit results are available.
   final int semanticTimeWindowMinutes;
-
-  /// pHash is 64-bit. Higher is looser.
   final int maxPHashHammingDistance;
-
-  /// Minimum matched objects (label+IoU) to consider same subject.
   final int semanticMinMatches;
-
-  /// Minimum IoU for bounding box match.
   final double semanticMinIoU;
-
-  /// For each group, keep top N by sharpness, others become delete candidates.
   final int autoDeleteKeepTopN;
-
-  /// Minimum ORB feature matches to consider same scene.
   final int orbMinMatches;
-
-  /// Hamming distance threshold for ORB features (0..256).
   final int orbMaxHammingDist;
-
-  /// Maximum color distance (Bhattacharyya distance) allowed between photos (0..1).
-  /// If the distance is higher than this, they are considered to be different colors.
   final double maxColorBhattacharyyaDistance;
-
-  /// Maximum pHash distance allowed between any item in a group and its group anchor.
-  /// Prevents transitive chaining/drift where A-B-C-D... drift into completely different scenes.
   final int maxDriftPHashDistance;
-
-  /// Maximum color distance allowed between any item in a group and its group anchor.
   final double maxDriftColorDistance;
+  final int maxCandidatesPerPhoto;
 }
 
 class PhotoGrouper {
   static List<PhotoGroup> group(List<PhotoEntry> items, GroupingConfig config) {
     if (items.isEmpty) return [];
 
-    // 1. Sort items by time to establish a chronological sequence.
+    if (config.algorithm == GroupingAlgorithm.legacy) {
+      return _groupLegacy(items, config);
+    } else {
+      return _groupAdvanced(items, config);
+    }
+  }
+
+  // =========================================================================
+  // ADVANCED GROUPING: Multi-Candidate Generation + Constrained Clustering
+  // =========================================================================
+  static List<PhotoGroup> _groupAdvanced(List<PhotoEntry> items, GroupingConfig config) {
+    // 1. Sort items chronologically
     final sorted = items.toList()
       ..sort((a, b) {
         final ta = a.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -71,50 +65,326 @@ class PhotoGrouper {
         return ta.compareTo(tb);
       });
 
-    // 2. Sequential Adaptive Clustering with Anchor Drift Control (Prevents Transitive Chaining).
-    final clusters = <List<PhotoEntry>>[];
-    for (final entry in sorted) {
-      if (clusters.isEmpty) {
-        final anchorEntry = entry.copyWith(
-          groupExplanation: () => const GroupMatchExplanation(
-            matchType: '起点カット',
-            description: 'グループの起点（基準写真）',
-          ),
-        );
-        clusters.add([anchorEntry]);
-        continue;
+    final n = sorted.length;
+
+    // 2. Multi-channel Candidate Generation
+    // Union of:
+    // a) Time proximity candidates
+    // b) pHash nearest neighbors
+    // c) Color proximity candidates
+    // d) Semantic object candidates
+    // e) Multi-crop embedding candidates
+    final candidatePairs = <int, Set<int>>{};
+    for (int i = 0; i < n; i++) {
+      candidatePairs[i] = <int>{};
+    }
+
+    for (int i = 0; i < n; i++) {
+      final a = sorted[i];
+      final ta = a.capturedAt;
+
+      // Scored candidate list for photo i: Map<candidateIndex, priorityScore>
+      final candidateScores = <int, double>{};
+
+      // a) Time proximity (adjacent photos or within 180 seconds)
+      final timeRange = 12; // adjacent window
+      final startJ = math.max(0, i - timeRange);
+      final endJ = math.min(n - 1, i + timeRange);
+      for (int j = startJ; j <= endJ; j++) {
+        if (i == j) continue;
+        final tb = sorted[j].capturedAt;
+        if (ta != null && tb != null) {
+          final diffSec = (ta.difference(tb).inMilliseconds.abs() / 1000.0);
+          if (diffSec <= 180.0) {
+            candidateScores[j] = (candidateScores[j] ?? 0.0) + math.max(0.0, 30.0 - (diffSec / 6.0));
+          }
+        } else {
+          // If no timestamp, adjacent index proximity
+          candidateScores[j] = (candidateScores[j] ?? 0.0) + 15.0;
+        }
       }
 
-      final currentCluster = clusters.last;
-      final (canAdd, exp) = _checkAddToCluster(currentCluster, entry, config);
-      if (canAdd) {
-        final matchedEntry = entry.copyWith(groupExplanation: () => exp);
-        currentCluster.add(matchedEntry);
-      } else {
-        final newAnchor = entry.copyWith(
-          groupExplanation: () => const GroupMatchExplanation(
-            matchType: '起点カット',
-            description: 'グループの起点（基準写真）',
-          ),
-        );
-        clusters.add([newAnchor]);
+      // b) pHash / Color / Semantic / Embedding over entire session
+      for (int j = 0; j < n; j++) {
+        if (i == j) continue;
+        final b = sorted[j];
+
+        // pHash distance
+        final pDist = _calcPHashDistance(a, b);
+        if (pDist != null && pDist <= 22) {
+          final pScore = (24 - pDist) * 3.0; // Up to 72 pts
+          candidateScores[j] = (candidateScores[j] ?? 0.0) + pScore;
+        }
+
+        // Color distance
+        final cDist = _calcColorDistance(a, b);
+        if (cDist != null && cDist <= 0.25) {
+          candidateScores[j] = (candidateScores[j] ?? 0.0) + 20.0;
+        }
+
+        // Semantic objects
+        if (a.semanticObjects.isNotEmpty && b.semanticObjects.isNotEmpty) {
+          for (final oa in a.semanticObjects) {
+            for (final ob in b.semanticObjects) {
+              if (oa.label == ob.label) {
+                candidateScores[j] = (candidateScores[j] ?? 0.0) + 25.0;
+                break;
+              }
+            }
+          }
+        }
+
+        // Embedding similarity (if available)
+        if (a.embeddings != null && b.embeddings != null) {
+          final (embSim, _) = _calcBestEmbeddingSimilarity(a, b);
+          if (embSim != null && embSim >= 0.70) {
+            candidateScores[j] = (candidateScores[j] ?? 0.0) + (embSim * 50.0);
+          }
+        }
+      }
+
+      // Cap to top N candidates per photo to avoid O(N^2)
+      final sortedCandidates = candidateScores.keys.toList()
+        ..sort((x, y) => candidateScores[y]!.compareTo(candidateScores[x]!));
+
+      final topCandidates = sortedCandidates.take(config.maxCandidatesPerPhoto);
+      for (final cand in topCandidates) {
+        final minIdx = math.min(i, cand);
+        final maxIdx = math.max(i, cand);
+        candidatePairs[minIdx]!.add(maxIdx);
       }
     }
 
-    // 3. Post-merge: Safe merging of non-adjacent clusters with identical composition (e.g. tripod re-shots).
-    final mergedClusters = _postMergeClusters(clusters, config);
+    // 3. Pairwise Evaluation for Selected Candidate Edges
+    final edgeResults = <String, PairSimilarityResult>{};
+    for (int i = 0; i < n; i++) {
+      for (final j in candidatePairs[i]!) {
+        final pairKey = '$i-$j';
+        final revKey = '$j-$i';
+        final result = PairSimilarityEvaluator.evaluate(
+          sorted[i],
+          sorted[j],
+          burstWindowSeconds: config.burstWindowSeconds,
+        );
+        edgeResults[pairKey] = result;
+        edgeResults[revKey] = result;
+      }
+    }
 
-    // 4. Generate PhotoGroup objects and evaluate Best shots.
+    // 4. Constrained Agglomerative Clustering
+    // Start with each photo in its own cluster
+    final clusters = <List<int>>[
+      for (int i = 0; i < n; i++) [i]
+    ];
+    final clusterNeedsReview = <int, bool>{
+      for (int i = 0; i < n; i++) i: false
+    };
+
+    while (true) {
+      int bestA = -1;
+      int bestB = -1;
+      double bestAffinity = -1.0;
+      bool bestPairNeedsReview = false;
+
+      for (int aIdx = 0; aIdx < clusters.length; aIdx++) {
+        for (int bIdx = aIdx + 1; bIdx < clusters.length; bIdx++) {
+          final cA = clusters[aIdx];
+          final cB = clusters[bIdx];
+
+          // Check if there is any same-scene candidate edge between cA and cB
+          var hasSameSceneEdge = false;
+          var hasForbiddenEdge = false;
+          double totalConfidence = 0.0;
+          int connectedCount = 0;
+          bool edgeNeedsReview = false;
+
+          for (final u in cA) {
+            for (final v in cB) {
+              final res = edgeResults['$u-$v'];
+              if (res != null) {
+                if (res.category == PairCategory.sameSubjectDifferentEvent) {
+                  hasForbiddenEdge = true; // Same subject but different event: NEVER merge!
+                }
+                if (res.isSameScene) {
+                  hasSameSceneEdge = true;
+                  totalConfidence += res.confidence;
+                  connectedCount++;
+                  if (res.needsReview) edgeNeedsReview = true;
+                }
+              }
+            }
+          }
+
+          if (hasForbiddenEdge || !hasSameSceneEdge || connectedCount == 0) {
+            continue;
+          }
+
+          // Multi-representative Verification (Check top 3 from each cluster)
+          final repsA = _getRepresentatives(cA, sorted, edgeResults, 3);
+          final repsB = _getRepresentatives(cB, sorted, edgeResults, 3);
+
+          var driftViolation = false;
+          for (final rA in repsA) {
+            for (final rB in repsB) {
+              final res = edgeResults['$rA-$rB'] ?? PairSimilarityEvaluator.evaluate(sorted[rA], sorted[rB]);
+              // Extreme difference between representatives prevents chaining drift
+              final pDist = res.pHashDistance ?? 64;
+              final inliers = res.orbInliers ?? 0;
+              if (pDist >= config.maxDriftPHashDistance && inliers < 8) {
+                driftViolation = true;
+                break;
+              }
+            }
+            if (driftViolation) break;
+          }
+
+          if (driftViolation) continue;
+
+          final avgAffinity = totalConfidence / connectedCount;
+          if (avgAffinity >= 0.65 && avgAffinity > bestAffinity) {
+            bestAffinity = avgAffinity;
+            bestA = aIdx;
+            bestB = bIdx;
+            bestPairNeedsReview = edgeNeedsReview;
+          }
+        }
+      }
+
+      if (bestA != -1 && bestB != -1) {
+        // Merge cluster B into cluster A
+        clusters[bestA].addAll(clusters[bestB]);
+        if (bestPairNeedsReview || (clusterNeedsReview[bestB] ?? false)) {
+          clusterNeedsReview[bestA] = true;
+        }
+        clusters.removeAt(bestB);
+      } else {
+        break; // No more valid merges
+      }
+    }
+
+    // 5. Cluster Refinement & Post-Validation (Outlier Separation)
+    final refinedClusters = <List<int>>[];
+    final refinedNeedsReview = <bool>[];
+
+    for (int cIdx = 0; cIdx < clusters.length; cIdx++) {
+      final cluster = clusters[cIdx];
+      if (cluster.length <= 1) {
+        refinedClusters.add(cluster);
+        refinedNeedsReview.add(clusterNeedsReview[cIdx] ?? false);
+        continue;
+      }
+
+      final validMembers = <int>[];
+      final outliers = <int>[];
+
+      for (final member in cluster) {
+        // Must have at least one strong link (>= 0.60) to another member in the cluster
+        bool hasSupport = false;
+        for (final other in cluster) {
+          if (member == other) continue;
+          final res = edgeResults['$member-$other'] ?? PairSimilarityEvaluator.evaluate(sorted[member], sorted[other]);
+          if (res.isSameScene && res.confidence >= 0.60) {
+            hasSupport = true;
+            break;
+          }
+        }
+        if (hasSupport) {
+          validMembers.add(member);
+        } else {
+          outliers.add(member);
+        }
+      }
+
+      if (validMembers.isNotEmpty) {
+        refinedClusters.add(validMembers);
+        refinedNeedsReview.add(clusterNeedsReview[cIdx] ?? false);
+      }
+      for (final out in outliers) {
+        refinedClusters.add([out]);
+        refinedNeedsReview.add(false);
+      }
+    }
+
+    // 6. Build PhotoGroup objects and evaluate Best shots
     final groups = <PhotoGroup>[];
     var groupIdCounter = 1;
 
-    for (final groupItems in mergedClusters) {
-      final isBurstGroup = _isBurstGroup(groupItems, config.burstWindowSeconds);
+    for (int i = 0; i < refinedClusters.length; i++) {
+      final clusterIndices = refinedClusters[i];
+      final isGroupNeedsReview = refinedNeedsReview[i];
+      final groupItems = <PhotoEntry>[];
 
-      // Best selection:
+      if (clusterIndices.length == 1) {
+        final entry = sorted[clusterIndices[0]];
+        groupItems.add(
+          entry.copyWith(
+            groupExplanation: () => const GroupMatchExplanation(
+              matchType: '単独',
+              description: '類似写真なし',
+              confidence: 1.0,
+            ),
+          ),
+        );
+      } else {
+        // Find Anchor (best representative)
+        final anchor = _getRepresentatives(clusterIndices, sorted, edgeResults, 1).first;
+        final anchorEntry = sorted[anchor];
+
+        for (final idx in clusterIndices) {
+          final item = sorted[idx];
+          if (idx == anchor) {
+            groupItems.add(
+              item.copyWith(
+                groupExplanation: () => const GroupMatchExplanation(
+                  matchType: '代表カット',
+                  description: 'グループの基準写真',
+                  confidence: 1.0,
+                ),
+              ),
+            );
+          } else {
+            final res = edgeResults['$anchor-$idx'] ?? PairSimilarityEvaluator.evaluate(anchorEntry, item);
+            groupItems.add(
+              item.copyWith(
+                groupExplanation: () => GroupMatchExplanation(
+                  matchType: res.category == PairCategory.sameBurst ? '連写結合' : '特徴点救済マージ',
+                  description: res.explanation,
+                  category: res.category.name,
+                  diffSeconds: res.diffSeconds,
+                  pHashDistance: res.pHashDistance,
+                  colorDistance: res.colorDistance,
+                  orbMatches: res.orbGoodMatches,
+                  inliers: res.orbInliers,
+                  orbInlierRatio: res.orbInlierRatio,
+                  embeddingSimilarity: res.embeddingSimilarity,
+                  cropPair: res.cropPair,
+                  semanticMatch: res.semanticMatch,
+                  confidence: res.confidence,
+                  needsReview: res.needsReview,
+                  referenceKey: anchorEntry.key,
+                ),
+              ),
+            );
+          }
+        }
+      }
+
+      final isBurstGroup = _isBurstGroup(groupItems, config.burstWindowSeconds);
       _reorderAndMarkBest(groupItems, isBurstGroup, config);
       final best = groupItems.first;
+
+      // Auto-deletion selection:
+      // Safety Rule: If group is needsReview, do NOT mark delete candidates automatically!
       final deleteCandidates = <String>{};
+      if (!isGroupNeedsReview && groupItems.length > config.autoDeleteKeepTopN) {
+        for (int k = config.autoDeleteKeepTopN; k < groupItems.length; k++) {
+          final item = groupItems[k];
+          // Never auto-delete items flagged for review
+          if (item.groupExplanation?.needsReview != true) {
+            deleteCandidates.add(item.key);
+          }
+        }
+      }
 
       groups.add(
         PhotoGroup(
@@ -123,207 +393,205 @@ class PhotoGrouper {
           bestKey: best.key,
           deleteCandidateKeys: deleteCandidates,
           isBurst: isBurstGroup,
+          needsReview: isGroupNeedsReview,
         ),
       );
     }
 
-    // 5. Sort groups by the earliest capturedAt time in each group (ascending).
+    // 7. Sort groups chronologically
     groups.sort((a, b) {
       final ta = a.items
           .map((e) => e.capturedAt)
           .whereType<DateTime>()
-          .fold<DateTime?>(
-            null,
-            (min, t) => min == null || t.isBefore(min) ? t : min,
-          );
+          .fold<DateTime?>(null, (min, t) => min == null || t.isBefore(min) ? t : min);
       final tb = b.items
           .map((e) => e.capturedAt)
           .whereType<DateTime>()
-          .fold<DateTime?>(
-            null,
-            (min, t) => min == null || t.isBefore(min) ? t : min,
-          );
+          .fold<DateTime?>(null, (min, t) => min == null || t.isBefore(min) ? t : min);
 
-      return ta == null && tb == null
-          ? 0
-          : ta == null
-          ? 1
-          : tb == null
-          ? -1
-          : ta.compareTo(tb);
+      return ta == null && tb == null ? 0 : ta == null ? 1 : tb == null ? -1 : ta.compareTo(tb);
     });
 
     return groups;
   }
 
-  /// Checks if [candidate] can be added to [cluster] without causing transitive chaining drift.
-  static (bool, GroupMatchExplanation?) _checkAddToCluster(
-    List<PhotoEntry> cluster,
-    PhotoEntry candidate,
-    GroupingConfig config,
+  static List<int> _getRepresentatives(
+    List<int> cluster,
+    List<PhotoEntry> sorted,
+    Map<String, PairSimilarityResult> edgeResults,
+    int topK,
   ) {
-    if (cluster.isEmpty) {
-      return (
-        true,
-        const GroupMatchExplanation(
-          matchType: '起点カット',
-          description: 'グループ起点カット',
-        )
-      );
-    }
+    if (cluster.length <= topK) return cluster;
 
-    // Condition 1: Must be similar to the immediately preceding frame in the cluster.
-    final last = cluster.last;
-    final (isSim, matchExp) = _checkSimilar(last, candidate, config);
-    if (!isSim) {
-      return (false, null);
-    }
-
-    // Condition 2: Anti-drift check against the cluster anchor (first frame).
-    // Prevents gradual drift where frame 1 is completely different from frame 20.
-    final anchor = cluster.first;
-
-    // Check color drift
-    final colorDist = _calcColorDistance(anchor, candidate);
-    if (colorDist != null && colorDist > config.maxDriftColorDistance) {
-      return (false, null);
-    }
-
-    // Check pHash drift
-    final pHashDist = _calcPHashDistance(anchor, candidate);
-    if (pHashDist != null && pHashDist > config.maxDriftPHashDistance) {
-      return (false, null);
-    }
-
-    return (true, matchExp);
-  }
-
-  /// Merges separated clusters that share an identical scene/composition (e.g. tripod shots taken 30s apart).
-  static List<List<PhotoEntry>> _postMergeClusters(
-    List<List<PhotoEntry>> clusters,
-    GroupingConfig config,
-  ) {
-    if (clusters.length <= 1) return clusters;
-
-    final result = <List<PhotoEntry>>[];
-    final merged = List<bool>.filled(clusters.length, false);
-
-    for (var i = 0; i < clusters.length; i++) {
-      if (merged[i]) continue;
-      final current = clusters[i].toList();
-
-      for (var j = i + 1; j < clusters.length; j++) {
-        if (merged[j]) continue;
-        final target = clusters[j];
-
-        // Only compare clusters within a reasonable time window (e.g. 3 minutes).
-        final ta = current.last.capturedAt;
-        final tb = target.first.capturedAt;
-        if (ta != null && tb != null && tb.difference(ta).inMinutes.abs() > 3) {
-          continue;
-        }
-
-        // Strict identical composition check between representative frames
-        final (isIdentical, mergeExp) = _checkClustersIdenticalScene(
-          current,
-          target,
-          config,
-        );
-        if (isIdentical) {
-          for (final tItem in target) {
-            current.add(tItem.copyWith(groupExplanation: () => mergeExp));
-          }
-          merged[j] = true;
+    // Score by sharpness and centrality
+    final scores = <int, double>{};
+    for (final idx in cluster) {
+      final entry = sorted[idx];
+      var score = entry.sharpness;
+      for (final other in cluster) {
+        if (idx != other) {
+          score += (edgeResults['$idx-$other']?.confidence ?? 0.0) * 100.0;
         }
       }
-      result.add(current);
+      scores[idx] = score;
     }
 
-    return result;
+    final sortedList = cluster.toList()
+      ..sort((a, b) => scores[b]!.compareTo(scores[a]!));
+    return sortedList.take(topK).toList();
   }
 
-  static (bool, GroupMatchExplanation?) _checkClustersIdenticalScene(
-    List<PhotoEntry> c1,
-    List<PhotoEntry> c2,
-    GroupingConfig config,
-  ) {
-    final rep1 = c1.first;
-    final rep2 = c2.first;
+  // =========================================================================
+  // LEGACY GROUPING (Baseline Reference Implementation)
+  // =========================================================================
+  static List<PhotoGroup> _groupLegacy(List<PhotoEntry> items, GroupingConfig config) {
+    final sorted = items.toList()
+      ..sort((a, b) {
+        final ta = a.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final tb = b.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return ta.compareTo(tb);
+      });
 
-    final colorDist = _calcColorDistance(rep1, rep2);
-    final pDist = _calcPHashDistance(rep1, rep2);
-    final orbMatches = _countOrbMatches(rep1, rep2, config.orbMaxHammingDist);
+    final parent = List<int>.generate(sorted.length, (i) => i);
+    int find(int i) {
+      if (parent[i] == i) return i;
+      return parent[i] = find(parent[i]);
+    }
+    void union(int i, int j) {
+      final rootI = find(i);
+      final rootJ = find(j);
+      if (rootI != rootJ) parent[rootI] = rootJ;
+    }
 
-    final ta = rep1.capturedAt;
-    final tb = rep2.capturedAt;
-    final double? diffSec = (ta != null && tb != null)
-        ? (tb.difference(ta).inMilliseconds.abs() / 1000.0)
-        : null;
+    for (int i = 0; i < sorted.length; i++) {
+      for (int j = i + 1; j < sorted.length; j++) {
+        final a = sorted[i];
+        final b = sorted[j];
+        final ta = a.capturedAt;
+        final tb = b.capturedAt;
 
-    // 1. ORB一致が強力な場合 (>= 25): ズーム比率や画角変更で背景色分布が変化(colorDist <= 0.75)しても
-    // 被写体の特徴点が確実に一致していれば同一被写体・構図として救済結合する。
-    if (orbMatches >= 25 && (colorDist == null || colorDist <= 0.75)) {
-      return (
-        true,
-        GroupMatchExplanation(
-          matchType: '特徴点救済マージ',
-          description:
-              'ズーム/画角撮り直し: ORB $orbMatches点一致 (色距離: ${colorDist?.toStringAsFixed(3) ?? "-"})',
-          diffSeconds: diffSec,
-          pHashDistance: pDist,
-          colorDistance: colorDist,
-          orbMatches: orbMatches,
-          referenceKey: rep1.key,
-        )
+        if (ta != null && tb != null) {
+          final diffSec = (ta.difference(tb).inMilliseconds.abs() / 1000.0);
+          final pDist = _calcPHashDistance(a, b);
+          if (diffSec <= config.burstWindowSeconds && (pDist == null || pDist <= config.maxPHashHammingDistance)) {
+            union(i, j);
+          }
+        }
+      }
+    }
+
+    final clusterMap = <int, List<PhotoEntry>>{};
+    for (int i = 0; i < sorted.length; i++) {
+      final root = find(i);
+      clusterMap.putIfAbsent(root, () => []).add(sorted[i]);
+    }
+
+    final groups = <PhotoGroup>[];
+    var idCounter = 1;
+    for (final groupItems in clusterMap.values) {
+      final isBurst = _isBurstGroup(groupItems, config.burstWindowSeconds);
+      _reorderAndMarkBest(groupItems, isBurst, config);
+      groups.add(
+        PhotoGroup(
+          id: 'LEGACY_G${idCounter++}',
+          items: groupItems,
+          bestKey: groupItems.first.key,
+          deleteCandidateKeys: groupItems.skip(config.autoDeleteKeepTopN).map((e) => e.key).toSet(),
+          isBurst: isBurst,
+          needsReview: false,
+        ),
       );
     }
+    return groups;
+  }
 
-    // 2. 色差が明確に離れている場合は原則除外 (0.30)
-    if (colorDist != null && colorDist > 0.30) {
-      return (false, null);
+  // =========================================================================
+  // HELPER UTILITIES
+  // =========================================================================
+  static (double?, String?) _calcBestEmbeddingSimilarity(PhotoEntry a, PhotoEntry b) {
+    if (a.embeddings == null || b.embeddings == null) return (null, null);
+    if (a.embeddings!.isEmpty || b.embeddings!.isEmpty) return (null, null);
+
+    double maxSim = -1.0;
+    String? bestPair;
+    for (final ea in a.embeddings!.entries) {
+      for (final eb in b.embeddings!.entries) {
+        final sim = _cosineSimilarity(ea.value, eb.value);
+        if (sim > maxSim) {
+          maxSim = sim;
+          bestPair = '${ea.key}-${eb.key}';
+        }
+      }
     }
+    if (maxSim < 0) return (null, null);
+    return (maxSim, bestPair);
+  }
 
-    // 3. Strict pHash check (<= 8)
-    if (pDist != null && pDist <= 8) {
-      return (
-        true,
-        GroupMatchExplanation(
-          matchType: '三脚構図マージ',
-          description: '同一構図: pHash距離 $pDist <= 8',
-          diffSeconds: diffSec,
-          pHashDistance: pDist,
-          colorDistance: colorDist,
-          orbMatches: orbMatches,
-          referenceKey: rep1.key,
-        )
-      );
+  static double _cosineSimilarity(List<double> a, List<double> b) {
+    if (a.isEmpty || a.length != b.length) return 0.0;
+    double dot = 0.0, normA = 0.0, normB = 0.0;
+    for (var i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      normA += a[i] * a[i];
+      normB += b[i] * b[i];
     }
+    if (normA <= 0 || normB <= 0) return 0.0;
+    return dot / (math.sqrt(normA) * math.sqrt(normB));
+  }
 
-    // 4. Strict ORB match (>= 40)
-    if (orbMatches >= 40) {
-      return (
-        true,
-        GroupMatchExplanation(
-          matchType: '高精度特徴点マージ',
-          description: '同一構図: ORB $orbMatches点一致 >= 40',
-          diffSeconds: diffSec,
-          pHashDistance: pDist,
-          colorDistance: colorDist,
-          orbMatches: orbMatches,
-          referenceKey: rep1.key,
-        )
-      );
+  static int? _calcPHashDistance(PhotoEntry a, PhotoEntry b) {
+    final ha = a.pHashHex;
+    final hb = b.pHashHex;
+    if (ha.isEmpty || hb.isEmpty || ha == '0000000000000000' || hb == '0000000000000000') return null;
+    final aBig = BigInt.tryParse(ha.padLeft(16, '0'), radix: 16);
+    final bBig = BigInt.tryParse(hb.padLeft(16, '0'), radix: 16);
+    if (aBig == null || bBig == null) return null;
+
+    var x = aBig ^ bBig;
+    var count = 0;
+    while (x != BigInt.zero) {
+      x &= (x - BigInt.one);
+      count++;
     }
+    return count > 64 ? 64 : count;
+  }
 
-    return (false, null);
+  static double? _calcColorDistance(PhotoEntry a, PhotoEntry b) {
+    final hA = a.hueHistogram;
+    final hB = b.hueHistogram;
+    if (hA == null || hB == null || hA.isEmpty || hB.isEmpty) return null;
+
+    var sumA = 0.0, sumB = 0.0;
+    for (var i = 0; i < hA.length; i++) {
+      sumA += hA[i];
+    }
+    for (var i = 0; i < hB.length; i++) {
+      sumB += hB[i];
+    }
+    if (sumA <= 0.0001 || sumB <= 0.0001) return null;
+
+    if (hA.length == hB.length) {
+      double sum = 0.0;
+      for (var i = 0; i < hA.length; i++) {
+        sum += math.sqrt(hA[i] * hB[i]);
+      }
+      final val = 1.0 - sum;
+      return val <= 0.0 ? 0.0 : math.sqrt(val);
+    }
+    return null;
+  }
+
+  static bool _isBurstGroup(List<PhotoEntry> items, int burstWindowSeconds) {
+    final times = items.map((e) => e.capturedAt).whereType<DateTime>().toList()..sort();
+    if (times.length < 2) return false;
+    final span = times.last.difference(times.first).inSeconds.abs();
+    return span <= burstWindowSeconds;
   }
 
   static int? _parseIso(String? iso) {
     if (iso == null) return null;
     final m = RegExp(r'\d+').firstMatch(iso);
-    if (m != null) {
-      return int.tryParse(m.group(0)!);
-    }
+    if (m != null) return int.tryParse(m.group(0)!);
     return null;
   }
 
@@ -334,7 +602,6 @@ class PhotoGrouper {
   ) {
     if (items.isEmpty) return;
 
-    // Find max effective sharpness in this group for normalization.
     var maxEffectiveSharp = 0.01;
     for (final e in items) {
       final iso = _parseIso(e.exif?.iso);
@@ -353,7 +620,6 @@ class PhotoGrouper {
         eff = e.sharpness / (1.0 + (iso - 800) * 0.00015);
       }
 
-      // Normalize effective sharpness within this group (0..1).
       final s = (eff / maxEffectiveSharp).clamp(0.0, 1.0);
       final x = e.exposureScore.clamp(0.0, 1.0);
       final f = e.faceQualityScore.clamp(0.0, 1.0);
@@ -369,13 +635,11 @@ class PhotoGrouper {
       } else if (f > 0) {
         total = (f * 0.6) + (s * 0.35) + (x * 0.05);
         rule = 'ポートレート（顔・表情重視）';
-        formula =
-            '顔(${f.toStringAsFixed(2)})×60% + ピント(${s.toStringAsFixed(2)})×35% + 露出(${x.toStringAsFixed(2)})×5% = ${(total * 100).toStringAsFixed(1)}点';
+        formula = '顔(${f.toStringAsFixed(2)})×60% + ピント(${s.toStringAsFixed(2)})×35% + 露出(${x.toStringAsFixed(2)})×5% = ${(total * 100).toStringAsFixed(1)}点';
       } else {
         total = (s * 0.8) + (x * 0.2);
         rule = '一般シーン（ピント80%＋露出20%）';
-        formula =
-            'ピント(${s.toStringAsFixed(2)})×80% + 露出(${x.toStringAsFixed(2)})×20% = ${(total * 100).toStringAsFixed(1)}点';
+        formula = 'ピント(${s.toStringAsFixed(2)})×80% + 露出(${x.toStringAsFixed(2)})×20% = ${(total * 100).toStringAsFixed(1)}点';
       }
 
       final exp = ScoreExplanation(
@@ -392,440 +656,9 @@ class PhotoGrouper {
       updated.add(e.copyWith(scoreExplanation: () => exp));
     }
 
-    updated.sort(
-      (a, b) => (b.scoreExplanation?.totalScore ?? 0).compareTo(
-        a.scoreExplanation?.totalScore ?? 0,
-      ),
-    );
+    updated.sort((a, b) => (b.scoreExplanation?.totalScore ?? 0).compareTo(a.scoreExplanation?.totalScore ?? 0));
 
     items.clear();
     items.addAll(updated);
-  }
-
-  static int? _calcPHashDistance(PhotoEntry a, PhotoEntry b) {
-    final ha = a.pHashHex;
-    final hb = b.pHashHex;
-    if (ha.isEmpty || hb.isEmpty) return null;
-    if (ha == '0000000000000000' || hb == '0000000000000000') return null;
-    return _hammingDistance64Hex(ha, hb);
-  }
-
-  static double? _calcColorDistance(PhotoEntry a, PhotoEntry b) {
-    final hA = a.hueHistogram;
-    final hB = b.hueHistogram;
-    if (hA == null || hB == null || hA.isEmpty || hB.isEmpty) {
-      return null;
-    }
-
-    var sumA = 0.0;
-    var sumB = 0.0;
-    for (var i = 0; i < hA.length; i++) {
-      sumA += hA[i];
-    }
-    for (var i = 0; i < hB.length; i++) {
-      sumB += hB[i];
-    }
-    if (sumA <= 0.0001 || sumB <= 0.0001) {
-      return null;
-    }
-
-    return _bhattacharyyaDistance(hA, hB);
-  }
-
-  static (bool, GroupMatchExplanation?) _checkSimilar(
-    PhotoEntry a,
-    PhotoEntry b,
-    GroupingConfig config,
-  ) {
-    // 0) Color similarity check: if color distance is too large, they are not similar
-    final colorDist = _calcColorDistance(a, b);
-    if (colorDist != null && colorDist > config.maxColorBhattacharyyaDistance) {
-      return (false, null);
-    }
-
-    final ta = a.capturedAt;
-    final tb = b.capturedAt;
-
-    // Time difference in seconds (if both have EXIF timestamp)
-    final double? diffSeconds = (ta != null && tb != null)
-        ? (ta.difference(tb).inMilliseconds.abs() / 1000.0)
-        : null;
-
-    final pHashDist = _calcPHashDistance(a, b);
-
-    // Fast reject: if pHash is completely different (> 28), they cannot be similar
-    if (pHashDist != null && pHashDist > 28) {
-      return (false, null);
-    }
-
-    final orbMatches = _countOrbMatches(a, b, config.orbMaxHammingDist);
-
-    // 1) 超近接連写 (Δt <= 1.5秒): ハードウェア連写・連続シャッター
-    if (diffSeconds != null && diffSeconds <= 1.5) {
-      if (pHashDist != null && pHashDist <= 22) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: '超近接連写',
-            description:
-                'Δt: ${diffSeconds.toStringAsFixed(1)}s (シャッター連続, pHash距離: $pHashDist)',
-            diffSeconds: diffSeconds,
-            pHashDistance: pHashDist,
-            colorDistance: colorDist,
-            orbMatches: orbMatches,
-            referenceKey: a.key,
-          )
-        );
-      }
-      if (orbMatches >= 15) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: '超近接連写・特徴点一致',
-            description:
-                'Δt: ${diffSeconds.toStringAsFixed(1)}s, ORB特徴点 $orbMatches点一致',
-            diffSeconds: diffSeconds,
-            pHashDistance: pHashDist,
-            colorDistance: colorDist,
-            orbMatches: orbMatches,
-            referenceKey: a.key,
-          )
-        );
-      }
-      // pHashやORBが未計算・空でも、色差が十分近ければ同一連写として認める
-      if (pHashDist == null && a.orbBytes.isEmpty) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: '超近接連写 (メタデータ)',
-            description: 'Δt: ${diffSeconds.toStringAsFixed(1)}s (撮影時刻連続)',
-            diffSeconds: diffSeconds,
-            referenceKey: a.key,
-          )
-        );
-      }
-      return (false, null);
-    }
-
-    // 2) 同一バースト窓内 (1.5秒 < Δt <= burstWindowSeconds、通常15秒)
-    if (diffSeconds != null && diffSeconds <= config.burstWindowSeconds) {
-      if (pHashDist != null && pHashDist <= config.maxPHashHammingDistance) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: 'バースト構図一致',
-            description:
-                'Δt: ${diffSeconds.toStringAsFixed(1)}s, pHash距離 $pHashDist <= ${config.maxPHashHammingDistance}',
-            diffSeconds: diffSeconds,
-            pHashDistance: pHashDist,
-            colorDistance: colorDist,
-            orbMatches: orbMatches,
-            referenceKey: a.key,
-          )
-        );
-      }
-      if (orbMatches >= 25) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: 'バースト特徴点一致',
-            description:
-                'Δt: ${diffSeconds.toStringAsFixed(1)}s, ORB一致 $orbMatches点 >= 25',
-            diffSeconds: diffSeconds,
-            pHashDistance: pHashDist,
-            colorDistance: colorDist,
-            orbMatches: orbMatches,
-            referenceKey: a.key,
-          )
-        );
-      }
-      if (_semanticSimilar(a, b, config)) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: 'バースト被写体一致',
-            description: 'Δt: ${diffSeconds.toStringAsFixed(1)}s, AI物体検出IoU一致',
-            diffSeconds: diffSeconds,
-            pHashDistance: pHashDist,
-            colorDistance: colorDist,
-            orbMatches: orbMatches,
-            referenceKey: a.key,
-          )
-        );
-      }
-      return (false, null);
-    }
-
-    // 3) 中間時間窓 (burstWindowSeconds < Δt <= 60秒)
-    if (diffSeconds != null && diffSeconds <= 60) {
-      if (pHashDist != null && pHashDist <= 10) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: '撮り直し構図一致',
-            description:
-                'Δt: ${diffSeconds.toStringAsFixed(1)}s, pHash距離 $pHashDist <= 10',
-            diffSeconds: diffSeconds,
-            pHashDistance: pHashDist,
-            colorDistance: colorDist,
-            orbMatches: orbMatches,
-            referenceKey: a.key,
-          )
-        );
-      }
-      if (orbMatches >= 35) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: '撮り直し特徴点一致',
-            description:
-                'Δt: ${diffSeconds.toStringAsFixed(1)}s, ORB一致 $orbMatches点 >= 35',
-            diffSeconds: diffSeconds,
-            pHashDistance: pHashDist,
-            colorDistance: colorDist,
-            orbMatches: orbMatches,
-            referenceKey: a.key,
-          )
-        );
-      }
-      if (_semanticSimilar(a, b, config)) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: '撮り直し被写体一致',
-            description: 'Δt: ${diffSeconds.toStringAsFixed(1)}s, AI物体検出IoU一致',
-            diffSeconds: diffSeconds,
-            pHashDistance: pHashDist,
-            colorDistance: colorDist,
-            orbMatches: orbMatches,
-            referenceKey: a.key,
-          )
-        );
-      }
-      return (false, null);
-    }
-
-    // 4) 長期時間窓 (60秒 < Δt <= relaxedTimeWindowMinutes * 60) または 時刻情報なし
-    if (diffSeconds == null ||
-        diffSeconds <= config.relaxedTimeWindowMinutes * 60) {
-      if (pHashDist != null && pHashDist <= 6) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: '三脚・完全構図一致',
-            description:
-                'Δt: ${diffSeconds != null ? "${diffSeconds.toStringAsFixed(1)}s" : "なし"}, pHash距離 $pHashDist <= 6',
-            diffSeconds: diffSeconds,
-            pHashDistance: pHashDist,
-            colorDistance: colorDist,
-            orbMatches: orbMatches,
-            referenceKey: a.key,
-          )
-        );
-      }
-      if (_semanticSimilar(a, b, config)) {
-        return (
-          true,
-          GroupMatchExplanation(
-            matchType: 'AI被写体一致',
-            description: 'AI物体検出IoU一致',
-            diffSeconds: diffSeconds,
-            pHashDistance: pHashDist,
-            colorDistance: colorDist,
-            orbMatches: orbMatches,
-            referenceKey: a.key,
-          )
-        );
-      }
-    }
-
-    return (false, null);
-  }
-
-  static int _countOrbMatches(
-    PhotoEntry a,
-    PhotoEntry b,
-    int maxHammingDist,
-  ) {
-    if (a.orbRows == 0 || b.orbRows == 0) return 0;
-    if (a.orbBytes.isEmpty || b.orbBytes.isEmpty) return 0;
-
-    var matches = 0;
-    final rA = a.orbRows > 150 ? 150 : a.orbRows;
-    final rB = b.orbRows > 150 ? 150 : b.orbRows;
-    final bytesA = a.orbBytes;
-    final bytesB = b.orbBytes;
-
-    for (var i = 0; i < rA; i++) {
-      var bestDist = 256;
-      final startA = i * 32;
-
-      for (var j = 0; j < rB; j++) {
-        final startB = j * 32;
-        var dist = 0;
-        for (var k = 0; k < 32; k++) {
-          var x = bytesA[startA + k] ^ bytesB[startB + k];
-          while (x != 0) {
-            x &= (x - 1);
-            dist++;
-          }
-          if (dist >= bestDist) break;
-        }
-        if (dist < bestDist) {
-          bestDist = dist;
-        }
-        if (bestDist <= maxHammingDist) break;
-      }
-
-      if (bestDist <= maxHammingDist) {
-        matches++;
-      }
-    }
-
-    return matches;
-  }
-
-  static bool _semanticSimilar(
-    PhotoEntry a,
-    PhotoEntry b,
-    GroupingConfig config,
-  ) {
-    final ao = a.semanticObjects;
-    final bo = b.semanticObjects;
-    if (ao.isEmpty || bo.isEmpty) return false;
-
-    var matches = 0;
-    for (final oa in ao) {
-      for (final ob in bo) {
-        if (oa.label != ob.label) continue;
-        final iou = _iou(oa, ob);
-        if (iou >= config.semanticMinIoU) {
-          matches++;
-          if (matches >= config.semanticMinMatches) return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  static double _iou(SemanticObject a, SemanticObject b) {
-    final ax1 = a.x;
-    final ay1 = a.y;
-    final ax2 = a.x + a.w;
-    final ay2 = a.y + a.h;
-    final bx1 = b.x;
-    final by1 = b.y;
-    final bx2 = b.x + b.w;
-    final by2 = b.y + b.h;
-
-    final ix1 = ax1 > bx1 ? ax1 : bx1;
-    final iy1 = ay1 > by1 ? ay1 : by1;
-    final ix2 = ax2 < bx2 ? ax2 : bx2;
-    final iy2 = ay2 < by2 ? ay2 : by2;
-    final iw = (ix2 - ix1);
-    final ih = (iy2 - iy1);
-    if (iw <= 0 || ih <= 0) return 0;
-    final inter = iw * ih;
-    final union = (a.w * a.h) + (b.w * b.h) - inter;
-    if (union <= 0) return 0;
-    return inter / union;
-  }
-
-  static bool _isBurstGroup(List<PhotoEntry> items, int burstWindowSeconds) {
-    // Burst group if at least 2 photos have times within [burstWindowSeconds] range.
-    final times = items.map((e) => e.capturedAt).whereType<DateTime>().toList()
-      ..sort();
-    if (times.length < 2) return false;
-    final span = times.last.difference(times.first).inSeconds.abs();
-    return span <= burstWindowSeconds;
-  }
-
-  static int _hammingDistance64Hex(String hexA, String hexB) {
-    final a = BigInt.parse(hexA.padLeft(16, '0'), radix: 16);
-    final b = BigInt.parse(hexB.padLeft(16, '0'), radix: 16);
-    var x = a ^ b;
-    var count = 0;
-    while (x != BigInt.zero) {
-      x &= (x - BigInt.one);
-      count++;
-    }
-    return count > 64 ? 64 : count;
-  }
-
-  static double _bhattacharyyaDistance(Float32List h1, Float32List h2) {
-    if (h1.length != h2.length || h1.isEmpty) return 1.0;
-
-    // Backward compatibility for 1D Hue histograms (180 elements)
-    if (h1.length == 180) {
-      double sum = 0.0;
-      for (var i = 0; i < 180; i++) {
-        sum += math.sqrt(h1[i] * h2[i]);
-      }
-      final val = 1.0 - sum;
-      return val <= 0.0 ? 0.0 : math.sqrt(val);
-    }
-
-    // Combined H-S-V histograms (180 + 256 + 256 = 692 elements)
-    if (h1.length == 692) {
-      double calcSubDist(int start, int length) {
-        double sum = 0.0;
-        for (var i = 0; i < length; i++) {
-          sum += math.sqrt(h1[start + i] * h2[start + i]);
-        }
-        final val = 1.0 - sum;
-        return val <= 0.0 ? 0.0 : math.sqrt(val);
-      }
-
-      final distH = calcSubDist(0, 180);
-      final distS = calcSubDist(180, 256);
-      final distV = calcSubDist(180 + 256, 256);
-
-      // Calculate mean saturation (S) for both images to adjust Hue weight adaptively.
-      // If one of the images is grayscale/low-saturation, Hue becomes unreliable noise.
-      double calcMeanS(Float32List h) {
-        double sumS = 0.0;
-        double sumW = 0.0;
-        for (var i = 0; i < 256; i++) {
-          final w = h[180 + i];
-          sumS += i * w;
-          sumW += w;
-        }
-        return sumW > 0 ? (sumS / sumW) : 0.0;
-      }
-
-      final meanS1 = calcMeanS(h1);
-      final meanS2 = calcMeanS(h2);
-      final minMeanS = math.min(meanS1, meanS2);
-
-      // Adaptive weights:
-      // High saturation -> Hue is king (0.95 weight)
-      // Low saturation -> Hue is noise, rely entirely on Saturation and Value (0.50 each)
-      double wH, wS, wV;
-      if (minMeanS >= 50.0) {
-        wH = 0.95;
-        wS = 0.03;
-        wV = 0.02;
-      } else if (minMeanS <= 15.0) {
-        wH = 0.0;
-        wS = 0.50;
-        wV = 0.50;
-      } else {
-        // Linearly interpolate weights between minMeanS=15.0 and 50.0
-        final ratio = ((minMeanS - 15.0) / (50.0 - 15.0)).clamp(0.0, 1.0);
-        wH = 0.95 * ratio;
-        wS = 0.50 - 0.47 * ratio;
-        wV = 0.50 - 0.48 * ratio;
-      }
-
-      return wH * distH + wS * distS + wV * distV;
-    }
-
-    // Default fallback for any other lengths
-    double sum = 0.0;
-    for (var i = 0; i < h1.length; i++) {
-      sum += math.sqrt(h1[i] * h2[i]);
-    }
-    final val = 1.0 - sum;
-    return val <= 0.0 ? 0.0 : math.sqrt(val);
   }
 }

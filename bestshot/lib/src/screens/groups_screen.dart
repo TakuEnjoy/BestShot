@@ -10,6 +10,8 @@ import '../models/photo_group.dart';
 import '../services/analysis/analysis_types.dart';
 import '../services/deleting/delete_service.dart';
 import '../services/sorting/sort_service.dart';
+import '../widgets/global_background.dart';
+import '../widgets/glass_container.dart';
 import 'loupe_screen.dart';
 
 part 'groups/background_task.dart';
@@ -71,9 +73,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
       for (final g in _groups)
         for (final e in g.items) e.key: e,
     };
-    _selectedForDelete = {
-      for (final g in _groups) ...g.deleteCandidateKeys,
-    };
+    // Initially do not pre-select items for delete; let the user select manually
+    _selectedForDelete = <String>{};
 
     // Initialize keyboard photo focus to the first bestKey
     if (_groups.isNotEmpty) {
@@ -510,6 +511,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
           _openLoupe(items);
         }
       }
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.escape && _loupeSelection.isNotEmpty) {
+      setState(() {
+        _loupeSelection.clear();
+      });
       return KeyEventResult.handled;
     }
 
@@ -1686,184 +1694,158 @@ class _GroupsScreenState extends State<GroupsScreen> {
       autofocus: true,
       onKeyEvent: (node, event) => _handleKeyEvent(event),
       child: Scaffold(
-        backgroundColor: colorScheme.surfaceContainer.withValues(alpha: 0.3),
-        appBar: AppBar(
-          title: isMobile
-              ? const Text(
-                  '整理・比較',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                )
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('整理・比較'),
-                    Text(
-                      isPortrait
-                          ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.portrait.hasFace).length} / 削除候補: $_selectedCount'
-                          : 'グループ: ${_groups.length} / 削除候補: $_selectedCount',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.normal,
-                      ),
-                    ),
-                  ],
+        backgroundColor: Colors.transparent,
+        body: GlobalBackground(
+          child: Stack(
+            children: [
+              // Main content
+              Positioned.fill(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 80), // Space for floating app bar
+                  child: isPortrait
+                      ? _buildPortraitBody(context, portraitItems, isWide, size.width, crossAxisCount)
+                      : _buildGroupBody(context, isWide, size.width, crossAxisCount),
                 ),
-          actions: [
-            if (!Platform.isAndroid && !Platform.isIOS)
-              IconButton(
-                tooltip: 'キーボード操作ガイド',
-                icon: const Icon(Icons.keyboard_command_key_rounded),
-                onPressed: () => _showKeyboardShortcutsDialog(context),
               ),
-            if (!isPortrait)
-              isMobile
-                  ? IconButton(
-                      tooltip: 'Bestのみ保存',
-                      icon: const Icon(Icons.folder_shared),
-                      onPressed: canExport ? _exportBestShots : null,
-                      color: colorScheme.primary,
-                    )
-                  : Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: FilledButton.icon(
-                        onPressed: canExport ? _exportBestShots : null,
-                        icon: const Icon(Icons.folder_shared, size: 20),
-                        label: const Text('Bestのみ保存'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: colorScheme.primaryContainer,
-                          foregroundColor: colorScheme.onPrimaryContainer,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                        ),
-                      ),
-                    ),
-            isMobile
-                ? Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Badge(
-                      label: Text('${_selectedSortFolders.length}'),
-                      isLabelVisible: _selectedSortFolders.isNotEmpty,
-                      child: IconButton(
-                        tooltip: '仕分け実行',
-                        icon: const Icon(Icons.folder_copy),
-                        onPressed: canSort ? _runSortAndProcess : null,
-                      ),
-                    ),
-                  )
-                : Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: Badge(
-                      label: Text('${_selectedSortFolders.length}'),
-                      isLabelVisible: _selectedSortFolders.isNotEmpty,
-                      child: FilledButton.icon(
-                        onPressed: canSort ? _runSortAndProcess : null,
-                        icon: const Icon(Icons.folder_copy, size: 20),
-                        label: const Text('仕分け実行'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: colorScheme.primaryContainer,
-                          foregroundColor: colorScheme.onPrimaryContainer,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                        ),
-                      ),
-                    ),
-                  ),
-            if (_loupeSelection.isNotEmpty)
-              IconButton(
-                tooltip: 'ルーペ選択を解除',
-                onPressed: () => setState(_loupeSelection.clear),
-                icon: const Icon(Icons.deselect),
-              ),
-            isMobile
-                ? Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Badge(
-                      label: Text('${_loupeSelection.length}'),
-                      isLabelVisible: _loupeSelection.isNotEmpty,
-                      child: IconButton(
-                        tooltip: 'ルーペ比較',
-                        icon: const Icon(Icons.zoom_in),
-                        onPressed: _loupeSelection.isNotEmpty
-                            ? () {
-                                final items = _loupeSelection
-                                    .map((k) => _entryByKey[k])
-                                    .whereType<PhotoEntry>()
-                                    .toList();
-                                _openLoupe(items);
-                              }
-                            : null,
-                      ),
-                    ),
-                  )
-                : Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: FilledButton.icon(
-                      onPressed: _loupeSelection.isNotEmpty
-                          ? () {
-                              final items = _loupeSelection
-                                  .map((k) => _entryByKey[k])
-                                  .whereType<PhotoEntry>()
-                                  .toList();
-                              _openLoupe(items);
-                            }
-                          : null,
-                      icon: const Icon(Icons.zoom_in, size: 20),
-                      label: Text('ルーペ (${_loupeSelection.length}/4)'),
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                      ),
-                    ),
-                  ),
-            isMobile
-                ? Padding(
-                    padding: const EdgeInsets.only(left: 8, right: 12),
-                    child: Badge(
-                      label: Text('$_selectedCount'),
-                      isLabelVisible: _selectedCount > 0,
-                      backgroundColor: colorScheme.error,
-                      textColor: colorScheme.onError,
-                      child: IconButton(
-                        tooltip: 'ゴミ箱へ',
-                        icon: Icon(
-                          Icons.delete_outline,
-                          color: _selectedCount > 0 ? colorScheme.error : null,
-                        ),
-                        onPressed: canDelete
-                            ? _reviewAndDelete
-                            : null,
-                      ),
-                    ),
-                  )
-                : Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: FilledButton.icon(
-                      onPressed: canDelete
-                          ? _reviewAndDelete
-                          : null,
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      label: const Text('ゴミ箱へ'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: colorScheme.error,
-                        foregroundColor: colorScheme.onError,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                      ),
-                    ),
-                  ),
-          ],
-        ),
-        body: Stack(
-          children: [
-            Positioned.fill(
-              child: isPortrait
-                  ? _buildPortraitBody(context, portraitItems, isWide, size.width, crossAxisCount)
-                  : _buildGroupBody(context, isWide, size.width, crossAxisCount),
-            ),
-            if (_backgroundTasks.isNotEmpty)
+              
+              // Floating App Bar (Glass)
               Positioned(
+                top: 16,
                 left: 16,
                 right: 16,
-                bottom: 16,
-                child: _buildBottomProgressOverlay(colorScheme),
+                child: GlassContainer(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  borderRadius: BorderRadius.circular(999),
+                  child: Row(
+                    children: [
+                      // Title & Info
+                      Expanded(
+                        child: isMobile
+                            ? const Text('整理・比較', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white))
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text('整理・比較', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                                  Text(
+                                    isPortrait
+                                        ? '写真: ${portraitItems.length} / 顔あり: ${portraitItems.where((e) => e.portrait.hasFace).length} / 削除: $_selectedCount'
+                                        : 'グループ: ${_groups.length} / 削除候補: $_selectedCount',
+                                    style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.7)),
+                                  ),
+                                ],
+                              ),
+                      ),
+                      
+                      // Actions
+                      if (!Platform.isAndroid && !Platform.isIOS)
+                        IconButton(
+                          tooltip: 'キーボード操作ガイド',
+                          icon: const Icon(Icons.keyboard_command_key_rounded, color: Colors.white70),
+                          onPressed: () => _showKeyboardShortcutsDialog(context),
+                        ),
+                      
+                      if (!isPortrait)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: FilledButton.tonalIcon(
+                            onPressed: canExport ? _exportBestShots : null,
+                            icon: const Icon(Icons.folder_shared, size: 16),
+                            label: isMobile ? const SizedBox.shrink() : const Text('保存'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 16),
+                            ),
+                          ),
+                        ),
+                      
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Badge(
+                          label: Text('${_selectedSortFolders.length}'),
+                          isLabelVisible: _selectedSortFolders.isNotEmpty,
+                          child: FilledButton.tonalIcon(
+                            onPressed: canSort ? _runSortAndProcess : null,
+                            icon: const Icon(Icons.folder_copy, size: 16),
+                            label: isMobile ? const SizedBox.shrink() : const Text('仕分け'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 16),
+                            ),
+                          ),
+                        ),
+                      ),
+                      
+                      if (_loupeSelection.isNotEmpty) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: FilledButton.icon(
+                            onPressed: () {
+                              final items = _loupeSelection.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList();
+                              _openLoupe(items);
+                            },
+                            icon: const Icon(Icons.zoom_in, size: 16),
+                            label: Text(isMobile ? '${_loupeSelection.length}' : 'ルーペ (${_loupeSelection.length}/4)'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: colorScheme.primary.withValues(alpha: 0.8),
+                              foregroundColor: colorScheme.onPrimary,
+                              padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 16),
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: Tooltip(
+                            message: 'ルーペ選択を一括解除 (Esc)',
+                            child: FilledButton.tonalIcon(
+                              onPressed: () {
+                                setState(() {
+                                  _loupeSelection.clear();
+                                });
+                              },
+                              icon: const Icon(Icons.layers_clear, size: 16),
+                              label: isMobile ? const SizedBox.shrink() : const Text('ルーペ解除'),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                                foregroundColor: Colors.white70,
+                                padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 12),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                        
+                      FilledButton.icon(
+                        onPressed: canDelete ? _reviewAndDelete : null,
+                        icon: const Icon(Icons.delete_outline, size: 16),
+                        label: Text(isMobile ? '$_selectedCount' : 'ゴミ箱へ'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _selectedCount > 0 
+                              ? colorScheme.errorContainer.withValues(alpha: 0.8) 
+                              : colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                          foregroundColor: _selectedCount > 0 
+                              ? colorScheme.onErrorContainer 
+                              : Colors.white70,
+                          padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 16),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-          ],
+              
+              // Background tasks overlay
+              if (_backgroundTasks.isNotEmpty)
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 16,
+                  child: _buildBottomProgressOverlay(colorScheme),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -1871,15 +1853,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   Widget _buildBottomProgressOverlay(ColorScheme colorScheme) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.85),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white10),
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.3)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.5),
-            blurRadius: 12,
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 16,
             spreadRadius: 2,
           ),
         ],
@@ -1890,15 +1872,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
           for (final task in _backgroundTasks) ...[
             Row(
               children: [
-                const SizedBox(
-                  width: 16,
-                  height: 16,
+                SizedBox(
+                  width: 18,
+                  height: 18,
                   child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    strokeWidth: 2.5,
+                    valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1907,36 +1889,40 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         task.title,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 13,
+                          fontSize: 13.5,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                       const SizedBox(height: 2),
                       Text(
                         task.statusText,
-                        style: const TextStyle(
-                          color: Colors.white60,
-                          fontSize: 11,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.7),
+                          fontSize: 11.5,
                         ),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 16),
-                SizedBox(
-                  width: 60,
-                  child: LinearProgressIndicator(
-                    value: task.progress,
-                    backgroundColor: Colors.white10,
-                    valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: SizedBox(
+                    width: 70,
+                    height: 8,
+                    child: LinearProgressIndicator(
+                      value: task.progress,
+                      backgroundColor: Colors.white12,
+                      valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                    ),
                   ),
                 ),
               ],
             ),
             if (task != _backgroundTasks.last)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Divider(color: Colors.white10, height: 1),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Divider(color: colorScheme.outlineVariant.withValues(alpha: 0.2), height: 1),
               ),
           ],
         ],

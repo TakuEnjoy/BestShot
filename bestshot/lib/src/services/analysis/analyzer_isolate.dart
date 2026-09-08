@@ -275,6 +275,7 @@ class AnalyzerIsolate {
       orbRows: 0,
       orbCols: 0,
       orbBytes: Uint8List(0),
+      orbKeypoints: Float32List(0),
       histogram: Uint8List(256),
       hueHistogram: null,
       hasFace: false,
@@ -448,6 +449,7 @@ class AnalyzerIsolate {
         orbRows: orb.rows,
         orbCols: orb.cols,
         orbBytes: orb.bytes,
+        orbKeypoints: orb.keypoints,
         histogram: histogram,
         hueHistogram: hueHistogram,
         hasFace: hasFace,
@@ -650,17 +652,38 @@ class AnalyzerIsolate {
       final emptyMat = cv.Mat.empty();
       final result = orbDetector.detectAndCompute(eq, emptyMat);
       desc = result.$2;
+      final kps = result.$1;
+      
       emptyMat.dispose();
-      result.$1.dispose();
-      if (desc.isEmpty) return _OrbDesc.empty();
+      
+      if (desc.isEmpty) {
+        kps.dispose();
+        return _OrbDesc.empty();
+      }
+      
       final rows = desc.rows > 256 ? 256 : desc.rows;
       final cols = desc.cols;
       final elemSize = desc.elemSize;
       final bytesLen = rows * cols * elemSize;
       final all = desc.data;
-      if (all.length < bytesLen) return _OrbDesc.empty();
+      
+      if (all.length < bytesLen) {
+        kps.dispose();
+        return _OrbDesc.empty();
+      }
+      
       final sliced = Uint8List.fromList(all.sublist(0, bytesLen));
-      return _OrbDesc(rows: rows, cols: cols, bytes: sliced);
+      
+      // Extract keypoints [x, y, x, y, ...] up to 'rows'
+      final kpList = Float32List(rows * 2);
+      for (var i = 0; i < rows; i++) {
+        final kp = kps[i];
+        kpList[i * 2] = kp.x;
+        kpList[i * 2 + 1] = kp.y;
+      }
+      
+      kps.dispose();
+      return _OrbDesc(rows: rows, cols: cols, bytes: sliced, keypoints: kpList);
     } catch (e, s) {
       developer.log('Error in _calcOrbDescriptorsFromMat: $e\n$s');
       return _OrbDesc.empty();
@@ -1271,11 +1294,12 @@ class _TransferableInput {
 }
 
 class _OrbDesc {
-  const _OrbDesc({required this.rows, required this.cols, required this.bytes});
-  _OrbDesc.empty() : rows = 0, cols = 0, bytes = Uint8List(0);
+  const _OrbDesc({required this.rows, required this.cols, required this.bytes, required this.keypoints});
+  _OrbDesc.empty() : rows = 0, cols = 0, bytes = Uint8List(0), keypoints = Float32List(0);
   final int rows;
   final int cols;
   final Uint8List bytes;
+  final Float32List keypoints;
 }
 
 class _PortraitResult {

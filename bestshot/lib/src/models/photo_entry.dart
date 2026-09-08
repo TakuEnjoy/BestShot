@@ -38,19 +38,35 @@ class GroupMatchExplanation {
   const GroupMatchExplanation({
     required this.matchType,
     required this.description,
+    this.category,
     this.diffSeconds,
     this.pHashDistance,
     this.colorDistance,
     this.orbMatches,
+    this.inliers,
+    this.orbInlierRatio,
+    this.embeddingSimilarity,
+    this.cropPair,
+    this.semanticMatch = false,
+    this.confidence = 1.0,
+    this.needsReview = false,
     this.referenceKey,
   });
 
   final String matchType;
   final String description;
+  final String? category;
   final double? diffSeconds;
   final int? pHashDistance;
   final double? colorDistance;
   final int? orbMatches;
+  final int? inliers;
+  final double? orbInlierRatio;
+  final double? embeddingSimilarity;
+  final String? cropPair;
+  final bool semanticMatch;
+  final double confidence;
+  final bool needsReview;
   final String? referenceKey;
 }
 
@@ -67,8 +83,10 @@ class PhotoEntry {
     required this.orbRows,
     required this.orbCols,
     required this.orbBytes,
+    required this.orbKeypoints,
     required this.histogram,
     this.hueHistogram,
+    this.embeddings,
     this.exif,
     this.semanticObjects = const [],
     this.faceQualityScore = 0,
@@ -105,12 +123,16 @@ class PhotoEntry {
   final int orbRows;
   final int orbCols;
   final Uint8List orbBytes;
+  final Float32List orbKeypoints;
 
   /// Luma histogram (256 entries).
   final Uint8List histogram;
 
   /// HSV Hue histogram (180 entries).
   final Float32List? hueHistogram;
+
+  /// Embeddings for multi-crop (e.g. 'full', 'center', 'tl', 'tr', 'bl', 'br').
+  final Map<String, Float32List>? embeddings;
 
   /// Optional EXIF summary (F/SS/ISO).
   final ExifSummary? exif;
@@ -215,8 +237,10 @@ class PhotoEntry {
     int? orbRows,
     int? orbCols,
     Uint8List? orbBytes,
+    Float32List? orbKeypoints,
     Uint8List? histogram,
     ValueGetter<Float32List?>? hueHistogram,
+    ValueGetter<Map<String, Float32List>?>? embeddings,
     ValueGetter<ExifSummary?>? exif,
     List<SemanticObject>? semanticObjects,
     double? faceQualityScore,
@@ -237,8 +261,10 @@ class PhotoEntry {
       orbRows: orbRows ?? this.orbRows,
       orbCols: orbCols ?? this.orbCols,
       orbBytes: orbBytes ?? this.orbBytes,
+      orbKeypoints: orbKeypoints ?? this.orbKeypoints,
       histogram: histogram ?? this.histogram,
       hueHistogram: hueHistogram != null ? hueHistogram() : this.hueHistogram,
+      embeddings: embeddings != null ? embeddings() : this.embeddings,
       exif: exif != null ? exif() : this.exif,
       semanticObjects: semanticObjects ?? this.semanticObjects,
       faceQualityScore: faceQualityScore ?? this.faceQualityScore,
@@ -270,6 +296,7 @@ class PhotoEntry {
         other.orbRows == orbRows &&
         other.orbCols == orbCols &&
         listEquals(other.orbBytes, orbBytes) &&
+        listEquals(other.orbKeypoints, orbKeypoints) &&
         listEquals(other.histogram, histogram) &&
         listEquals(other.hueHistogram, hueHistogram) &&
         other.exif == exif &&
@@ -292,6 +319,7 @@ class PhotoEntry {
         orbRows.hashCode ^
         orbCols.hashCode ^
         Object.hashAll(orbBytes) ^
+        Object.hashAll(orbKeypoints) ^
         Object.hashAll(histogram) ^
         (hueHistogram != null ? Object.hashAll(hueHistogram!) : 0) ^
         exif.hashCode ^

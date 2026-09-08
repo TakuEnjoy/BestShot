@@ -19,8 +19,10 @@ class AnalyzeOutput {
     required this.orbRows,
     required this.orbCols,
     required this.orbBytes,
+    required this.orbKeypoints,
     required this.histogram,
     this.hueHistogram,
+    this.embeddings,
     required this.hasFace,
     required this.faceX,
     required this.faceY,
@@ -43,8 +45,10 @@ class AnalyzeOutput {
   final int orbRows;
   final int orbCols;
   final Uint8List orbBytes;
+  final Float32List orbKeypoints; // [x, y, x, y, ...]
   final Uint8List histogram; // 256 bytes
   final Float32List? hueHistogram; // 180 floats
+  final Map<String, Float32List>? embeddings;
 
   /// Portrait-mode extras.
   final bool hasFace;

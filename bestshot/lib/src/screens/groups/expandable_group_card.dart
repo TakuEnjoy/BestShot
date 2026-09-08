@@ -39,63 +39,59 @@ class _ExpandableGroupCard extends StatelessWidget {
     );
     final theme = Theme.of(context);
 
-    return Material(
-      color: theme.colorScheme.surface,
-      elevation: isKeyboardGroupFocused ? 4 : 0,
-      shadowColor: isKeyboardGroupFocused ? theme.colorScheme.primary.withValues(alpha: 0.3) : null,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(
-          color: isKeyboardGroupFocused
-              ? theme.colorScheme.primary
-              : theme.dividerColor.withValues(alpha: 0.12),
-          width: isKeyboardGroupFocused ? 2 : 1,
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
+    return GlassContainer(
+      backgroundColor: isKeyboardGroupFocused ? theme.colorScheme.primary.withValues(alpha: 0.1) : null,
+      borderColor: isKeyboardGroupFocused
+          ? theme.colorScheme.primary
+          : null,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
                     color: isKeyboardGroupFocused
                         ? theme.colorScheme.primary
-                        : theme.colorScheme.secondaryContainer,
-                    borderRadius: BorderRadius.circular(6),
+                        : theme.colorScheme.primaryContainer.withValues(alpha: 0.8),
+                    borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(
                     group.id,
                     style: TextStyle(
                       color: isKeyboardGroupFocused
                           ? theme.colorScheme.onPrimary
-                          : theme.colorScheme.onSecondaryContainer,
+                          : theme.colorScheme.onPrimaryContainer,
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
+                      letterSpacing: 0.5,
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 10),
                 Expanded(
-                  child: Row(
+                  child: Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 4,
                     children: [
                       Text(
                         '${group.items.length} 枚',
                         style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
                       ),
-                      const SizedBox(width: 8),
-                      TextButton.icon(
+                      FilledButton.tonalIcon(
                         onPressed: onSelectBestOnly,
-                        icon: const Icon(Icons.playlist_remove, size: 16),
-                        label: const Text('Best以外を削除候補に', style: TextStyle(fontSize: 11)),
-                        style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          minimumSize: Size.zero,
+                        icon: const Icon(Icons.playlist_remove, size: 15),
+                        label: const Text('Best以外を削除候補に', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                          minimumSize: const Size(0, 28),
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          backgroundColor: theme.colorScheme.surfaceContainerHigh,
+                          foregroundColor: theme.colorScheme.onSurfaceVariant,
+                          shape: const StadiumBorder(),
                         ),
                       ),
                     ],
@@ -103,22 +99,60 @@ class _ExpandableGroupCard extends StatelessWidget {
                 ),
 
                 if (group.isBurst) ...[
-                  const Icon(Icons.bolt, size: 14, color: Colors.orange),
-                  const SizedBox(width: 4),
-                  Text(
-                    '連写',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: Colors.orange,
-                      fontWeight: FontWeight.bold,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.bolt, size: 14, color: Colors.orange),
+                        const SizedBox(width: 3),
+                        Text(
+                          '連写',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: Colors.orange,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                if (group.needsReview) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.redAccent.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.warning_amber_rounded, size: 14, color: Colors.redAccent),
+                        const SizedBox(width: 3),
+                        Text(
+                          '要確認',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: Colors.redAccent,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ],
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
             Text(
               '最高鮮明度: ${best.sharpness.toStringAsFixed(0)}',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
             ),
             const SizedBox(height: 10),
             SizedBox(
@@ -165,7 +199,6 @@ class _ExpandableGroupCard extends StatelessWidget {
             ),
           ],
         ),
-      ),
     );
   }
 }

@@ -8,6 +8,7 @@ class PhotoGroup {
     required String bestKey,
     required Iterable<String> deleteCandidateKeys,
     required this.isBurst,
+    this.needsReview = false,
   }) : items = UnmodifiableListView(items.toList()),
        deleteCandidateKeys = Set.unmodifiable(deleteCandidateKeys),
        _bestKey = bestKey {
@@ -21,6 +22,7 @@ class PhotoGroup {
   final List<PhotoEntry> items;
   final Set<String> deleteCandidateKeys;
   final bool isBurst;
+  final bool needsReview;
 
   final String _bestKey;
   String get bestKey => _bestKey;
@@ -31,6 +33,7 @@ class PhotoGroup {
     String? bestKey,
     Iterable<String>? deleteCandidateKeys,
     bool? isBurst,
+    bool? needsReview,
   }) {
     return PhotoGroup(
       id: id ?? this.id,
@@ -38,6 +41,7 @@ class PhotoGroup {
       bestKey: bestKey ?? this.bestKey,
       deleteCandidateKeys: deleteCandidateKeys ?? this.deleteCandidateKeys,
       isBurst: isBurst ?? this.isBurst,
+      needsReview: needsReview ?? this.needsReview,
     );
   }
 }

@@ -99,7 +99,7 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
                   children: [
                     Positioned.fill(
                       child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(16),
                         child: Image.memory(
                           item.displayBytes,
                           fit: BoxFit.cover,
@@ -112,45 +112,47 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
                       Positioned.fill(
                         child: Container(
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: BorderRadius.circular(16),
                             border: Border.all(
                               color: theme.colorScheme.primary,
                               width: 3,
                             ),
-                            color: theme.colorScheme.primary.withValues(alpha: 0.1),
+                            color: theme.colorScheme.primary.withValues(alpha: 0.12),
                           ),
                         ),
                       ),
-                    // Info overlay
+                    // Info overlay (Pill)
                     Positioned(
-                      left: 4,
-                      top: 4,
+                      left: 6,
+                      top: 6,
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
+                          horizontal: 8,
+                          vertical: 3,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(4),
+                          color: Colors.black.withValues(alpha: 0.65),
+                          borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
                           item.sharpness.toStringAsFixed(0),
                           style: const TextStyle(
                             fontSize: 10,
                             color: Colors.white,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
                       ),
                     ),
                     // Actions
                     Positioned(
-                      right: 4,
-                      top: 4,
+                      right: 6,
+                      top: 6,
                       child: IconButton.filled(
                         iconSize: 18,
                         style: IconButton.styleFrom(
                           backgroundColor: Colors.black54,
+                          shape: const CircleBorder(),
                         ),
                         icon: const Icon(Icons.close, color: Colors.white),
                         onPressed: () {
@@ -166,14 +168,15 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
                       ),
                     ),
                     Positioned(
-                      right: 4,
-                      bottom: 4,
+                      right: 6,
+                      bottom: 6,
                       child: IconButton.filled(
                         iconSize: 18,
                         style: IconButton.styleFrom(
                           backgroundColor: isSelectedForLoupe
                               ? theme.colorScheme.primary
                               : Colors.black54,
+                          shape: const CircleBorder(),
                         ),
                         icon: Icon(
                           isSelectedForLoupe
@@ -190,37 +193,44 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> {
             ),
           ),
           Container(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surface,
+              color: theme.colorScheme.surfaceContainerHigh,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              border: Border(
+                top: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.2)),
+              ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
-                  blurRadius: 10,
-                  offset: const Offset(0, -5),
+                  color: Colors.black.withValues(alpha: 0.2),
+                  blurRadius: 16,
+                  offset: const Offset(0, -4),
                 ),
               ],
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(false),
-                    child: const Text('キャンセル'),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: theme.colorScheme.error,
-                      foregroundColor: theme.colorScheme.onError,
+            child: SafeArea(
+              top: false,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      child: const Text('キャンセル'),
                     ),
-                    onPressed: () => Navigator.of(context).pop(true),
-                    child: Text('${_currentItems.length}件をゴミ箱へ移動'),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: theme.colorScheme.errorContainer,
+                        foregroundColor: theme.colorScheme.onErrorContainer,
+                      ),
+                      onPressed: () => Navigator.of(context).pop(true),
+                      child: Text('${_currentItems.length}件をゴミ箱へ移動'),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],

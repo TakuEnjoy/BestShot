@@ -11,6 +11,7 @@ PhotoEntry createMockEntry({
   Float32List? hueHistogram,
   int orbRows = 0,
   Uint8List? orbBytes,
+  Float32List? orbKeypoints,
 }) {
   return PhotoEntry(
     key: key,
@@ -23,6 +24,7 @@ PhotoEntry createMockEntry({
     orbRows: orbRows,
     orbCols: orbRows > 0 ? 32 : 0,
     orbBytes: orbBytes ?? Uint8List(0),
+    orbKeypoints: orbKeypoints ?? Float32List(0),
     histogram: Uint8List(256),
     hueHistogram: hueHistogram ?? Float32List(180),
     exif: ExifSummary(
@@ -133,8 +135,17 @@ void main() {
 
       // Create synthetic ORB descriptors (30 rows of 32 bytes)
       final orb = Uint8List(30 * 32);
-      for (var i = 0; i < orb.length; i++) {
-        orb[i] = i % 256;
+      for (var i = 0; i < 30; i++) {
+        orb[i * 32] = i;
+        for (var j = 1; j < 32; j++) {
+          orb[i * 32 + j] = j;
+        }
+      }
+      
+      final kps = Float32List(60);
+      for (var i = 0; i < 30; i++) {
+        kps[i * 2] = (i % 5) * 10.0;
+        kps[i * 2 + 1] = (i ~/ 5) * 10.0;
       }
 
       final items = [
@@ -145,6 +156,7 @@ void main() {
           sharpness: 3000.0,
           orbRows: 30,
           orbBytes: orb,
+          orbKeypoints: kps,
         ),
         // A different intervening shot
         createMockEntry(
@@ -161,6 +173,7 @@ void main() {
           sharpness: 2500.0,
           orbRows: 30,
           orbBytes: orb,
+          orbKeypoints: kps,
         ),
       ];
 

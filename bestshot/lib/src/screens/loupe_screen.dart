@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 import 'package:image/image.dart' as img;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../widgets/global_background.dart';
+import '../widgets/glass_container.dart';
 
 import '../models/photo_entry.dart';
 import '../services/analysis/focus_mask_service.dart';
@@ -467,7 +469,10 @@ class _LoupeScreenState extends State<LoupeScreen> {
             const SizedBox(width: 8),
           ],
         ),
-        body: _buildBody(),
+        backgroundColor: Colors.transparent,
+        body: GlobalBackground(
+          child: _buildBody(),
+        ),
         bottomNavigationBar: _buildBottomBar(),
       ),
     );
@@ -532,19 +537,13 @@ class _LoupeScreenState extends State<LoupeScreen> {
       if (isPortrait) {
         return Column(
           children: [
-            for (int i = 0; i < count; i++) ...[
-              if (i > 0) const Divider(height: 1),
-              Expanded(child: _buildPane(i)),
-            ],
+            for (int i = 0; i < count; i++) Expanded(child: _buildPane(i)),
           ],
         );
       } else {
         return Row(
           children: [
-            for (int i = 0; i < count; i++) ...[
-              if (i > 0) const VerticalDivider(width: 1),
-              Expanded(child: _buildPane(i)),
-            ],
+            for (int i = 0; i < count; i++) Expanded(child: _buildPane(i)),
           ],
         );
       }
@@ -556,17 +555,14 @@ class _LoupeScreenState extends State<LoupeScreen> {
             child: Row(
               children: [
                 Expanded(child: _buildPane(0)),
-                const VerticalDivider(width: 1),
                 Expanded(child: _buildPane(1)),
               ],
             ),
           ),
-          const Divider(height: 1),
           Expanded(
             child: Row(
               children: [
                 Expanded(child: _buildPane(2)),
-                const VerticalDivider(width: 1),
                 Expanded(child: _buildPane(3)),
               ],
             ),
@@ -593,26 +589,29 @@ class _LoupeScreenState extends State<LoupeScreen> {
     final screenWidth = MediaQuery.of(context).size.width;
     final isNarrow = screenWidth < 500;
 
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
     return SafeArea(
       child: Container(
         margin: EdgeInsets.fromLTRB(
-          isNarrow ? 8 : 16,
+          isNarrow ? 10 : 20,
           0,
-          isNarrow ? 8 : 16,
-          isNarrow ? 6 : 12,
+          isNarrow ? 10 : 20,
+          isNarrow ? 8 : 14,
         ),
         padding: EdgeInsets.symmetric(
-          horizontal: isNarrow ? 10 : 16,
-          vertical: isNarrow ? 6 : 10,
+          horizontal: isNarrow ? 14 : 20,
+          vertical: isNarrow ? 8 : 12,
         ),
         decoration: BoxDecoration(
-          color: const Color(0xFF111827).withValues(alpha: 0.92), // Deep Dark Card
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFF1F2937), width: 1.5),
+          color: colorScheme.surfaceContainerHigh.withValues(alpha: 0.94),
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.25), width: 1.2),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.5),
-              blurRadius: 12,
+              color: Colors.black.withValues(alpha: 0.4),
+              blurRadius: 16,
               offset: const Offset(0, 4),
             ),
           ],
@@ -632,7 +631,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
-                      fontSize: isNarrow ? 12 : 13,
+                      fontSize: isNarrow ? 12.5 : 13.5,
                       color: Colors.white,
                     ),
                   ),
@@ -640,34 +639,37 @@ class _LoupeScreenState extends State<LoupeScreen> {
                   Text(
                     'ピント値: ${widget.scores[_activePaneIndex].toStringAsFixed(0)}',
                     style: TextStyle(
-                      fontSize: isNarrow ? 10 : 11,
-                      color: Colors.white.withValues(alpha: 0.6),
+                      fontSize: isNarrow ? 10.5 : 11.5,
+                      color: Colors.white.withValues(alpha: 0.65),
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
 
-            // Toggle Delete button
+            // Toggle Delete button (Pill)
             InkWell(
               onTap: () {
                 widget.onToggleDelete?.call(key, !selectedForDelete);
                 setState(() {});
               },
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(999),
               child: Container(
-                constraints: BoxConstraints(minWidth: isNarrow ? 64 : 100),
-                height: isNarrow ? 38 : 46,
-                padding: EdgeInsets.symmetric(horizontal: isNarrow ? 8 : 12),
+                constraints: BoxConstraints(minWidth: isNarrow ? 70 : 105),
+                height: isNarrow ? 36 : 42,
+                padding: EdgeInsets.symmetric(horizontal: isNarrow ? 10 : 14),
                 decoration: BoxDecoration(
                   color: selectedForDelete
-                      ? Colors.red.withValues(alpha: 0.15)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(4),
+                      ? colorScheme.errorContainer.withValues(alpha: 0.85)
+                      : colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(999),
                   border: Border.all(
-                    color: selectedForDelete ? Colors.red : Colors.white30,
-                    width: 1,
+                    color: selectedForDelete
+                        ? colorScheme.error
+                        : colorScheme.outlineVariant.withValues(alpha: 0.3),
+                    width: 1.2,
                   ),
                 ),
                 child: Row(
@@ -678,29 +680,29 @@ class _LoupeScreenState extends State<LoupeScreen> {
                       selectedForDelete
                           ? Icons.delete_forever
                           : Icons.delete_outline,
-                      color: selectedForDelete ? Colors.red : Colors.white70,
-                      size: isNarrow ? 18 : 20,
+                      color: selectedForDelete ? colorScheme.onErrorContainer : Colors.white70,
+                      size: isNarrow ? 17 : 19,
                     ),
                     const SizedBox(width: 4),
                     Text(
                       isNarrow ? '削除' : '削除候補',
                       style: TextStyle(
                         color: selectedForDelete
-                            ? Colors.redAccent
+                            ? colorScheme.onErrorContainer
                             : Colors.white70,
-                        fontSize: isNarrow ? 11 : 12,
+                        fontSize: isNarrow ? 11.5 : 12.5,
                         fontWeight: selectedForDelete
                             ? FontWeight.bold
-                            : FontWeight.normal,
+                            : FontWeight.w600,
                       ),
                     ),
                   ],
                 ),
               ),
             ),
-            SizedBox(width: isNarrow ? 6 : 10),
+            SizedBox(width: isNarrow ? 8 : 12),
 
-            // Toggle Best button
+            // Toggle Best button (Pill)
             InkWell(
               onTap: () {
                 widget.onSetBest?.call(key);
@@ -710,39 +712,50 @@ class _LoupeScreenState extends State<LoupeScreen> {
                   }
                 });
               },
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(999),
               child: Container(
-                constraints: BoxConstraints(minWidth: isNarrow ? 64 : 100),
-                height: isNarrow ? 38 : 46,
-                padding: EdgeInsets.symmetric(horizontal: isNarrow ? 8 : 12),
+                constraints: BoxConstraints(minWidth: isNarrow ? 70 : 105),
+                height: isNarrow ? 36 : 42,
+                padding: EdgeInsets.symmetric(horizontal: isNarrow ? 10 : 14),
                 decoration: BoxDecoration(
                   color: isBest
-                      ? Colors.amber.withValues(alpha: 0.15)
-                      : Colors.white.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(4),
+                      ? const Color(0xFF10B981).withValues(alpha: 0.25)
+                      : colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(999),
                   border: Border.all(
-                    color: isBest ? Colors.amber : Colors.white30,
-                    width: 1,
+                    color: isBest
+                        ? const Color(0xFF10B981)
+                        : colorScheme.outlineVariant.withValues(alpha: 0.3),
+                    width: 1.2,
                   ),
+                  boxShadow: isBest
+                      ? [
+                          BoxShadow(
+                            color: const Color(0xFF10B981).withValues(alpha: 0.35),
+                            blurRadius: 8,
+                            spreadRadius: 1,
+                          )
+                        ]
+                      : null,
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Icon(
-                      isBest ? Icons.star : Icons.star_border,
-                      color: isBest ? Colors.amber : Colors.white70,
+                      isBest ? Icons.star_rounded : Icons.star_outline_rounded,
+                      color: isBest ? const Color(0xFF10B981) : Colors.white70,
                       size: isNarrow ? 18 : 20,
                     ),
                     const SizedBox(width: 4),
                     Text(
                       isNarrow ? 'Best' : (isBest ? 'Best' : 'Bestに設定'),
                       style: TextStyle(
-                        color: isBest ? Colors.amber : Colors.white70,
-                        fontSize: isNarrow ? 11 : 12,
+                        color: isBest ? const Color(0xFF10B981) : Colors.white70,
+                        fontSize: isNarrow ? 11.5 : 12.5,
                         fontWeight: isBest
                             ? FontWeight.bold
-                            : FontWeight.normal,
+                            : FontWeight.w600,
                       ),
                     ),
                   ],
@@ -1133,8 +1146,8 @@ class _ZoomPaneState extends State<_ZoomPane> {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       color: widget.isFocused
-          ? colorScheme.primaryContainer
-          : const Color(0xFF181E29),
+          ? colorScheme.primaryContainer.withValues(alpha: 0.1)
+          : Colors.transparent,
       child: Row(
         children: [
           // ペイン番号インジケータ [1]
@@ -1529,6 +1542,8 @@ class _ZoomPaneState extends State<_ZoomPane> {
               spacing: 4,
               runSpacing: 2,
               children: [
+                if (gExp.category != null)
+                  _buildDebugTag('区分', gExp.category!),
                 if (gExp.diffSeconds != null)
                   _buildDebugTag('Δt', '${gExp.diffSeconds!.toStringAsFixed(1)}s'),
                 if (gExp.pHashDistance != null)
@@ -1536,7 +1551,21 @@ class _ZoomPaneState extends State<_ZoomPane> {
                 if (gExp.colorDistance != null)
                   _buildDebugTag('色距離', gExp.colorDistance!.toStringAsFixed(3)),
                 if (gExp.orbMatches != null)
-                  _buildDebugTag('ORB特徴点', '${gExp.orbMatches}点一致'),
+                  _buildDebugTag('ORB一致', '${gExp.orbMatches}点'),
+                if (gExp.inliers != null)
+                  _buildDebugTag('幾何Inlier', '${gExp.inliers}点'),
+                if (gExp.orbInlierRatio != null)
+                  _buildDebugTag('Inlier率', '${(gExp.orbInlierRatio! * 100).toStringAsFixed(1)}%'),
+                if (gExp.embeddingSimilarity != null)
+                  _buildDebugTag('埋め込み', '${(gExp.embeddingSimilarity! * 100).toStringAsFixed(1)}%'),
+                if (gExp.cropPair != null)
+                  _buildDebugTag('クロップ', gExp.cropPair!),
+                if (gExp.semanticMatch)
+                  _buildDebugTag('被写体', '一致'),
+                if (gExp.confidence > 0)
+                  _buildDebugTag('結合信頼度', '${(gExp.confidence * 100).toStringAsFixed(1)}%'),
+                if (gExp.needsReview)
+                  _buildDebugTag('⚠️', '要確認'),
                 if (gExp.referenceKey != null)
                   _buildDebugTag(
                     '基準写真',
@@ -1727,15 +1756,14 @@ class _ZoomPaneState extends State<_ZoomPane> {
       onTap: widget.onTap,
       onDoubleTap: widget.onZoomToPoint, // ダブルタップで等倍 / 3倍ズーム
       child: Container(
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: widget.isFocused ? colorScheme.primary : Colors.transparent,
-            width: 2.5,
-          ),
-        ),
-        child: Column(
-          children: [
-            _buildPaneHeader(context),
+        margin: const EdgeInsets.all(6),
+        child: GlassContainer(
+          borderRadius: BorderRadius.circular(20),
+          borderColor: widget.isFocused ? colorScheme.primary : colorScheme.outlineVariant.withValues(alpha: 0.25),
+          padding: EdgeInsets.zero,
+          child: Column(
+            children: [
+              _buildPaneHeader(context),
             Expanded(
               child: LayoutBuilder(
                 builder: (context, paneConstraints) {
@@ -1817,6 +1845,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
               ),
             ),
           ],
+        ),
         ),
       ),
     );

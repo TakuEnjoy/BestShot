@@ -10,8 +10,13 @@ import '../services/grouping/grouping.dart';
 import '../services/importing/import_service.dart';
 import '../services/semantic/mlkit_semantic_service.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import '../services/analysis/embedding_service.dart';
 import '../platform/folder_picker_windows.dart';
 import 'groups_screen.dart';
+import '../widgets/global_background.dart';
+import '../widgets/glass_container.dart';
 
 class ImportScreen extends StatefulWidget {
   const ImportScreen({super.key});
@@ -148,8 +153,10 @@ class _ImportScreenState extends State<ImportScreen> {
             orbRows: a.orbRows,
             orbCols: a.orbCols,
             orbBytes: a.orbBytes,
+            orbKeypoints: a.orbKeypoints,
             histogram: a.histogram,
             hueHistogram: a.hueHistogram,
+            embeddings: a.embeddings,
             exif: i.exifSummary,
             portrait: PortraitAnalysis(
               hasFace: a.hasFace,
@@ -165,6 +172,63 @@ class _ImportScreenState extends State<ImportScreen> {
             debugGridSharps: a.debugGridSharps,
           ),
         );
+      }
+
+      // Embedding feature extraction (ONNX Runtime, Windows / Android)
+      final supportDir = await getApplicationSupportDirectory();
+      final candidatePaths = [
+        p.join(Directory.current.path, 'assets', 'models', 'embedding.onnx'),
+        p.join(Directory.current.path, 'models', 'embedding.onnx'),
+        p.join(supportDir.path, 'models', 'embedding.onnx'),
+      ];
+      String? foundModelPath;
+      for (final cp in candidatePaths) {
+        if (await File(cp).exists()) {
+          foundModelPath = cp;
+          break;
+        }
+      }
+
+      if (foundModelPath != null && !_cancelled) {
+        final embService = WindowsOnnxEmbeddingService(modelPath: foundModelPath);
+        final initialized = await embService.initialize();
+        if (initialized) {
+          if (mounted) {
+            setState(() {
+              _stage = '特徴量抽出';
+              _status = '画像埋め込み（Embedding）を推論中...';
+              _progress = 0;
+            });
+          }
+          try {
+            for (var idx = 0; idx < entries.length; idx++) {
+              if (_cancelled) break;
+              final entry = entries[idx];
+              final rawBytes = entry.filePath != null
+                  ? await File(entry.filePath!).readAsBytes()
+                  : entry.displayBytes;
+              final res = await embService.extractEmbeddings(
+                rawBytes,
+                isLightweight: Platform.isAndroid,
+              );
+              if (res != null) {
+                entries[idx] = entry.copyWith(embeddings: () => res.embeddings);
+              }
+              if (!mounted) break;
+              setState(() {
+                _progress = (idx + 1) / entries.length;
+                _status = '画像埋め込みを推論中... (${idx + 1} / ${entries.length})';
+              });
+            }
+          } finally {
+            embService.dispose();
+          }
+        }
+      }
+
+      if (_cancelled) {
+        _handleCancelled();
+        return;
       }
 
       // Semantic analysis (Android/iOS only)
@@ -636,42 +700,42 @@ class _ImportScreenState extends State<ImportScreen> {
     final isWide = size.width >= 800;
     final isSmallMobile = size.width < 600;
 
-    // 1. Premium Hero Header
-    final heroHeader = Container(
-      padding: EdgeInsets.all(isSmallMobile ? 12 : 20),
-      decoration: BoxDecoration(
-        color: colorScheme.surface,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: colorScheme.primary.withValues(alpha: 0.15),
-          width: 1,
-        ),
-      ),
+    // 1. Premium Hero Header (Expressive Rounded Container)
+    final heroHeader = GlassContainer(
+      padding: EdgeInsets.all(isSmallMobile ? 16 : 24),
       child: Column(
         children: [
-          Icon(
-            Icons.auto_awesome_motion_rounded,
-            size: isSmallMobile ? 28 : 40,
-            color: colorScheme.primary,
+          Container(
+            padding: EdgeInsets.all(isSmallMobile ? 12 : 16),
+            decoration: BoxDecoration(
+              color: colorScheme.primaryContainer.withValues(alpha: 0.6),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.auto_awesome_motion_rounded,
+              size: isSmallMobile ? 32 : 44,
+              color: colorScheme.primary,
+            ),
           ),
-          SizedBox(height: isSmallMobile ? 8 : 12),
+          SizedBox(height: isSmallMobile ? 12 : 16),
           Text(
             '最高の瞬間を、AIが提案します。',
             textAlign: TextAlign.center,
-            style: theme.textTheme.titleMedium?.copyWith(
+            style: theme.textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.bold,
-              fontSize: isSmallMobile ? 14 : null,
-              color: Colors.white.withValues(alpha: 0.95),
+              fontSize: isSmallMobile ? 18 : 22,
+              letterSpacing: 0.2,
+              color: Colors.white.withValues(alpha: 0.98),
             ),
           ),
-          SizedBox(height: isSmallMobile ? 4 : 6),
+          SizedBox(height: isSmallMobile ? 6 : 8),
           Text(
-            '一眼レフやミラーレス of 連写・類似写真を、内容ベースで高速グループ化して「Best」を見つけ出します。',
+            '一眼レフやミラーレスの連写・類似写真を、内容ベースで高速グループ化して「Best」を見つけ出します。',
             textAlign: TextAlign.center,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: Colors.white.withValues(alpha: 0.65),
-              fontSize: isSmallMobile ? 10 : null,
-              height: 1.4,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: Colors.white.withValues(alpha: 0.7),
+              fontSize: isSmallMobile ? 12 : 13.5,
+              height: 1.5,
             ),
           ),
         ],
@@ -682,36 +746,42 @@ class _ImportScreenState extends State<ImportScreen> {
     final infoCard = _InfoCard();
 
     // 3. Parameters Card
-    final parametersCard = Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: EdgeInsets.all(isSmallMobile ? 12 : 20),
-        child: Column(
+    final parametersCard = GlassContainer(
+      padding: EdgeInsets.all(isSmallMobile ? 16 : 24),
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Icon(
-                  Icons.tune_rounded,
-                  size: isSmallMobile ? 16 : 20,
-                  color: colorScheme.primary,
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: colorScheme.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.tune_rounded,
+                    size: isSmallMobile ? 18 : 22,
+                    color: colorScheme.primary,
+                  ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 12),
                 Text(
                   '解析・グループ化設定',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
-                    fontSize: isSmallMobile ? 14 : null,
+                    fontSize: isSmallMobile ? 15 : 17,
                   ),
                 ),
               ],
             ),
-            SizedBox(height: isSmallMobile ? 10 : 16),
+            SizedBox(height: isSmallMobile ? 14 : 20),
             Text(
               '検出モード',
               style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.8),
-                fontSize: isSmallMobile ? 11 : null,
+                color: Colors.white.withValues(alpha: 0.85),
+                fontSize: isSmallMobile ? 12 : 13,
+                fontWeight: FontWeight.w600,
               ),
             ),
             const SizedBox(height: 8),
@@ -720,12 +790,12 @@ class _ImportScreenState extends State<ImportScreen> {
               initialValue: _detectionMode,
               decoration: InputDecoration(
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(16),
                 ),
                 isDense: true,
                 contentPadding: EdgeInsets.symmetric(
                   horizontal: 16,
-                  vertical: isSmallMobile ? 8 : 12,
+                  vertical: isSmallMobile ? 10 : 14,
                 ),
               ),
               items: [
@@ -750,20 +820,21 @@ class _ImportScreenState extends State<ImportScreen> {
                       setState(() => _detectionMode = v);
                     },
             ),
-            SizedBox(height: isSmallMobile ? 10 : 16),
+            SizedBox(height: isSmallMobile ? 14 : 20),
             Text(
               '連写としてまとめる時間窓',
               style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.8),
-                fontSize: isSmallMobile ? 11 : null,
+                color: Colors.white.withValues(alpha: 0.85),
+                fontSize: isSmallMobile ? 12 : 13,
+                fontWeight: FontWeight.w600,
               ),
             ),
             const SizedBox(height: 4),
             Text(
               '合計: ${_formatBurstWindow(_burstWindowSeconds)}（1秒〜60分以内を1グループ化）',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: Colors.white.withValues(alpha: 0.5),
-                fontSize: isSmallMobile ? 10 : null,
+                color: Colors.white.withValues(alpha: 0.55),
+                fontSize: isSmallMobile ? 11 : 12,
               ),
             ),
             const SizedBox(height: 8),
@@ -775,13 +846,13 @@ class _ImportScreenState extends State<ImportScreen> {
                     decoration: InputDecoration(
                       labelText: '分',
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                       isDense: true,
                       contentPadding: isSmallMobile
                           ? const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 8,
+                              horizontal: 12,
+                              vertical: 10,
                             )
                           : null,
                     ),
@@ -808,13 +879,13 @@ class _ImportScreenState extends State<ImportScreen> {
                     decoration: InputDecoration(
                       labelText: '秒',
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                       isDense: true,
                       contentPadding: isSmallMobile
                           ? const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 8,
+                              horizontal: 12,
+                              vertical: 10,
                             )
                           : null,
                     ),
@@ -836,12 +907,13 @@ class _ImportScreenState extends State<ImportScreen> {
                 ),
               ],
             ),
-            SizedBox(height: isSmallMobile ? 10 : 16),
+            SizedBox(height: isSmallMobile ? 14 : 20),
             Text(
               '最大インポート件数',
               style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.8),
-                fontSize: isSmallMobile ? 11 : null,
+                color: Colors.white.withValues(alpha: 0.85),
+                fontSize: isSmallMobile ? 12 : 13,
+                fontWeight: FontWeight.w600,
               ),
             ),
             const SizedBox(height: 8),
@@ -849,11 +921,11 @@ class _ImportScreenState extends State<ImportScreen> {
               initialValue: _maxCount,
               decoration: InputDecoration(
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(16),
                 ),
                 isDense: true,
                 contentPadding: isSmallMobile
-                    ? const EdgeInsets.symmetric(horizontal: 16, vertical: 8)
+                    ? const EdgeInsets.symmetric(horizontal: 16, vertical: 10)
                     : null,
               ),
               items: const [
@@ -872,57 +944,71 @@ class _ImportScreenState extends State<ImportScreen> {
             ),
           ],
         ),
-      ),
     );
 
-    // 4. Hero Import Button (Beautiful Gradient Action Box)
+    // 4. Hero Import Button (Expressive Large Pill/Rounded Container)
     Widget? importButton;
     if (!_busy) {
       importButton = Container(
         decoration: BoxDecoration(
-          color: colorScheme.primary,
-          borderRadius: BorderRadius.circular(8),
+          gradient: LinearGradient(
+            colors: [
+              colorScheme.primary,
+              const Color(0xFF6366F1), // Expressive Indigo accent
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: [
+            BoxShadow(
+              color: colorScheme.primary.withValues(alpha: 0.35),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Material(
           color: Colors.transparent,
           child: InkWell(
             onTap: () => _runFolderImportAndAnalyze(!isWindows),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(28),
             child: Padding(
               padding: EdgeInsets.symmetric(
-                vertical: isSmallMobile ? 16 : 24,
-                horizontal: 12,
+                vertical: isSmallMobile ? 18 : 26,
+                horizontal: 16,
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Container(
-                    padding: EdgeInsets.all(isSmallMobile ? 8 : 12),
+                    padding: EdgeInsets.all(isSmallMobile ? 10 : 14),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.12),
+                      color: Colors.white.withValues(alpha: 0.18),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
                       Icons.folder_open_rounded,
-                      size: isSmallMobile ? 24 : 32,
+                      size: isSmallMobile ? 28 : 36,
                       color: Colors.white,
                     ),
                   ),
-                  SizedBox(height: isSmallMobile ? 8 : 12),
+                  SizedBox(height: isSmallMobile ? 10 : 14),
                   Text(
                     isWindows ? 'フォルダを指定してインポート' : 'スキャンするフォルダを選択',
                     style: TextStyle(
-                      fontSize: isSmallMobile ? 14 : 16,
+                      fontSize: isSmallMobile ? 15 : 17,
                       fontWeight: FontWeight.bold,
+                      letterSpacing: 0.3,
                       color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 5),
                   Text(
                     'サブフォルダ内の画像も自動的に再帰スキャンされます',
                     style: TextStyle(
-                      fontSize: isSmallMobile ? 10 : 11,
-                      color: Colors.white.withValues(alpha: 0.7),
+                      fontSize: isSmallMobile ? 11 : 12,
+                      color: Colors.white.withValues(alpha: 0.75),
                     ),
                   ),
                 ],
@@ -933,24 +1019,22 @@ class _ImportScreenState extends State<ImportScreen> {
       );
     }
 
-    // 5. Status and Progress Display
+    // 5. Status and Progress Display (Expressive Card & Pill Bar)
     Widget? progressDisplay;
     if (_busy) {
-      progressDisplay = Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: colorScheme.surface,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: colorScheme.primary.withValues(alpha: 0.2)),
-        ),
+      progressDisplay = GlassContainer(
+        padding: const EdgeInsets.all(24),
         child: Column(
           children: [
-            const SizedBox(
-              width: 40,
-              height: 40,
-              child: CircularProgressIndicator(strokeWidth: 3.5),
+            SizedBox(
+              width: 44,
+              height: 44,
+              child: CircularProgressIndicator(
+                strokeWidth: 4,
+                valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+              ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 18),
             if (_stage.isNotEmpty)
               Text(
                 _stage,
@@ -959,48 +1043,50 @@ class _ImportScreenState extends State<ImportScreen> {
                   color: colorScheme.primary,
                 ),
               ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Text(
               _status,
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.85),
+                color: Colors.white.withValues(alpha: 0.9),
+                height: 1.4,
               ),
             ),
             if (_progress != null) ...[
-              const SizedBox(height: 16),
+              const SizedBox(height: 18),
               ClipRRect(
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(999),
                 child: LinearProgressIndicator(
                   value: _progress,
-                  minHeight: 8,
-                  backgroundColor: colorScheme.primary.withValues(alpha: 0.1),
+                  minHeight: 10,
+                  backgroundColor: colorScheme.primary.withValues(alpha: 0.15),
                   valueColor: AlwaysStoppedAnimation<Color>(
                     colorScheme.primary,
                   ),
                 ),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
               Text(
                 '${(_progress! * 100).toStringAsFixed(0)}%',
-                style: theme.textTheme.labelSmall?.copyWith(
+                style: theme.textTheme.labelMedium?.copyWith(
                   fontWeight: FontWeight.bold,
                   color: colorScheme.primary,
                 ),
               ),
             ],
-            const SizedBox(height: 16),
-            TextButton.icon(
+            const SizedBox(height: 18),
+            FilledButton.tonalIcon(
               onPressed: () {
                 setState(() {
                   _status = 'キャンセル中...';
                   _cancelled = true;
                 });
               },
-              icon: const Icon(Icons.cancel_outlined, color: Colors.redAccent),
-              label: const Text(
-                'キャンセル',
-                style: TextStyle(color: Colors.redAccent),
+              icon: const Icon(Icons.cancel_outlined, size: 18),
+              label: const Text('キャンセル'),
+              style: FilledButton.styleFrom(
+                backgroundColor: colorScheme.errorContainer.withValues(alpha: 0.4),
+                foregroundColor: colorScheme.error,
               ),
             ),
           ],
@@ -1013,19 +1099,14 @@ class _ImportScreenState extends State<ImportScreen> {
     if (!_busy && _status.isNotEmpty) {
       errorDisplay = Padding(
         padding: const EdgeInsets.only(top: 16),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: _isError
+        child: GlassContainer(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          backgroundColor: _isError
                 ? colorScheme.error.withValues(alpha: 0.12)
                 : colorScheme.secondary.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(
-              color: _isError
+          borderColor: _isError
                   ? colorScheme.error.withValues(alpha: 0.3)
                   : colorScheme.secondary.withValues(alpha: 0.2),
-            ),
-          ),
           child: Row(
             children: [
               Icon(
@@ -1035,17 +1116,17 @@ class _ImportScreenState extends State<ImportScreen> {
                 color: _isError
                     ? colorScheme.error
                     : colorScheme.secondary,
-                size: 20,
+                size: 22,
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   _status,
                   style: TextStyle(
                     color: _isError
                         ? colorScheme.error
-                        : Colors.white.withValues(alpha: 0.9),
-                    fontSize: 13,
+                        : Colors.white.withValues(alpha: 0.95),
+                    fontSize: 13.5,
                   ),
                 ),
               ),
@@ -1067,53 +1148,55 @@ class _ImportScreenState extends State<ImportScreen> {
           ),
         ),
       ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: isWide ? 1150 : 580),
-          child: SingleChildScrollView(
-            padding: EdgeInsets.symmetric(
-              horizontal: isSmallMobile ? 16 : 24,
-              vertical: isSmallMobile ? 12 : 20,
-            ),
-            child: isWide
-                ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 左カラム (説明、インポートボタン、進捗、InfoCard)
-                      Expanded(
-                        flex: 6,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            heroHeader,
-                            const SizedBox(height: 24),
-                            ?importButton,
-                            ?progressDisplay,
-                            ?errorDisplay,
-                            const SizedBox(height: 24),
-                            infoCard,
-                          ],
+      body: GlobalBackground(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: isWide ? 1150 : 580),
+            child: SingleChildScrollView(
+              padding: EdgeInsets.symmetric(
+                horizontal: isSmallMobile ? 16 : 24,
+                vertical: isSmallMobile ? 12 : 20,
+              ),
+              child: isWide
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 左カラム (説明、インポートボタン、進捗、InfoCard)
+                        Expanded(
+                          flex: 6,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              heroHeader,
+                              const SizedBox(height: 24),
+                              if (importButton != null) importButton,
+                              if (progressDisplay != null) progressDisplay,
+                              if (errorDisplay != null) errorDisplay,
+                              const SizedBox(height: 24),
+                              infoCard,
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 24),
-                      // 右カラム (設定パネル)
-                      Expanded(flex: 4, child: parametersCard),
-                    ],
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      heroHeader,
-                      SizedBox(height: isSmallMobile ? 12 : 20),
-                      infoCard,
-                      SizedBox(height: isSmallMobile ? 12 : 20),
-                      parametersCard,
-                      SizedBox(height: isSmallMobile ? 16 : 24),
-                      ?importButton,
-                      ?progressDisplay,
-                      ?errorDisplay,
-                    ],
-                  ),
+                        const SizedBox(width: 24),
+                        // 右カラム (設定パネル)
+                        Expanded(flex: 4, child: parametersCard),
+                      ],
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        heroHeader,
+                        SizedBox(height: isSmallMobile ? 12 : 20),
+                        infoCard,
+                        SizedBox(height: isSmallMobile ? 12 : 20),
+                        parametersCard,
+                        SizedBox(height: isSmallMobile ? 16 : 24),
+                        if (importButton != null) importButton,
+                        if (progressDisplay != null) progressDisplay,
+                        if (errorDisplay != null) errorDisplay,
+                      ],
+                    ),
+            ),
           ),
         ),
       ),
@@ -1141,19 +1224,24 @@ class _InfoCard extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
+    return GlassContainer(
+      padding: const EdgeInsets.all(20),
+      child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              Icons.analytics_rounded,
-              color: colorScheme.secondary,
-              size: 24,
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: colorScheme.secondary.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(
+                Icons.analytics_rounded,
+                color: colorScheme.secondary,
+                size: 26,
+              ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 16),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1163,13 +1251,15 @@ class _InfoCard extends StatelessWidget {
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                       color: Colors.white,
+                      fontSize: 15,
                     ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   DefaultTextStyle(
                     style: theme.textTheme.bodySmall!.copyWith(
-                      color: Colors.white.withValues(alpha: 0.65),
-                      height: 1.4,
+                      color: Colors.white.withValues(alpha: 0.7),
+                      height: 1.5,
+                      fontSize: 12,
                     ),
                     child: const Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1185,7 +1275,7 @@ class _InfoCard extends StatelessWidget {
             ),
           ],
         ),
-      ),
     );
   }
 }
+

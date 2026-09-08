@@ -58,18 +58,33 @@ class _PhotoTileState extends State<_PhotoTile> {
         },
         offset: const Offset(0, 30),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
-            color: hasFolder ? getFolderColor(sortFolder, widget.customFolders) : Colors.black.withValues(alpha: 0.5),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white24),
+            color: hasFolder
+                ? getFolderColor(sortFolder, widget.customFolders)
+                : Colors.black.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: hasFolder
+                  ? Colors.white.withValues(alpha: 0.4)
+                  : Colors.white.withValues(alpha: 0.2),
+            ),
+            boxShadow: hasFolder
+                ? [
+                    BoxShadow(
+                      color: getFolderColor(sortFolder, widget.customFolders).withValues(alpha: 0.4),
+                      blurRadius: 6,
+                      spreadRadius: 1,
+                    )
+                  ]
+                : null,
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 hasFolder ? Icons.folder : Icons.folder_open,
-                size: 16,
+                size: 15,
                 color: Colors.white,
               ),
               if (hasFolder) ...[
@@ -134,15 +149,19 @@ class _PhotoTileState extends State<_PhotoTile> {
         ignoring: widget.isProcessing,
         child: InkWell(
           onTap: () => widget.onChanged(!widget.selectedForDelete),
-          borderRadius: BorderRadius.circular(8),
-          child: Stack(
+          borderRadius: BorderRadius.circular(18),
+          child: AnimatedScale(
+            scale: _isHovered ? 1.02 : 1.0,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            child: Stack(
             children: [
               // Image and its clipping
               Positioned.fill(
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(18),
                       child: Opacity(
-                        opacity: widget.selectedForDelete ? 0.45 : 1.0,
+                        opacity: widget.selectedForDelete ? 0.4 : 1.0,
                         child: ColorFiltered(
                           colorFilter: ColorFilter.mode(
                             widget.selectedForDelete ? Colors.grey : Colors.transparent,
@@ -165,7 +184,7 @@ class _PhotoTileState extends State<_PhotoTile> {
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
                         decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(18),
                           border: widget.isKeyboardFocused
                               ? Border.all(color: colorScheme.primary, width: 3)
                               : (widget.selectedForDelete
@@ -174,8 +193,8 @@ class _PhotoTileState extends State<_PhotoTile> {
                                       ? Border.all(color: getFolderColor(widget.sortFolder!, widget.customFolders), width: 3)
                                       : Border.all(
                                           color: _isHovered
-                                              ? Colors.white.withValues(alpha: 0.4)
-                                              : Colors.white.withValues(alpha: 0.1),
+                                              ? Colors.white.withValues(alpha: 0.45)
+                                              : Colors.white.withValues(alpha: 0.12),
                                           width: _isHovered ? 1.5 : 1,
                                         ))),
                           boxShadow: widget.isKeyboardFocused
@@ -188,7 +207,7 @@ class _PhotoTileState extends State<_PhotoTile> {
                                 ]
                               : null,
                           color: widget.selectedForDelete
-                              ? colorScheme.error.withValues(alpha: 0.1)
+                              ? colorScheme.error.withValues(alpha: 0.12)
                               : Colors.transparent,
                         ),
                       ),
@@ -202,11 +221,11 @@ class _PhotoTileState extends State<_PhotoTile> {
                     child: Row(
                       children: [
                         if (widget.isBest)
-                          const _Badge(label: 'Best', color: Color(0xFF22C55E)),
+                          const _Badge(label: '★ Best', color: Color(0xFF10B981)),
                         if (!widget.isBest)
                           _Badge(
                             label: widget.sharpness.toStringAsFixed(0),
-                            color: Colors.black.withValues(alpha: 0.6),
+                            color: Colors.black.withValues(alpha: 0.65),
                           ),
                       ],
                     ),
@@ -220,7 +239,7 @@ class _PhotoTileState extends State<_PhotoTile> {
                       value: widget.selectedForDelete,
                       onChanged: (v) => widget.onChanged(v ?? false),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       side: const BorderSide(color: Colors.white, width: 1.5),
                     ),
@@ -233,11 +252,11 @@ class _PhotoTileState extends State<_PhotoTile> {
                       right: 6,
                       bottom: 34,
                       child: ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(999),
                         child: Container(
-                          color: Colors.black.withValues(alpha: 0.65),
+                          color: Colors.black.withValues(alpha: 0.68),
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
+                            horizontal: 8,
                             vertical: 3,
                           ),
                           child: Text(
@@ -248,7 +267,7 @@ class _PhotoTileState extends State<_PhotoTile> {
                             style: const TextStyle(
                               fontSize: 10,
                               color: Colors.white,
-                              fontWeight: FontWeight.w500,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
@@ -313,6 +332,7 @@ class _PhotoTileState extends State<_PhotoTile> {
               ),
             ),
           ),
+        ),
     );
   }
 }
