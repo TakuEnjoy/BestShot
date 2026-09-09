@@ -227,10 +227,20 @@ class PhotoGrouper {
           for (final rA in repsA) {
             for (final rB in repsB) {
               final res = edgeResults['$rA-$rB'] ?? PairSimilarityEvaluator.evaluate(sorted[rA], sorted[rB]);
+              // If directly evaluated as same scene (e.g. valid zoom or verified burst), not a drift violation
+              if (res.isSameScene) continue;
+
               // Extreme difference between representatives prevents chaining drift
               final pDist = res.pHashDistance ?? 64;
               final inliers = res.orbInliers ?? 0;
-              if (pDist >= config.maxDriftPHashDistance && inliers < 8) {
+
+              // If within rapid burst (<= 3s) with identical camera/focal EXIF, allow natural burst movement up to 21 bits
+              final isSameExifBurst = res.diffSeconds != null &&
+                  res.diffSeconds! <= 3.0 &&
+                  _hasIdenticalExif(sorted[rA], sorted[rB]);
+              final effectiveLimit = isSameExifBurst ? 21 : config.maxDriftPHashDistance;
+
+              if (pDist >= effectiveLimit && inliers < 8) {
                 driftViolation = true;
                 break;
               }
@@ -593,6 +603,17 @@ class PhotoGrouper {
     final m = RegExp(r'\d+').firstMatch(iso);
     if (m != null) return int.tryParse(m.group(0)!);
     return null;
+  }
+
+  static bool _hasIdenticalExif(PhotoEntry a, PhotoEntry b) {
+    if (a.exif == null || b.exif == null) return false;
+    final ea = a.exif!;
+    final eb = b.exif!;
+    if (ea.cameraModel == null || ea.cameraModel != eb.cameraModel) return false;
+    if (ea.fNumber == null || ea.fNumber != eb.fNumber) return false;
+    if (ea.iso == null || ea.iso != eb.iso) return false;
+    if (ea.focalLength == null || ea.focalLength != eb.focalLength) return false;
+    return true;
   }
 
   static void _reorderAndMarkBest(

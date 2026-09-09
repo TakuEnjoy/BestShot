@@ -145,6 +145,38 @@ class PairSimilarityEvaluator {
           explanation: '連写・局所幾何一致 (Inliers: $inliers点)',
         );
       }
+
+      // Rapid burst with consistent camera settings & moderate features (e.g. telephoto / moving subject)
+      if (diffSeconds <= 2.0) {
+        final focalA = _parseFocalLengthValue(a.exif?.focalLength);
+        final focalB = _parseFocalLengthValue(b.exif?.focalLength);
+        final isSameFocal = (focalA != null && focalB != null && (focalA - focalB).abs() < 2.0);
+        final isTelephoto = (focalA != null && focalA >= 100.0) && (focalB != null && focalB >= 100.0);
+        final isSameCamera = a.exif?.cameraModel != null && a.exif?.cameraModel == b.exif?.cameraModel;
+        final isSameAperture = a.exif?.fNumber != null && a.exif?.fNumber == b.exif?.fNumber;
+        final isSameIso = a.exif?.iso != null && a.exif?.iso == b.exif?.iso;
+
+        if ((isSameFocal || isTelephoto) && isSameCamera && isSameAperture && isSameIso) {
+          if (inliers >= 5 && inlierRatio >= 0.40 && (pHashDist != null && pHashDist <= 24)) {
+            return PairSimilarityResult(
+              category: PairCategory.sameBurst,
+              isSameScene: true,
+              confidence: 0.88,
+              needsReview: false,
+              diffSeconds: diffSeconds,
+              pHashDistance: pHashDist,
+              colorDistance: colorDist,
+              orbGoodMatches: goodMatches,
+              orbInliers: inliers,
+              orbInlierRatio: inlierRatio,
+              embeddingSimilarity: embSim,
+              cropPair: bestCropPair,
+              semanticMatch: isSemMatch,
+              explanation: '連写・幾何一致 (${focalA.round()}mm, Inliers: $inliers点, ${diffSeconds.toStringAsFixed(1)}s差)',
+            );
+          }
+        }
+      }
     }
 
     // -------------------------------------------------------------
@@ -220,6 +252,47 @@ class PairSimilarityEvaluator {
           semanticMatch: isSemMatch,
           explanation: '構図変化・要確認 (Inliers: $inliers点, pHash: $pHashDist)',
         );
+      }
+    }
+
+    // Condition D: Rapid Optical Zoom Sequence (寄りと引き・光学ズーム)
+    if (diffSeconds != null && diffSeconds <= 2.5) {
+      final focalA = _parseFocalLengthValue(a.exif?.focalLength);
+      final focalB = _parseFocalLengthValue(b.exif?.focalLength);
+      if (focalA != null && focalB != null && focalA > 0 && focalB > 0) {
+        final minFocal = math.min(focalA, focalB);
+        final maxFocal = math.max(focalA, focalB);
+        final zoomRatio = maxFocal / minFocal;
+
+        final isSameCamera = a.exif?.cameraModel != null && a.exif?.cameraModel == b.exif?.cameraModel;
+        final isSameAperture = a.exif?.fNumber != null && a.exif?.fNumber == b.exif?.fNumber;
+        final isSameIso = a.exif?.iso != null && a.exif?.iso == b.exif?.iso;
+        final isShutterClose = _isShutterCompatible(a.exif?.shutter, b.exif?.shutter, maxRatio: 1.35);
+
+        if (zoomRatio >= 1.25 && zoomRatio <= 3.0 &&
+            isSameCamera &&
+            isSameAperture &&
+            isSameIso &&
+            isShutterClose &&
+            (colorDist == null || colorDist <= 0.20) &&
+            (goodMatches >= 3 || (pHashDist != null && pHashDist <= 38))) {
+          return PairSimilarityResult(
+            category: PairCategory.sameSceneVariant,
+            isSameScene: true,
+            confidence: 0.82,
+            needsReview: false,
+            diffSeconds: diffSeconds,
+            pHashDistance: pHashDist,
+            colorDistance: colorDist,
+            orbGoodMatches: goodMatches,
+            orbInliers: inliers,
+            orbInlierRatio: inlierRatio,
+            embeddingSimilarity: embSim,
+            cropPair: bestCropPair,
+            semanticMatch: isSemMatch,
+            explanation: '寄りと引き・光学ズーム (${minFocal.round()}mm→${maxFocal.round()}mm, ${diffSeconds.toStringAsFixed(1)}s差)',
+          );
+        }
       }
     }
 
@@ -421,4 +494,38 @@ class PairSimilarityEvaluator {
     if (union <= 0) return 0;
     return inter / union;
   }
+
+  static bool _isShutterCompatible(String? sA, String? sB, {double maxRatio = 1.35}) {
+    if (sA == null || sB == null) return false;
+    final valA = _parseShutterSeconds(sA);
+    final valB = _parseShutterSeconds(sB);
+    if (valA == null || valB == null || valA <= 0 || valB <= 0) return false;
+    final ratio = valA > valB ? valA / valB : valB / valA;
+    return ratio <= maxRatio;
+  }
+
+  static double? _parseShutterSeconds(String raw) {
+    raw = raw.trim();
+    if (raw.contains('/')) {
+      final parts = raw.split('/');
+      if (parts.length == 2) {
+        final num = double.tryParse(parts[0].trim());
+        final den = double.tryParse(parts[1].trim());
+        if (num != null && den != null && den != 0) {
+          return num / den;
+        }
+      }
+    }
+    return double.tryParse(raw);
+  }
+
+  static double? _parseFocalLengthValue(String? raw) {
+    if (raw == null) return null;
+    final m = RegExp(r'^\d+(\.\d+)?').firstMatch(raw.trim());
+    if (m != null) {
+      return double.tryParse(m.group(0)!);
+    }
+    return null;
+  }
 }
+

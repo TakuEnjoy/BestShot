@@ -12,6 +12,11 @@ PhotoEntry createMockEntry({
   int orbRows = 0,
   Uint8List? orbBytes,
   Float32List? orbKeypoints,
+  String? fNumber,
+  String? shutter,
+  String? iso,
+  String? focalLength,
+  String? cameraModel,
 }) {
   return PhotoEntry(
     key: key,
@@ -28,10 +33,12 @@ PhotoEntry createMockEntry({
     histogram: Uint8List(256),
     hueHistogram: hueHistogram ?? Float32List(180),
     exif: ExifSummary(
-      fNumber: null,
-      shutter: null,
-      iso: null,
+      fNumber: fNumber,
+      shutter: shutter,
+      iso: iso,
       capturedAt: capturedAt,
+      focalLength: focalLength,
+      cameraModel: cameraModel,
     ),
   );
 }
@@ -201,6 +208,161 @@ void main() {
       expect(teleEntry.groupExplanation, isNotNull);
       expect(teleEntry.groupExplanation!.matchType, equals('特徴点救済マージ'));
       expect(teleEntry.groupExplanation!.orbMatches, equals(30));
+    });
+
+    test('シナリオ5: 望遠連写（同一EXIF＋局所一致＋pHash近傍）の3枚結束検証（0077, 0078, 0079パターン）', () {
+      final baseTime = DateTime(2026, 9, 6, 15, 27, 42);
+      final orbA = Uint8List(10 * 32);
+      final orbB = Uint8List(10 * 32);
+      final orbC = Uint8List(10 * 32);
+      final kps = Float32List(10 * 2);
+
+      // 5 shared keypoints forming a 2D polygon (non-collinear)
+      final pts = [
+        [50.0, 50.0],
+        [200.0, 50.0],
+        [200.0, 200.0],
+        [50.0, 200.0],
+        [125.0, 125.0],
+      ];
+      for (int i = 0; i < 5; i++) {
+        for (int b = 0; b < 32; b++) {
+          final val = (i * 23 + b * 7 + 1) & 0xFF;
+          orbA[i * 32 + b] = val;
+          orbB[i * 32 + b] = val;
+          orbC[i * 32 + b] = val;
+        }
+        kps[i * 2] = pts[i][0];
+        kps[i * 2 + 1] = pts[i][1];
+      }
+      for (int i = 5; i < 10; i++) {
+        for (int b = 0; b < 32; b++) {
+          orbA[i * 32 + b] = (i * 31 + b * 11 + 3) & 0xFF;
+          orbB[i * 32 + b] = (i * 47 + b * 13 + 5) & 0xFF;
+          orbC[i * 32 + b] = (i * 59 + b * 17 + 7) & 0xFF;
+        }
+        kps[i * 2] = (i * 30.0 + 10.0);
+        kps[i * 2 + 1] = (i * 40.0 + 20.0);
+      }
+
+      final items = [
+        createMockEntry(
+          key: 'shot_tele_0077',
+          capturedAt: baseTime,
+          pHashHex: '90718F847B77BEBE',
+          sharpness: 52.0,
+          focalLength: '250 mm',
+          cameraModel: 'Canon EOS Kiss X9',
+          fNumber: '10',
+          shutter: '1/800',
+          iso: '200',
+          orbRows: 10,
+          orbBytes: orbA,
+          orbKeypoints: kps,
+        ),
+        createMockEntry(
+          key: 'shot_tele_0078',
+          capturedAt: baseTime.add(const Duration(milliseconds: 1420)),
+          pHashHex: 'D57C8297D77E7AB7', // 23 bits from 0077
+          sharpness: 57.0,
+          focalLength: '250 mm',
+          cameraModel: 'Canon EOS Kiss X9',
+          fNumber: '10',
+          shutter: '1/800',
+          iso: '200',
+          orbRows: 10,
+          orbBytes: orbB,
+          orbKeypoints: kps,
+        ),
+        createMockEntry(
+          key: 'shot_tele_0079',
+          capturedAt: baseTime.add(const Duration(milliseconds: 2110)),
+          pHashHex: '956F87D3D3777FBF', // 14 bits from 0078
+          sharpness: 55.0,
+          focalLength: '250 mm',
+          cameraModel: 'Canon EOS Kiss X9',
+          fNumber: '10',
+          shutter: '1/800',
+          iso: '200',
+          orbRows: 10,
+          orbBytes: orbC,
+          orbKeypoints: kps,
+        ),
+      ];
+
+      final groups = PhotoGrouper.group(items, config);
+      expect(groups.length, equals(1), reason: '0077, 0078, 0079は同一グループに結束すること');
+      expect(groups.first.items.length, equals(3));
+    });
+
+    test('シナリオ6: 連続ショットでの光学ズーム寄りと引き（0102, 0103パターン）および露出・絞り差による非結合ガード（0095, 0096パターン）', () {
+      final baseTime = DateTime(2026, 9, 6, 11, 52, 28);
+      final orb = Uint8List(5 * 32);
+      final kps = Float32List(5 * 2);
+
+      final items = [
+        // 0102 vs 0103: 30mm -> 47mm within 1.8s, same f/9, ISO 100, 1/400s vs 1/500s
+        createMockEntry(
+          key: 'shot_zoom_0102',
+          capturedAt: baseTime,
+          pHashHex: 'DFB69D3FCC615CC7',
+          focalLength: '30 mm',
+          cameraModel: 'Canon EOS Kiss X9',
+          fNumber: '9',
+          shutter: '1/400',
+          iso: '100',
+          orbRows: 5,
+          orbBytes: orb,
+          orbKeypoints: kps,
+        ),
+        createMockEntry(
+          key: 'shot_zoom_0103',
+          capturedAt: baseTime.add(const Duration(milliseconds: 1800)),
+          pHashHex: 'D881B801B0202060', // 33 bits diff
+          focalLength: '47 mm',
+          cameraModel: 'Canon EOS Kiss X9',
+          fNumber: '9',
+          shutter: '1/500',
+          iso: '100',
+          orbRows: 5,
+          orbBytes: orb,
+          orbKeypoints: kps,
+        ),
+
+        // 0095 vs 0096: 18mm -> 32mm within 1.45s, BUT f/9 vs f/8, 1/250s vs 1/400s (exposure mismatch)
+        createMockEntry(
+          key: 'shot_diff_0095',
+          capturedAt: baseTime.add(const Duration(minutes: 30)),
+          pHashHex: '8080EF18C0E03C70',
+          focalLength: '18 mm',
+          cameraModel: 'Canon EOS Kiss X9',
+          fNumber: '9',
+          shutter: '1/250',
+          iso: '100',
+        ),
+        createMockEntry(
+          key: 'shot_diff_0096',
+          capturedAt: baseTime.add(const Duration(minutes: 30, milliseconds: 1450)),
+          pHashHex: '86B0201FF8C0D080',
+          focalLength: '32 mm',
+          cameraModel: 'Canon EOS Kiss X9',
+          fNumber: '8', // different fNumber
+          shutter: '1/400', // different shutter
+          iso: '100',
+        ),
+      ];
+
+      final groups = PhotoGrouper.group(items, config);
+
+      // 0102 and 0103 should be grouped together
+      final zoomGroup = groups.firstWhere((g) => g.items.any((e) => e.key == 'shot_zoom_0102'));
+      expect(zoomGroup.items.any((e) => e.key == 'shot_zoom_0103'), isTrue,
+          reason: '0102と0103は寄りと引きとして同一グループに結合されること');
+
+      // 0095 and 0096 MUST NOT be grouped together
+      final g95 = groups.firstWhere((g) => g.items.any((e) => e.key == 'shot_diff_0095'));
+      expect(g95.items.any((e) => e.key == 'shot_diff_0096'), isFalse,
+          reason: '0095と0096は絞り・シャッター速度差により結合されてはならない');
     });
   });
 }
