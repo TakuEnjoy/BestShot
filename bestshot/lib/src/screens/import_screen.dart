@@ -281,9 +281,14 @@ class _ImportScreenState extends State<ImportScreen> {
       });
 
       Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) =>
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 200),
+          pageBuilder: (context, animation, secondaryAnimation) =>
               GroupsScreen(groups: groups, detectionMode: _detectionMode),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) => FadeTransition(
+            opacity: animation,
+            child: child,
+          ),
         ),
       );
     } catch (e, stack) {

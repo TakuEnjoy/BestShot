@@ -22,11 +22,13 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
 
   late AnimationController _holdController;
   bool _isHolding = false;
+  double _cachedTotalMb = 0.0;
 
   @override
   void initState() {
     super.initState();
     _currentItems = List.from(widget.items);
+    _cachedTotalMb = _calculateTotalMb();
     _holdController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1000),
@@ -142,7 +144,7 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
 
   @override
   Widget build(BuildContext context) {
-    final totalMb = _calculateTotalMb();
+    final totalMb = _cachedTotalMb;
     final breakdown = _getGroupBreakdown();
 
     return Scaffold(
@@ -167,12 +169,16 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                       .map((key) => _currentItems.firstWhere((e) => e.key == key))
                       .toList();
                   Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => LoupeScreen(
+                    PageRouteBuilder(
+                      transitionDuration: const Duration(milliseconds: 150),
+                      pageBuilder: (context, animation, secondaryAnimation) => LoupeScreen(
                         items: items,
                         scores: items.map((e) => e.sharpness).toList(),
                         isBests: List.generate(items.length, (_) => false),
                       ),
+                      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                        return FadeTransition(opacity: animation, child: child);
+                      },
                     ),
                   );
                 },
@@ -210,60 +216,66 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                 final item = _currentItems[i];
                 final isSelectedForLoupe = _loupeSelection.contains(item.key);
 
-                return Container(
-                  decoration: BoxDecoration(
-                    color: BestShotTheme.surfaceColor,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(
-                      color: isSelectedForLoupe ? BestShotTheme.accentBlue : BestShotTheme.accentRed,
-                      width: 2.0,
+                return RepaintBoundary(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: BestShotTheme.surfaceColor,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: isSelectedForLoupe ? BestShotTheme.accentBlue : BestShotTheme.accentRed,
+                        width: 2.0,
+                      ),
                     ),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // 画像
-                      Opacity(
-                        opacity: 0.65,
-                        child: Image.memory(
+                    clipBehavior: Clip.antiAlias,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // 画像
+                        Image.memory(
                           item.displayBytes,
                           fit: BoxFit.cover,
                           cacheWidth: 300,
                         ),
-                      ),
 
-                      // 赤枠 🗑️ バッジ (右上)
-                      Positioned(
-                        top: 4,
-                        right: 4,
-                        child: Container(
-                          padding: const EdgeInsets.all(3),
-                          decoration: BoxDecoration(
-                            color: BestShotTheme.accentRed,
-                            borderRadius: BorderRadius.circular(2),
+                        // 半透明ダークオーバーレイ (saveLayerを回避)
+                        Positioned.fill(
+                          child: Container(
+                            color: Colors.black.withValues(alpha: 0.35),
                           ),
-                          child: const Icon(Icons.delete_outline, size: 12, color: Colors.white),
                         ),
-                      ),
 
-                      // 削除リストから除外ボタン (左上)
-                      Positioned(
-                        top: 4,
-                        left: 4,
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: () {
-                              widget.onRemoveFromDelete(item.key);
-                              setState(() {
-                                _currentItems.remove(item);
-                                _loupeSelection.remove(item.key);
-                              });
-                              if (_currentItems.isEmpty) {
-                                Navigator.of(context).pop(false);
-                              }
-                            },
+                        // 赤枠 🗑️ バッジ (右上)
+                        Positioned(
+                          top: 4,
+                          right: 4,
+                          child: Container(
+                            padding: const EdgeInsets.all(3),
+                            decoration: BoxDecoration(
+                              color: BestShotTheme.accentRed,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                            child: const Icon(Icons.delete_outline, size: 12, color: Colors.white),
+                          ),
+                        ),
+
+                        // 削除リストから除外ボタン (左上)
+                        Positioned(
+                          top: 4,
+                          left: 4,
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () {
+                                widget.onRemoveFromDelete(item.key);
+                                setState(() {
+                                  _currentItems.remove(item);
+                                  _loupeSelection.remove(item.key);
+                                  _cachedTotalMb = _calculateTotalMb();
+                                });
+                                if (_currentItems.isEmpty) {
+                                  Navigator.of(context).pop(false);
+                                }
+                              },
                             borderRadius: BorderRadius.circular(2),
                             child: Container(
                               padding: const EdgeInsets.all(3),
@@ -305,7 +317,8 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                       ),
                     ],
                   ),
-                );
+                ),
+              );
               },
             ),
           ),

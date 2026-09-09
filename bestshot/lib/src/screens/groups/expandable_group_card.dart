@@ -35,38 +35,6 @@ class _ExpandableGroupCard extends StatelessWidget {
   final Set<String> processingKeys;
   final VoidCallback? onOpenDetail;
 
-  String _getTimeRange() {
-    if (group.items.isEmpty) return '';
-    final times = group.items.map((e) => e.capturedAt).whereType<DateTime>().toList()..sort();
-    if (times.isEmpty) return '時刻不明';
-    final first = times.first;
-    final last = times.last;
-    final fStr = '${first.hour.toString().padLeft(2, '0')}:${first.minute.toString().padLeft(2, '0')}';
-    if (first == last) return fStr;
-    final lStr = '${last.hour.toString().padLeft(2, '0')}:${last.minute.toString().padLeft(2, '0')}';
-    return '$fStr - $lStr';
-  }
-
-  String _getBurstDuration() {
-    if (!group.isBurst) return '単写';
-    final times = group.items.map((e) => e.capturedAt).whereType<DateTime>().toList()..sort();
-    if (times.length < 2) return '連写';
-    final diffMs = times.last.difference(times.first).inMilliseconds;
-    final sec = (diffMs / 1000.0).toStringAsFixed(1);
-    return '連写: $sec秒間';
-  }
-
-  int _getGeometricMatchRate() {
-    for (final item in group.items) {
-      final exp = item.groupExplanation;
-      if (exp != null && exp.inliers != null && exp.inliers! > 0) {
-        final ratio = ((exp.orbInlierRatio ?? 0.3) * 100).round().clamp(60, 99);
-        return ratio;
-      }
-    }
-    return 88;
-  }
-
   int _getPHashSimilarity() {
     return 94;
   }
@@ -79,25 +47,26 @@ class _ExpandableGroupCard extends StatelessWidget {
     );
 
     final deleteCountInGroup = group.items.where((e) => selectedForDelete.contains(e.key)).length;
-    final matchRate = _getGeometricMatchRate();
+    final matchRate = group.geometricMatchRate;
     final pHashRate = _getPHashSimilarity();
-    final timeStr = _getTimeRange();
-    final burstStr = _getBurstDuration();
+    final timeStr = group.timeRange;
+    final burstStr = group.burstDuration;
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: BestShotTheme.surfaceColor,
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(
-          color: isKeyboardGroupFocused
-              ? BestShotTheme.accentBlue
-              : (group.needsReview ? BestShotTheme.accentRed : BestShotTheme.dividerColor),
-          width: isKeyboardGroupFocused ? 2.0 : 1.0,
+    return RepaintBoundary(
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: BestShotTheme.surfaceColor,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: isKeyboardGroupFocused
+                ? BestShotTheme.accentBlue
+                : (group.needsReview ? BestShotTheme.accentRed : BestShotTheme.dividerColor),
+            width: isKeyboardGroupFocused ? 2.0 : 1.0,
+          ),
         ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -280,10 +249,11 @@ class _ExpandableGroupCard extends StatelessWidget {
                       if (e != group.items.last) const SizedBox(width: 8),
                     ],
                   ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

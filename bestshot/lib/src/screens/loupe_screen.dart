@@ -2,7 +2,6 @@ import 'dart:collection';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
-import 'package:image/image.dart' as img;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../widgets/global_background.dart';
@@ -87,6 +86,10 @@ class _LoupeScreenState extends State<LoupeScreen> {
     for (var i = 0; i < widget.items.length; i++) {
       _controllers.add(TransformationController());
     }
+    for (final item in widget.items) {
+      _loadedBytes[item.key] = item.displayBytes;
+    }
+    _loading = false;
     _loadAll();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -137,16 +140,16 @@ class _LoupeScreenState extends State<LoupeScreen> {
 
   Future<void> _loadAll() async {
     try {
-      for (final item in widget.items) {
+      await Future.wait(widget.items.map((item) async {
         final bytes = await _loadFull(item);
-        if (bytes != null) {
-          _loadedBytes[item.key] = bytes;
+        if (bytes != null && mounted) {
+          setState(() {
+            _loadedBytes[item.key] = bytes;
+          });
         }
-      }
+      }));
     } catch (e) {
       _error = e;
-    } finally {
-      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -972,19 +975,15 @@ class _ZoomPaneState extends State<_ZoomPane> {
   }
 
   void _resolveImageSize() {
-    try {
-      final decoder = img.findDecoderForData(widget.bytes);
-      final info = decoder?.startDecode(widget.bytes);
-      if (info != null && mounted) {
+    decodeImageFromList(widget.bytes).then((codec) {
+      if (mounted) {
         setState(() {
-          _imageWidth = info.width;
-          _imageHeight = info.height;
+          _imageWidth = codec.width;
+          _imageHeight = codec.height;
         });
-        widget.onImageSizeResolved(info.width, info.height);
+        widget.onImageSizeResolved(codec.width, codec.height);
       }
-    } catch (_) {
-      // ignore
-    }
+    }).catchError((_) {});
   }
 
   List<Widget> _buildGridOverlay(double w, double h) {

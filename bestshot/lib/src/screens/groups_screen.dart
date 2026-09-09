@@ -57,11 +57,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
   int _bottomNavIndex = 0;
 
   List<PhotoGroup> get _filteredGroups {
+    if (!_filterBurstOnly && !_filterReviewOnly && _filterQuery.isEmpty) {
+      return _groups;
+    }
+    final q = _filterQuery.trim().toLowerCase();
     return _groups.where((g) {
       if (_filterBurstOnly && !g.isBurst) return false;
       if (_filterReviewOnly && !g.needsReview) return false;
-      if (_filterQuery.isNotEmpty) {
-        final q = _filterQuery.toLowerCase();
+      if (q.isNotEmpty) {
         final matchesId = g.id.toLowerCase().contains(q);
         final matchesItem = g.items.any((e) => (e.filePath ?? '').toLowerCase().contains(q));
         if (!matchesId && !matchesItem) return false;
@@ -257,14 +260,18 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (targets.isEmpty) return;
 
     final result = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => DeleteReviewScreen(
+      PageRouteBuilder<bool>(
+        transitionDuration: const Duration(milliseconds: 150),
+        pageBuilder: (context, animation, secondaryAnimation) => DeleteReviewScreen(
           items: targets.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList(),
           onRemoveFromDelete: (key) {
             setState(() => _selectedForDelete.remove(key));
           },
           groups: _groups,
         ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
       ),
     );
 
@@ -988,8 +995,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
   void _openLoupe(List<PhotoEntry> items) {
     if (items.isEmpty) return;
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => LoupeScreen(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 150),
+        pageBuilder: (context, animation, secondaryAnimation) => LoupeScreen(
           items: items,
           scores: items.map((e) => e.sharpness).toList(),
           isBests: items.map((e) {
@@ -1022,6 +1030,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
             });
           },
         ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
       ),
     );
   }
@@ -1629,6 +1640,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
         selectedForDelete: _selectedForDelete,
         onToggleDelete: (key, v) {
           setState(() {
+            _keyboardGroupIndex = index;
+            _keyboardPhotoKey = key;
             if (v) {
               _selectedForDelete.add(key);
             } else {
@@ -1639,6 +1652,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
         loupeSelection: _loupeSelection,
         onToggleLoupe: (key) {
           setState(() {
+            _keyboardGroupIndex = index;
+            _keyboardPhotoKey = key;
             if (_loupeSelection.contains(key)) {
               _loupeSelection.remove(key);
             } else {
@@ -1673,10 +1688,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
         isKeyboardGroupFocused: isKeyboardGroupFocused,
         keyboardPhotoKey: isKeyboardGroupFocused ? _keyboardPhotoKey : null,
         onPhotoTileFocused: (key) {
-          setState(() {
-            _keyboardGroupIndex = index;
-            _keyboardPhotoKey = key;
-          });
+          if (_keyboardGroupIndex != index || _keyboardPhotoKey != key) {
+            setState(() {
+              _keyboardGroupIndex = index;
+              _keyboardPhotoKey = key;
+            });
+          }
         },
         selectedSortFolders: _selectedSortFolders,
         customFolders: _customFolders,
@@ -1686,6 +1703,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
             _addNewFolder(context, key, false);
           } else {
             setState(() {
+              _keyboardGroupIndex = index;
+              _keyboardPhotoKey = key;
               if (folder == null) {
                 _selectedSortFolders.remove(key);
               } else {
@@ -1697,7 +1716,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         onOpenDetail: () {
           Navigator.of(context).push(
             PageRouteBuilder(
-              transitionDuration: const Duration(milliseconds: 300),
+              transitionDuration: const Duration(milliseconds: 150),
               pageBuilder: (context, animation, secondaryAnimation) => GroupDetailScreen(
                 group: g,
                 selectedForDelete: _selectedForDelete,
@@ -1749,12 +1768,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
               transitionsBuilder: (context, animation, secondaryAnimation, child) {
                 return FadeTransition(
                   opacity: animation,
-                  child: ScaleTransition(
-                    scale: Tween<double>(begin: 0.98, end: 1.0).animate(
-                      CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                    ),
-                    child: child,
-                  ),
+                  child: child,
                 );
               },
             ),

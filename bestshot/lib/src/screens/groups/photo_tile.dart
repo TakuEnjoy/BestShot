@@ -150,37 +150,43 @@ class _PhotoTileState extends State<_PhotoTile> {
       borderWidth = 1.5;
     }
 
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: IgnorePointer(
-        ignoring: widget.isProcessing,
-        child: InkWell(
-          onTap: () => widget.onChanged(!widget.selectedForDelete),
-          onDoubleTap: widget.onSetBest,
-          borderRadius: BorderRadius.circular(4),
-          child: Container(
-            decoration: BoxDecoration(
-              color: BestShotTheme.surfaceColor,
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: borderColor, width: borderWidth),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // サムネイル画像
-                Opacity(
-                  opacity: isDelete ? 0.45 : 1.0,
-                  child: Image.memory(
+    return RepaintBoundary(
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
+        child: IgnorePointer(
+          ignoring: widget.isProcessing,
+          child: InkWell(
+            onTap: () => widget.onChanged(!widget.selectedForDelete),
+            onDoubleTap: widget.onSetBest,
+            borderRadius: BorderRadius.circular(4),
+            child: Container(
+              decoration: BoxDecoration(
+                color: BestShotTheme.surfaceColor,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: borderColor, width: borderWidth),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // サムネイル画像
+                  Image.memory(
                     widget.bytes,
                     fit: BoxFit.cover,
                     gaplessPlayback: true,
-                    cacheWidth: 400,
+                    cacheWidth: 320,
                   ),
-                ),
 
-                // Best Shot ゴールド角バッジ (⭐)
+                  // 削除マーク時のダーク半透明オーバーレイ (saveLayerを回避して高速化)
+                  if (isDelete)
+                    Positioned.fill(
+                      child: Container(
+                        color: Colors.black.withValues(alpha: 0.55),
+                      ),
+                    ),
+
+                  // Best Shot ゴールド角バッジ (⭐)
                 if (isBest)
                   Positioned(
                     top: 0,
@@ -328,6 +334,7 @@ class _PhotoTileState extends State<_PhotoTile> {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }

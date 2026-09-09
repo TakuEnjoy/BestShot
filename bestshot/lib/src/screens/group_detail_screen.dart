@@ -311,8 +311,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                   ? widget.loupeSelection.map((k) => _items.firstWhere((e) => e.key == k, orElse: () => _items.first)).toList()
                   : _items.take(4).toList();
               Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => LoupeScreen(
+                PageRouteBuilder(
+                  transitionDuration: const Duration(milliseconds: 150),
+                  pageBuilder: (context, animation, secondaryAnimation) => LoupeScreen(
                     items: targets,
                     scores: targets.map((e) => e.sharpness).toList(),
                     isBests: targets.map((e) => e.key == widget.group.bestKey).toList(),
@@ -323,6 +324,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                       setState(() {});
                     },
                   ),
+                  transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                    return FadeTransition(opacity: animation, child: child);
+                  },
                 ),
               );
             },
@@ -481,39 +485,45 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       borderWidth = 2.0;
     }
 
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _activeKey = item.key;
-        });
-      },
-      onDoubleTap: () {
-        // ダブルタップで削除予定をトグル
-        widget.onToggleDelete(item.key, !isSelectedForDelete);
-        setState(() {});
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          color: BestShotTheme.surfaceColor,
-          borderRadius: BorderRadius.circular(4),
-          border: borderWidth > 0 ? Border.all(color: borderColor, width: borderWidth) : null,
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // 画像サムネイル (1:1 正方形クロップ)
-            Opacity(
-              opacity: isSelectedForDelete ? 0.45 : 1.0,
-              child: Image.memory(
+    return RepaintBoundary(
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            _activeKey = item.key;
+          });
+        },
+        onDoubleTap: () {
+          // ダブルタップで削除予定をトグル
+          widget.onToggleDelete(item.key, !isSelectedForDelete);
+          setState(() {});
+        },
+        child: Container(
+          decoration: BoxDecoration(
+            color: BestShotTheme.surfaceColor,
+            borderRadius: BorderRadius.circular(4),
+            border: borderWidth > 0 ? Border.all(color: borderColor, width: borderWidth) : null,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // 画像サムネイル (1:1 正方形クロップ)
+              Image.memory(
                 item.displayBytes,
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
-                cacheWidth: 400,
+                cacheWidth: 320,
               ),
-            ),
 
-            // Best Shot ゴールド角バッジ (⭐)
+              // 削除マーク時のダーク半透明オーバーレイ (saveLayerを回避)
+              if (isSelectedForDelete)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.55),
+                  ),
+                ),
+
+              // Best Shot ゴールド角バッジ (⭐)
             if (isBest)
               Positioned(
                 top: 0,
@@ -623,8 +633,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildInspectionBottomSheet(PhotoEntry activeEntry) {
     final isSelectedForDelete = widget.selectedForDelete.contains(activeEntry.key);
