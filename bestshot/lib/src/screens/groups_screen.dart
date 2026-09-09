@@ -1763,46 +1763,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
       );
     }
 
-    if (isWide) {
-      return ListView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        itemCount: (displayGroups.length / crossAxisCount).ceil(),
-        itemBuilder: (context, index) {
-          final children = <Widget>[];
-          for (int i = 0; i < crossAxisCount; i++) {
-            final itemIndex = index * crossAxisCount + i;
-            if (itemIndex < displayGroups.length) {
-              children.add(Expanded(child: buildItem(itemIndex)));
-            } else {
-              children.add(const Expanded(child: SizedBox.shrink()));
-            }
-            if (i < crossAxisCount - 1) {
-              children.add(const SizedBox(width: 16));
-            }
-          }
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: children,
-            ),
-          );
-        },
-      );
-    } else {
-      return ListView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        itemCount: displayGroups.length,
-        itemBuilder: (context, index) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: buildItem(index),
-          );
-        },
-      );
-    }
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      itemCount: displayGroups.length,
+      itemBuilder: (context, index) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: buildItem(index),
+        );
+      },
+    );
   }
 
 

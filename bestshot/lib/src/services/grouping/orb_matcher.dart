@@ -29,12 +29,13 @@ class OrbMatcher {
     if (bytesA.length < rowsA * 32 || bytesB.length < rowsB * 32) return (0, 0.0, 0);
     if (keypointsA.length < rowsA * 2 || keypointsB.length < rowsB * 2) return (0, 0.0, 0);
 
-    // 1. Create Mat from ORB bytes
-    cv.Mat matA = cv.Mat.fromList(rowsA, 32, cv.MatType.CV_8UC1, bytesA.toList());
-    cv.Mat matB = cv.Mat.fromList(rowsB, 32, cv.MatType.CV_8UC1, bytesB.toList());
-
+    cv.Mat? matA;
+    cv.Mat? matB;
     cv.BFMatcher? matcher;
     try {
+      // 1. Create Mat from ORB bytes
+      matA = cv.Mat.fromList(rowsA, 32, cv.MatType.CV_8UC1, bytesA.toList());
+      matB = cv.Mat.fromList(rowsB, 32, cv.MatType.CV_8UC1, bytesB.toList());
       matcher = cv.BFMatcher.create(type: cv.NORM_HAMMING, crossCheck: false);
       final matches = matcher.knnMatch(matA, matB, 2);
 
@@ -119,8 +120,8 @@ class OrbMatcher {
     } catch (_) {
       return (0, 0.0, 0);
     } finally {
-      matA.dispose();
-      matB.dispose();
+      matA?.dispose();
+      matB?.dispose();
       matcher?.dispose();
     }
   }

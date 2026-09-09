@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../screens/import_screen.dart';
@@ -39,6 +40,14 @@ class _BestShotAppState extends State<BestShotApp> with WidgetsBindingObserver {
       title: 'BestShot Professional',
       debugShowCheckedModeBanner: false,
       theme: BestShotTheme.darkTheme,
+      scrollBehavior: const MaterialScrollBehavior().copyWith(
+        dragDevices: {
+          PointerDeviceKind.mouse,
+          PointerDeviceKind.touch,
+          PointerDeviceKind.trackpad,
+          PointerDeviceKind.stylus,
+        },
+      ),
       home: const ImportScreen(),
     );
   }

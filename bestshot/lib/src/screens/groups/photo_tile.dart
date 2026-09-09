@@ -17,6 +17,7 @@ class _PhotoTile extends StatefulWidget {
     required this.customFolders,
     required this.onSortFolderChanged,
     required this.isProcessing,
+    this.onSetBest,
   });
 
   final Uint8List bytes;
@@ -34,6 +35,7 @@ class _PhotoTile extends StatefulWidget {
   final List<String> customFolders;
   final ValueChanged<String?> onSortFolderChanged;
   final bool isProcessing;
+  final VoidCallback? onSetBest;
 
   @override
   State<_PhotoTile> createState() => _PhotoTileState();
@@ -155,6 +157,7 @@ class _PhotoTileState extends State<_PhotoTile> {
         ignoring: widget.isProcessing,
         child: InkWell(
           onTap: () => widget.onChanged(!widget.selectedForDelete),
+          onDoubleTap: widget.onSetBest,
           borderRadius: BorderRadius.circular(4),
           child: Container(
             decoration: BoxDecoration(
@@ -206,25 +209,28 @@ class _PhotoTileState extends State<_PhotoTile> {
                     ),
                   ),
 
-                // 鮮鋭度バッジ (Best以外で左上)
+                // 鮮鋭度バッジ (Best以外で左上、タップでBestに指定可能)
                 if (!isBest)
                   Positioned(
                     left: 4,
                     top: 4,
-                    child: Container(
-                      height: 18,
-                      padding: const EdgeInsets.symmetric(horizontal: 5),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.65),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        widget.sharpness.toStringAsFixed(0),
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: BestShotTheme.textPrimary,
+                    child: GestureDetector(
+                      onTap: widget.onSetBest,
+                      child: Container(
+                        height: 18,
+                        padding: const EdgeInsets.symmetric(horizontal: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.65),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          widget.sharpness.toStringAsFixed(0),
+                          style: const TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: BestShotTheme.textPrimary,
+                          ),
                         ),
                       ),
                     ),
