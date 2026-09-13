@@ -21,9 +21,9 @@ class GroupingConfig {
     this.orbMinMatches = 30,
     this.orbMaxHammingDist = 45,
     this.maxColorBhattacharyyaDistance = 0.50,
-    this.maxDriftPHashDistance = 18,
+    this.maxDriftPHashDistance = 26,
     this.maxDriftColorDistance = 0.40,
-    this.maxCandidatesPerPhoto = 25,
+    this.maxCandidatesPerPhoto = 30,
   });
 
   final GroupingAlgorithm algorithm;
@@ -79,79 +79,88 @@ class PhotoGrouper {
       candidatePairs[i] = <int>{};
     }
 
-    for (int i = 0; i < n; i++) {
-      final a = sorted[i];
-      final ta = a.capturedAt;
-
-      // Scored candidate list for photo i: Map<candidateIndex, priorityScore>
-      final candidateScores = <int, double>{};
-
-      // a) Time proximity (adjacent photos or within 180 seconds)
-      final timeRange = 12; // adjacent window
-      final startJ = math.max(0, i - timeRange);
-      final endJ = math.min(n - 1, i + timeRange);
-      for (int j = startJ; j <= endJ; j++) {
-        if (i == j) continue;
-        final tb = sorted[j].capturedAt;
-        if (ta != null && tb != null) {
-          final diffSec = (ta.difference(tb).inMilliseconds.abs() / 1000.0);
-          if (diffSec <= 180.0) {
-            candidateScores[j] = (candidateScores[j] ?? 0.0) + math.max(0.0, 30.0 - (diffSec / 6.0));
-          }
-        } else {
-          // If no timestamp, adjacent index proximity
-          candidateScores[j] = (candidateScores[j] ?? 0.0) + 15.0;
+    if (n <= 60) {
+      // For small sets (<= 60), evaluate all pairs directly to prevent missing any candidate edges
+      for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+          candidatePairs[i]!.add(j);
         }
       }
+    } else {
+      for (int i = 0; i < n; i++) {
+        final a = sorted[i];
+        final ta = a.capturedAt;
 
-      // b) pHash / Color / Semantic / Embedding over entire session
-      for (int j = 0; j < n; j++) {
-        if (i == j) continue;
-        final b = sorted[j];
+        // Scored candidate list for photo i: Map<candidateIndex, priorityScore>
+        final candidateScores = <int, double>{};
 
-        // pHash distance
-        final pDist = _calcPHashDistance(a, b);
-        if (pDist != null && pDist <= 22) {
-          final pScore = (24 - pDist) * 3.0; // Up to 72 pts
-          candidateScores[j] = (candidateScores[j] ?? 0.0) + pScore;
+        // a) Time proximity (adjacent photos or within 180 seconds)
+        final timeRange = 15; // adjacent window
+        final startJ = math.max(0, i - timeRange);
+        final endJ = math.min(n - 1, i + timeRange);
+        for (int j = startJ; j <= endJ; j++) {
+          if (i == j) continue;
+          final tb = sorted[j].capturedAt;
+          if (ta != null && tb != null) {
+            final diffSec = (ta.difference(tb).inMilliseconds.abs() / 1000.0);
+            if (diffSec <= 180.0) {
+              candidateScores[j] = (candidateScores[j] ?? 0.0) + math.max(0.0, 30.0 - (diffSec / 6.0));
+            }
+          } else {
+            // If no timestamp, adjacent index proximity
+            candidateScores[j] = (candidateScores[j] ?? 0.0) + 15.0;
+          }
         }
 
-        // Color distance
-        final cDist = _calcColorDistance(a, b);
-        if (cDist != null && cDist <= 0.25) {
-          candidateScores[j] = (candidateScores[j] ?? 0.0) + 20.0;
-        }
+        // b) pHash / Color / Semantic / Embedding over entire session
+        for (int j = 0; j < n; j++) {
+          if (i == j) continue;
+          final b = sorted[j];
 
-        // Semantic objects
-        if (a.semanticObjects.isNotEmpty && b.semanticObjects.isNotEmpty) {
-          for (final oa in a.semanticObjects) {
-            for (final ob in b.semanticObjects) {
-              if (oa.label == ob.label) {
-                candidateScores[j] = (candidateScores[j] ?? 0.0) + 25.0;
-                break;
+          // pHash distance
+          final pDist = _calcPHashDistance(a, b);
+          if (pDist != null && pDist <= 32) {
+            final pScore = (34 - pDist) * 2.5;
+            candidateScores[j] = (candidateScores[j] ?? 0.0) + pScore;
+          }
+
+          // Color distance
+          final cDist = _calcColorDistance(a, b);
+          if (cDist != null && cDist <= 0.35) {
+            candidateScores[j] = (candidateScores[j] ?? 0.0) + math.max(0.0, (0.40 - cDist) * 80.0);
+          }
+
+          // Semantic objects
+          if (a.semanticObjects.isNotEmpty && b.semanticObjects.isNotEmpty) {
+            for (final oa in a.semanticObjects) {
+              for (final ob in b.semanticObjects) {
+                if (oa.label == ob.label) {
+                  candidateScores[j] = (candidateScores[j] ?? 0.0) + 25.0;
+                  break;
+                }
               }
+            }
+          }
+
+          // Embedding similarity (if available)
+          if (a.embeddings != null && b.embeddings != null) {
+            final (embSim, _) = _calcBestEmbeddingSimilarity(a, b);
+            if (embSim != null && embSim >= 0.70) {
+              candidateScores[j] = (candidateScores[j] ?? 0.0) + (embSim * 50.0);
             }
           }
         }
 
-        // Embedding similarity (if available)
-        if (a.embeddings != null && b.embeddings != null) {
-          final (embSim, _) = _calcBestEmbeddingSimilarity(a, b);
-          if (embSim != null && embSim >= 0.70) {
-            candidateScores[j] = (candidateScores[j] ?? 0.0) + (embSim * 50.0);
-          }
+        // Cap to top N candidates per photo to avoid O(N^2)
+        final sortedCandidates = candidateScores.keys.toList()
+          ..sort((x, y) => candidateScores[y]!.compareTo(candidateScores[x]!));
+
+        final topCandidates = sortedCandidates.take(config.maxCandidatesPerPhoto);
+        for (final cand in topCandidates) {
+          final minIdx = math.min(i, cand);
+          final maxIdx = math.max(i, cand);
+          candidatePairs[minIdx]!.add(maxIdx);
         }
-      }
-
-      // Cap to top N candidates per photo to avoid O(N^2)
-      final sortedCandidates = candidateScores.keys.toList()
-        ..sort((x, y) => candidateScores[y]!.compareTo(candidateScores[x]!));
-
-      final topCandidates = sortedCandidates.take(config.maxCandidatesPerPhoto);
-      for (final cand in topCandidates) {
-        final minIdx = math.min(i, cand);
-        final maxIdx = math.max(i, cand);
-        candidatePairs[minIdx]!.add(maxIdx);
       }
     }
 
@@ -238,9 +247,9 @@ class PhotoGrouper {
               final isSameExifBurst = res.diffSeconds != null &&
                   res.diffSeconds! <= 3.0 &&
                   _hasIdenticalExif(sorted[rA], sorted[rB]);
-              final effectiveLimit = isSameExifBurst ? 21 : config.maxDriftPHashDistance;
+              final effectiveLimit = isSameExifBurst ? math.max(26, config.maxDriftPHashDistance) : config.maxDriftPHashDistance;
 
-              if (pDist >= effectiveLimit && inliers < 8) {
+              if (pDist >= effectiveLimit && inliers < 5) {
                 driftViolation = true;
                 break;
               }
@@ -569,26 +578,24 @@ class PhotoGrouper {
   static double? _calcColorDistance(PhotoEntry a, PhotoEntry b) {
     final hA = a.hueHistogram;
     final hB = b.hueHistogram;
-    if (hA == null || hB == null || hA.isEmpty || hB.isEmpty) return null;
-
-    var sumA = 0.0, sumB = 0.0;
-    for (var i = 0; i < hA.length; i++) {
-      sumA += hA[i];
+    if (hA == null || hB == null || hA.length != 692 || hB.length != 692) {
+      return null;
     }
-    for (var i = 0; i < hB.length; i++) {
-      sumB += hB[i];
-    }
-    if (sumA <= 0.0001 || sumB <= 0.0001) return null;
 
-    if (hA.length == hB.length) {
-      double sum = 0.0;
-      for (var i = 0; i < hA.length; i++) {
-        sum += math.sqrt(hA[i] * hB[i]);
+    double bhattacharyya(int start, int length) {
+      double bc = 0.0;
+      for (int i = start; i < start + length; i++) {
+        bc += math.sqrt(hA[i] * hB[i]);
       }
-      final val = 1.0 - sum;
-      return val <= 0.0 ? 0.0 : math.sqrt(val);
+      final d = (1.0 - bc).clamp(0.0, 1.0);
+      return math.sqrt(d);
     }
-    return null;
+
+    final dH = bhattacharyya(0, 180);
+    final dS = bhattacharyya(180, 256);
+    final dV = bhattacharyya(436, 256);
+
+    return (dH * 0.6) + (dS * 0.2) + (dV * 0.2);
   }
 
   static bool _isBurstGroup(List<PhotoEntry> items, int burstWindowSeconds) {

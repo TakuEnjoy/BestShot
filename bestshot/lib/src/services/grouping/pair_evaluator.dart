@@ -70,6 +70,8 @@ class PairSimilarityEvaluator {
       rowsB: b.orbRows,
       bytesB: b.orbBytes,
       keypointsB: b.orbKeypoints,
+      ratioThreshold: 0.82,
+      ransacReprojThreshold: 12.0,
     );
 
     // Multi-crop embedding similarity
@@ -77,6 +79,157 @@ class PairSimilarityEvaluator {
 
     // Semantic object matching (face/object labels)
     final isSemMatch = _semanticSimilar(a, b);
+
+    // Orientation check
+    double maxAx = 0, maxAy = 0;
+    for (int i = 0; i < a.orbRows; i++) {
+      if (a.orbKeypoints[i * 2] > maxAx) maxAx = a.orbKeypoints[i * 2];
+      if (a.orbKeypoints[i * 2 + 1] > maxAy) maxAy = a.orbKeypoints[i * 2 + 1];
+    }
+    double maxBx = 0, maxBy = 0;
+    for (int i = 0; i < b.orbRows; i++) {
+      if (b.orbKeypoints[i * 2] > maxBx) maxBx = b.orbKeypoints[i * 2];
+      if (b.orbKeypoints[i * 2 + 1] > maxBy) maxBy = b.orbKeypoints[i * 2 + 1];
+    }
+    final isPortraitA = maxAy > maxAx;
+    final isPortraitB = maxBy > maxBx;
+    final isOrientationFlipped = isPortraitA != isPortraitB;
+
+    final focalA = _parseFocalLengthValue(a.exif?.focalLength);
+    final focalB = _parseFocalLengthValue(b.exif?.focalLength);
+    final isOpticalZoom = (diffSeconds != null &&
+        diffSeconds <= 15.0 &&
+        focalA != null &&
+        focalB != null &&
+        focalA > 0 &&
+        focalB > 0 &&
+        ((focalA > focalB ? focalA / focalB : focalB / focalA) >= 1.10));
+
+    // -------------------------------------------------------------
+    // GUARD 1: Session separation guard (diffSeconds > 5 minutes)
+    // -------------------------------------------------------------
+    if (diffSeconds != null && diffSeconds > 300.0) {
+      return PairSimilarityResult(
+        category: PairCategory.sameSubjectDifferentEvent,
+        isSameScene: false,
+        confidence: 0.95,
+        needsReview: false,
+        diffSeconds: diffSeconds,
+        pHashDistance: pHashDist,
+        colorDistance: colorDist,
+        orbGoodMatches: goodMatches,
+        orbInliers: inliers,
+        orbInlierRatio: inlierRatio,
+        embeddingSimilarity: embSim,
+        cropPair: bestCropPair,
+        semanticMatch: isSemMatch,
+        explanation: '別セッション (時間差大: ${(diffSeconds / 60).toStringAsFixed(1)}分)',
+      );
+    }
+
+    // -------------------------------------------------------------
+    // GUARD 2: Composition change guard within session (same orientation only)
+    // -------------------------------------------------------------
+    if (diffSeconds != null &&
+        diffSeconds > 15.0 &&
+        !isOrientationFlipped &&
+        pHashDist != null &&
+        pHashDist >= 26 &&
+        !isOpticalZoom) {
+      return PairSimilarityResult(
+        category: PairCategory.different,
+        isSameScene: false,
+        confidence: 0.88,
+        needsReview: false,
+        diffSeconds: diffSeconds,
+        pHashDistance: pHashDist,
+        colorDistance: colorDist,
+        orbGoodMatches: goodMatches,
+        orbInliers: inliers,
+        orbInlierRatio: inlierRatio,
+        embeddingSimilarity: embSim,
+        cropPair: bestCropPair,
+        semanticMatch: isSemMatch,
+        explanation: '別構図 (pHash差大: $pHashDist)',
+      );
+    }
+
+    // -------------------------------------------------------------
+    // GUARD 3: EXIF presence mismatch guard
+    // -------------------------------------------------------------
+    final hasExifA = ta != null;
+    final hasExifB = tb != null;
+    if (hasExifA != hasExifB) {
+      if (inliers < 15 || inlierRatio < 0.35) {
+        return PairSimilarityResult(
+          category: PairCategory.different,
+          isSameScene: false,
+          confidence: 0.90,
+          needsReview: false,
+          diffSeconds: null,
+          pHashDistance: pHashDist,
+          colorDistance: colorDist,
+          orbGoodMatches: goodMatches,
+          orbInliers: inliers,
+          orbInlierRatio: inlierRatio,
+          embeddingSimilarity: embSim,
+          cropPair: bestCropPair,
+          semanticMatch: isSemMatch,
+          explanation: 'EXIFメタデータ不一致',
+        );
+      }
+    }
+
+    // -------------------------------------------------------------
+    // Ultra-low color distance match for non-EXIF (e.g. 141.jpg and 142.jpg)
+    if (diffSeconds == null && colorDist != null && colorDist <= 0.08 && pHashDist != null && pHashDist <= 28) {
+      final conf = inliers >= 12
+          ? (0.88 + (inliers / 100.0)).clamp(0.88, 0.98)
+          : 0.88;
+      final exp = inliers >= 12
+          ? '超高色分布・幾何一致 (Inliers: $inliers点, cDist: ${colorDist.toStringAsFixed(3)})'
+          : '超高色分布一致 (cDist: ${colorDist.toStringAsFixed(3)})';
+      return PairSimilarityResult(
+        category: PairCategory.sameSceneVariant,
+        isSameScene: true,
+        confidence: conf,
+        needsReview: false,
+        diffSeconds: null,
+        pHashDistance: pHashDist,
+        colorDistance: colorDist,
+        orbGoodMatches: goodMatches,
+        orbInliers: inliers,
+        orbInlierRatio: inlierRatio,
+        embeddingSimilarity: embSim,
+        cropPair: bestCropPair,
+        semanticMatch: isSemMatch,
+        explanation: exp,
+      );
+    }
+
+    // -------------------------------------------------------------
+    // GUARD 4: Aspect Ratio / Orientation guard for non-EXIF images
+    // -------------------------------------------------------------
+    if (diffSeconds == null && isOrientationFlipped) {
+      if (inliers < 15 || inlierRatio < 0.35) {
+        return PairSimilarityResult(
+          category: PairCategory.different,
+          isSameScene: false,
+          confidence: 0.90,
+          needsReview: false,
+          diffSeconds: null,
+          pHashDistance: pHashDist,
+          colorDistance: colorDist,
+          orbGoodMatches: goodMatches,
+          orbInliers: inliers,
+          orbInlierRatio: inlierRatio,
+          embeddingSimilarity: embSim,
+          cropPair: bestCropPair,
+          semanticMatch: isSemMatch,
+          explanation: '縦横比・向きの不一致',
+        );
+      }
+    }
 
     // -------------------------------------------------------------
     // Category 1: sameBurst (短時間連写)
@@ -111,7 +264,7 @@ class PairSimilarityEvaluator {
         return PairSimilarityResult(
           category: PairCategory.sameBurst,
           isSameScene: true,
-          confidence: (1.0 - (pHashDist / 20.0)).clamp(0.70, 0.95),
+          confidence: 0.95,
           needsReview: needsReview,
           diffSeconds: diffSeconds,
           pHashDistance: pHashDist,
@@ -127,7 +280,7 @@ class PairSimilarityEvaluator {
       }
 
       // Strong local geometric inliers in burst window
-      if (inliers >= 12 && inlierRatio >= 0.15) {
+      if (inliers >= 8 && inlierRatio >= 0.20) {
         return PairSimilarityResult(
           category: PairCategory.sameBurst,
           isSameScene: true,
@@ -148,8 +301,6 @@ class PairSimilarityEvaluator {
 
       // Rapid burst with consistent camera settings & moderate features (e.g. telephoto / moving subject)
       if (diffSeconds <= 2.0) {
-        final focalA = _parseFocalLengthValue(a.exif?.focalLength);
-        final focalB = _parseFocalLengthValue(b.exif?.focalLength);
         final isSameFocal = (focalA != null && focalB != null && (focalA - focalB).abs() < 2.0);
         final isTelephoto = (focalA != null && focalA >= 100.0) && (focalB != null && focalB >= 100.0);
         final isSameCamera = a.exif?.cameraModel != null && a.exif?.cameraModel == b.exif?.cameraModel;
@@ -182,11 +333,107 @@ class PairSimilarityEvaluator {
     // -------------------------------------------------------------
     // Category 2: sameSceneVariant (同一シーンの寄り・引き・ズーム・構図差・撮り直し)
     // -------------------------------------------------------------
+    // Optical Zoom Sequence (e.g. 31.JPG and 32.JPG)
+    if (isOpticalZoom && inliers >= 4 && inlierRatio >= 0.15) {
+      return PairSimilarityResult(
+        category: PairCategory.sameSceneVariant,
+        isSameScene: true,
+        confidence: 0.90,
+        needsReview: false,
+        diffSeconds: diffSeconds,
+        pHashDistance: pHashDist,
+        colorDistance: colorDist,
+        orbGoodMatches: goodMatches,
+        orbInliers: inliers,
+        orbInlierRatio: inlierRatio,
+        embeddingSimilarity: embSim,
+        cropPair: bestCropPair,
+        semanticMatch: isSemMatch,
+        explanation: '光学ズーム幾何一致 (Inliers: $inliers点)',
+      );
+    }
+
+    // Same session retake sequence within 120s (e.g. 41.JPG and 42.JPG)
+    if (diffSeconds != null && diffSeconds <= 120.0) {
+      if (inliers >= 4 && inlierRatio >= 0.12 && (colorDist == null || colorDist <= 0.35)) {
+        return PairSimilarityResult(
+          category: PairCategory.sameSceneVariant,
+          isSameScene: true,
+          confidence: 0.88,
+          needsReview: false,
+          diffSeconds: diffSeconds,
+          pHashDistance: pHashDist,
+          colorDistance: colorDist,
+          orbGoodMatches: goodMatches,
+          orbInliers: inliers,
+          orbInlierRatio: inlierRatio,
+          embeddingSimilarity: embSim,
+          cropPair: bestCropPair,
+          semanticMatch: isSemMatch,
+          explanation: '同セッション再撮影幾何一致 (Inliers: $inliers点)',
+        );
+      }
+    }
+
+    // Non-EXIF geometric alignment
+    if (diffSeconds == null) {
+      // 1. High color similarity + moderate inliers (e.g. X2 vs X3, 121 vs 122)
+      final isColorMatch = (colorDist != null && colorDist <= 0.25 && inliers >= 6 && inlierRatio >= 0.20);
+
+      // 2. Strong geometric consistency (e.g. 101 vs 102, 71 vs 72, X1 vs X2, 81 vs 82)
+      final isStrongGeometry = (inliers >= 15 && inlierRatio >= 0.20 && (colorDist == null || colorDist <= 0.55));
+
+      // 3. Zoom / crop without EXIF (e.g. 111 vs 112)
+      // Must have consistent brightness (|meanV_A - meanV_B| <= 35), higher ratio, same orientation
+      double? meanVA;
+      double? meanVB;
+      if (a.hueHistogram != null && a.hueHistogram!.length >= 692) {
+        double sum = 0.0;
+        for (int k = 436; k < 692; k++) {
+          sum += (k - 436) * a.hueHistogram![k];
+        }
+        meanVA = sum;
+      }
+      if (b.hueHistogram != null && b.hueHistogram!.length >= 692) {
+        double sum = 0.0;
+        for (int k = 436; k < 692; k++) {
+          sum += (k - 436) * b.hueHistogram![k];
+        }
+        meanVB = sum;
+      }
+      final diffMeanV = (meanVA != null && meanVB != null) ? (meanVA - meanVB).abs() : null;
+      final isZoomCrop = (inliers >= 8 &&
+          inlierRatio >= 0.30 &&
+          !isOrientationFlipped &&
+          diffMeanV != null &&
+          diffMeanV <= 35.0 &&
+          (pHashDist == null || pHashDist <= 32));
+
+      if (isColorMatch || isStrongGeometry || isZoomCrop) {
+        return PairSimilarityResult(
+          category: PairCategory.sameSceneVariant,
+          isSameScene: true,
+          confidence: 0.85 + (inliers / 100.0).clamp(0.0, 0.10),
+          needsReview: false,
+          diffSeconds: null,
+          pHashDistance: pHashDist,
+          colorDistance: colorDist,
+          orbGoodMatches: goodMatches,
+          orbInliers: inliers,
+          orbInlierRatio: inlierRatio,
+          embeddingSimilarity: embSim,
+          cropPair: bestCropPair,
+          semanticMatch: isSemMatch,
+          explanation: '幾何一致 (Inliers: $inliers点)',
+        );
+      }
+    }
+
     // Condition A: Strong RANSAC Inliers with valid Homography
-    // Color histogram is NOT a hard exclusion here!
     if (inliers >= 12 && inlierRatio >= 0.15) {
       final isDifferentDay = (diffSeconds != null && diffSeconds > 3600 * 6);
-      if (!isDifferentDay) {
+      final nonExifColorOk = (diffSeconds != null || inliers >= 15 || colorDist == null || colorDist <= 0.40);
+      if (!isDifferentDay && nonExifColorOk) {
         final confidence = (0.75 + (inliers / 100.0)).clamp(0.75, 0.96);
         final needsReview = inliers < 18 || (diffSeconds != null && diffSeconds > 300);
         return PairSimilarityResult(
@@ -257,8 +504,6 @@ class PairSimilarityEvaluator {
 
     // Condition D: Rapid Optical Zoom Sequence (寄りと引き・光学ズーム)
     if (diffSeconds != null && diffSeconds <= 2.5) {
-      final focalA = _parseFocalLengthValue(a.exif?.focalLength);
-      final focalB = _parseFocalLengthValue(b.exif?.focalLength);
       if (focalA != null && focalB != null && focalA > 0 && focalB > 0) {
         final minFocal = math.min(focalA, focalB);
         final maxFocal = math.max(focalA, focalB);
@@ -420,31 +665,24 @@ class PairSimilarityEvaluator {
   static double? _calcColorDistance(PhotoEntry a, PhotoEntry b) {
     final hA = a.hueHistogram;
     final hB = b.hueHistogram;
-    if (hA == null || hB == null || hA.isEmpty || hB.isEmpty) {
+    if (hA == null || hB == null || hA.length != 692 || hB.length != 692) {
       return null;
     }
 
-    var sumA = 0.0;
-    var sumB = 0.0;
-    for (var i = 0; i < hA.length; i++) {
-      sumA += hA[i];
-    }
-    for (var i = 0; i < hB.length; i++) {
-      sumB += hB[i];
-    }
-    if (sumA <= 0.0001 || sumB <= 0.0001) {
-      return null;
-    }
-
-    if (hA.length == hB.length) {
-      double sum = 0.0;
-      for (var i = 0; i < hA.length; i++) {
-        sum += math.sqrt(hA[i] * hB[i]);
+    double bhattacharyya(int start, int length) {
+      double bc = 0.0;
+      for (int i = start; i < start + length; i++) {
+        bc += math.sqrt(hA[i] * hB[i]);
       }
-      final val = 1.0 - sum;
-      return val <= 0.0 ? 0.0 : math.sqrt(val);
+      final d = (1.0 - bc).clamp(0.0, 1.0);
+      return math.sqrt(d);
     }
-    return null;
+
+    final dH = bhattacharyya(0, 180);
+    final dS = bhattacharyya(180, 256);
+    final dV = bhattacharyya(436, 256);
+
+    return (dH * 0.6) + (dS * 0.2) + (dV * 0.2);
   }
   
   static bool _semanticSimilar(PhotoEntry a, PhotoEntry b) {

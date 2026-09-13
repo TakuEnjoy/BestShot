@@ -6,6 +6,11 @@ allprojects {
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
         compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
+    tasks.withType<JavaCompile>().configureEach {
+        sourceCompatibility = JavaVersion.VERSION_17.toString()
+        targetCompatibility = JavaVersion.VERSION_17.toString()
+        options.compilerArgs.add("-Xlint:-options")
+    }
 }
 
 val newBuildDir: Directory =
@@ -37,6 +42,20 @@ subprojects {
                     } catch (_: Exception) {
                     }
                 }
+            }
+            try {
+                val compileOptions = android.javaClass.getMethod("getCompileOptions").invoke(android)
+                if (compileOptions != null) {
+                    for (m in compileOptions.javaClass.methods) {
+                        if (m.name == "setSourceCompatibility" && m.parameterCount == 1) {
+                            m.invoke(compileOptions, JavaVersion.VERSION_17)
+                        }
+                        if (m.name == "setTargetCompatibility" && m.parameterCount == 1) {
+                            m.invoke(compileOptions, JavaVersion.VERSION_17)
+                        }
+                    }
+                }
+            } catch (_: Exception) {
             }
         }
     }

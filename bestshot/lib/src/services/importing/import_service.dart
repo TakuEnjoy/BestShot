@@ -4,6 +4,7 @@ import 'dart:isolate';
 import 'package:exif/exif.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
+import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:path/path.dart' as p;
 
 import '../../models/photo_entry.dart';
@@ -417,24 +418,48 @@ Future<List<_ImportPayload?>> Function() _createIsolateTask(
         final decodeSource = rawExts.contains(ext)
             ? (JpegUtils.extractEmbeddedJpeg(bytes) ?? bytes)
             : bytes;
-        final decoded = img.decodeImage(decodeSource);
-        if (decoded == null) {
-          chunkOut.add(_ImportPayload(
-              path: f.path,
-              error: 'decodeImage returned null (format not supported by image package)'));
-          sendPort.send(1);
-          continue;
-        }
-        final upright = img.bakeOrientation(decoded);
 
-        final resized = _resizeKeepingAspect(upright, thumbnailMaxEdge);
-        final jpg = Uint8List.fromList(
-          img.encodeJpg(resized, quality: 85),
-        );
+        Uint8List? thumbJpg;
+        try {
+          final mat = cv.imdecode(decodeSource, cv.IMREAD_COLOR);
+          if (mat.rows > 0 && mat.cols > 0) {
+            final maxDim = mat.cols > mat.rows ? mat.cols : mat.rows;
+            cv.Mat targetMat = mat;
+            if (maxDim > thumbnailMaxEdge) {
+              final scale = thumbnailMaxEdge / maxDim;
+              targetMat = cv.resize(mat, ((mat.cols * scale).round(), (mat.rows * scale).round()));
+              mat.dispose();
+            }
+            final (success, encBytes) = cv.imencode('.jpg', targetMat, params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, 85]));
+            targetMat.dispose();
+            if (success) {
+              thumbJpg = encBytes;
+            }
+          } else {
+            mat.dispose();
+          }
+        } catch (_) {}
+
+        if (thumbJpg == null) {
+          final decoded = img.decodeImage(decodeSource);
+          if (decoded == null) {
+            chunkOut.add(_ImportPayload(
+                path: f.path,
+                error: 'decodeImage returned null (format not supported)'));
+            sendPort.send(1);
+            continue;
+          }
+          final upright = img.bakeOrientation(decoded);
+          final resized = _resizeKeepingAspect(upright, thumbnailMaxEdge);
+          thumbJpg = Uint8List.fromList(
+            img.encodeJpg(resized, quality: 85),
+          );
+        }
+
         final exifSummary = await _readExifSummary(f);
 
         chunkOut.add(
-          _ImportPayload(jpg: jpg, exif: exifSummary, path: f.path),
+          _ImportPayload(jpg: thumbJpg, exif: exifSummary, path: f.path),
         );
         sendPort.send(1);
       } catch (e, st) {

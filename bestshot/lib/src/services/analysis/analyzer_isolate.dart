@@ -7,7 +7,6 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
-import 'package:image_compare/image_compare.dart' as ic;
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -230,7 +229,13 @@ class AnalyzerIsolate {
         eyeCascade = cv.CascadeClassifier.fromFile(eyePath);
       }
 
-      orbDetector = cv.ORB.create(nFeatures: 600, scaleFactor: 1.2, nLevels: 8);
+      orbDetector = cv.ORB.create(
+        nFeatures: 800,
+        scaleFactor: 1.2,
+        nLevels: 8,
+        edgeThreshold: 15,
+        fastThreshold: 10,
+      );
       await for (final msg in workerReceivePort) {
         if (msg is _MainShutdownMessage) {
           break;
@@ -480,20 +485,33 @@ class AnalyzerIsolate {
       final small = cv.resize(mat, (32, 32));
       final gray = cv.cvtColor(small, cv.COLOR_BGR2GRAY);
       final eq = cv.equalizeHist(gray);
-
-      final pixels = <ic.Pixel>[];
-      final data = eq.data;
-      for (final v in data) {
-        pixels.add(ic.Pixel(v, v, v, 255));
+      final fGray = eq.convertTo(cv.MatType.CV_32FC1);
+      final dctMat = cv.dct(fGray);
+      final top8x8 = dctMat.region(cv.Rect(0, 0, 8, 8));
+      final vals = <double>[];
+      for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+          if (r == 0 && c == 0) continue;
+          vals.add(top8x8.at<double>(r, c));
+        }
       }
-
+      vals.sort();
+      final median = vals[vals.length ~/ 2];
+      BigInt hash = BigInt.zero;
+      for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+          if (r == 0 && c == 0) continue;
+          hash <<= 1;
+          if (top8x8.at<double>(r, c) > median) hash |= BigInt.one;
+        }
+      }
       small.dispose();
       gray.dispose();
       eq.dispose();
-
-      final dynamicPixelList = <dynamic>[...pixels];
-      final hex = ic.PerceptualHash().calcPhash(dynamicPixelList);
-      return hex.padLeft(16, '0');
+      fGray.dispose();
+      dctMat.dispose();
+      top8x8.dispose();
+      return hash.toRadixString(16).padLeft(16, '0');
     } catch (e, s) {
       developer.log('Error in _calcEqualizedPHashHexFromMat: $e\n$s');
       return '0000000000000000';
@@ -643,14 +661,16 @@ class AnalyzerIsolate {
 
   static _OrbDesc _calcOrbDescriptorsFromMat(cv.Mat mat, cv.ORB orbDetector) {
     cv.Mat? gray;
-    cv.Mat? eq;
+    cv.Mat? cl;
     cv.Mat? desc;
     try {
       gray = cv.cvtColor(mat, cv.COLOR_BGR2GRAY);
-      eq = cv.equalizeHist(gray);
+      final clahe = cv.createCLAHE(clipLimit: 3.0, tileGridSize: (8, 8));
+      cl = clahe.apply(gray);
+      clahe.dispose();
 
       final emptyMat = cv.Mat.empty();
-      final result = orbDetector.detectAndCompute(eq, emptyMat);
+      final result = orbDetector.detectAndCompute(cl, emptyMat);
       desc = result.$2;
       final kps = result.$1;
       
@@ -661,7 +681,7 @@ class AnalyzerIsolate {
         return _OrbDesc.empty();
       }
       
-      final rows = desc.rows > 256 ? 256 : desc.rows;
+      final rows = desc.rows > 800 ? 800 : desc.rows;
       final cols = desc.cols;
       final elemSize = desc.elemSize;
       final bytesLen = rows * cols * elemSize;
@@ -689,120 +709,56 @@ class AnalyzerIsolate {
       return _OrbDesc.empty();
     } finally {
       gray?.dispose();
-      eq?.dispose();
+      cl?.dispose();
       desc?.dispose();
     }
   }
 
   static Float32List? _calcHueHistogramFromMat(cv.Mat bgr) {
     cv.Mat? hsv;
-    cv.Mat? mask;
-    cv.Mat? maskS;
-    cv.Mat? maskV;
     cv.Mat? histH;
     cv.Mat? histS;
     cv.Mat? histV;
     cv.Mat? histHNorm;
     cv.Mat? histSNorm;
     cv.Mat? histVNorm;
-    cv.Mat? centerMat;
     try {
       if (bgr.isEmpty) return null;
 
-      // Crop to central 50% region to focus on the subject and reduce background influence
-      final cx = bgr.cols ~/ 4;
-      final cy = bgr.rows ~/ 4;
-      final cw = bgr.cols ~/ 2;
-      final ch = bgr.rows ~/ 2;
-      centerMat = bgr.region(cv.Rect(cx, cy, cw, ch));
+      hsv = cv.cvtColor(bgr, cv.COLOR_BGR2HSV);
+      final emptyMask = cv.Mat.empty();
 
-      hsv = cv.cvtColor(centerMat, cv.COLOR_BGR2HSV);
-      final channels = cv.split(hsv);
-      final S = channels[1];
-      final V = channels[2];
-
-      // SとVの最大値を取得して適応的にしきい値を決定する
-      final sData = S.data;
-      final vData = V.data;
-
-      var maxS = 0;
-      for (var i = 0; i < sData.length; i++) {
-        if (sData[i] > maxS) maxS = sData[i];
-      }
-      var maxV = 0;
-      for (var i = 0; i < vData.length; i++) {
-        if (vData[i] > maxV) maxV = vData[i];
-      }
-
-      // 適応的しきい値の計算
-      // 鮮やかな色がある場合は高めのしきい値(最大60)で背景のノイズを除去
-      // 全体的に低彩度（白い壁や灰色）の場合はしきい値を下げて(最低15)、わずかな色味を捉える
-      final thS = (maxS * 0.25).clamp(15.0, 60.0);
-
-      // 暗い画像の場合は低めのしきい値(最低15)にして、暗い被写体を除去しすぎないようにする
-      final thV = (maxV * 0.20).clamp(15.0, 45.0);
-
-      maskS = cv.Mat.empty();
-      maskV = cv.Mat.empty();
-      cv.threshold(S, thS.toDouble(), 255.0, cv.THRESH_BINARY, dst: maskS);
-      cv.threshold(V, thV.toDouble(), 255.0, cv.THRESH_BINARY, dst: maskV);
-
-      mask = cv.bitwiseAND(maskS, maskV);
-
-      // 1. Hue Hist (180 bins)
       histH = cv.calcHist(
         cv.VecMat.fromList([hsv]),
         cv.VecI32.fromList([0]),
-        mask,
+        emptyMask,
         cv.VecI32.fromList([180]),
         cv.VecF32.fromList([0, 180]),
       );
       histHNorm = cv.Mat.empty();
-      cv.normalize(
-        histH,
-        histHNorm,
-        alpha: 1.0,
-        beta: 0.0,
-        normType: cv.NORM_L1,
-      );
+      cv.normalize(histH, histHNorm, alpha: 1.0, beta: 0.0, normType: cv.NORM_L1);
 
-      // 2. Saturation Hist (256 bins)
       histS = cv.calcHist(
         cv.VecMat.fromList([hsv]),
         cv.VecI32.fromList([1]),
-        mask,
+        emptyMask,
         cv.VecI32.fromList([256]),
         cv.VecF32.fromList([0, 256]),
       );
       histSNorm = cv.Mat.empty();
-      cv.normalize(
-        histS,
-        histSNorm,
-        alpha: 1.0,
-        beta: 0.0,
-        normType: cv.NORM_L1,
-      );
+      cv.normalize(histS, histSNorm, alpha: 1.0, beta: 0.0, normType: cv.NORM_L1);
 
-      // 3. Value Hist (256 bins)
       histV = cv.calcHist(
         cv.VecMat.fromList([hsv]),
         cv.VecI32.fromList([2]),
-        mask,
+        emptyMask,
         cv.VecI32.fromList([256]),
         cv.VecF32.fromList([0, 256]),
       );
       histVNorm = cv.Mat.empty();
-      cv.normalize(
-        histV,
-        histVNorm,
-        alpha: 1.0,
-        beta: 0.0,
-        normType: cv.NORM_L1,
-      );
+      cv.normalize(histV, histVNorm, alpha: 1.0, beta: 0.0, normType: cv.NORM_L1);
 
-      for (final c in channels) {
-        c.dispose();
-      }
+      emptyMask.dispose();
 
       final hData = histHNorm.data;
       final sHistData = histSNorm.data;
@@ -810,31 +766,22 @@ class AnalyzerIsolate {
 
       if (hData.isEmpty || sHistData.isEmpty || vHistData.isEmpty) return null;
 
-      final hFloat = Float32List.sublistView(hData);
-      final sFloat = Float32List.sublistView(sHistData);
-      final vFloat = Float32List.sublistView(vHistData);
-
-      // Combine H, S, V histograms (180 + 256 + 256 = 692 elements)
-      final combined = Float32List(180 + 256 + 256);
-      combined.setRange(0, 180, hFloat);
-      combined.setRange(180, 180 + 256, sFloat);
-      combined.setRange(180 + 256, 180 + 256 + 256, vFloat);
+      final combined = Float32List(692);
+      combined.setRange(0, 180, Float32List.sublistView(hData));
+      combined.setRange(180, 436, Float32List.sublistView(sHistData));
+      combined.setRange(436, 692, Float32List.sublistView(vHistData));
 
       return combined;
     } catch (e, s) {
       developer.log('Error in _calcHueHistogramFromMat: $e\n$s');
       return null;
     } finally {
-      centerMat?.dispose();
       hsv?.dispose();
-      maskS?.dispose();
-      maskV?.dispose();
-      mask?.dispose();
       histH?.dispose();
-      histHNorm?.dispose();
       histS?.dispose();
-      histSNorm?.dispose();
       histV?.dispose();
+      histHNorm?.dispose();
+      histSNorm?.dispose();
       histVNorm?.dispose();
     }
   }

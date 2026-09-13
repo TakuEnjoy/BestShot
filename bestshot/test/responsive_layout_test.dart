@@ -425,8 +425,7 @@ void main() {
       expect(find.text('PRO'), findsOneWidget);
       expect(find.text('CULLING & BEST SHOT WORKSTATION'), findsOneWidget);
       expect(find.text('PIPELINE CONFIGURATION'), findsOneWidget);
-      expect(find.text('ANALYSIS PIPELINE SPECIFICATIONS'), findsOneWidget);
-      expect(find.text('Multi-Isolate Pipeline'), findsOneWidget);
+      expect(find.text('検出・評価モード (Detection Mode)'), findsOneWidget);
     });
 
     testWidgets('スマホ幅 (390x844) でもオーバーフローエラーが発生せず正常に描画される', (tester) async {

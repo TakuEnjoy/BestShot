@@ -106,7 +106,6 @@ class OrbMatcher {
 
       final areaA = spanAx * spanAy;
       final areaB = spanBx * spanBy;
-
       if ((areaA < minBoundingBoxSpread && areaB < minBoundingBoxSpread) ||
           (spanAx < 10 && spanAy < 10) ||
           (spanBx < 10 && spanBy < 10)) {
