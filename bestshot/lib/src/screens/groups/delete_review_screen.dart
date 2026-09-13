@@ -146,6 +146,9 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
   Widget build(BuildContext context) {
     final totalMb = _cachedTotalMb;
     final breakdown = _getGroupBreakdown();
+    final screenWidth = MediaQuery.of(context).size.width;
+    // 横の長さに応じて2列か3列配置
+    final crossAxisCount = screenWidth >= 1000 ? 3 : 2;
 
     return Scaffold(
       backgroundColor: BestShotTheme.backgroundPrimary,
@@ -169,16 +172,12 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                       .map((key) => _currentItems.firstWhere((e) => e.key == key))
                       .toList();
                   Navigator.of(context).push(
-                    PageRouteBuilder(
-                      transitionDuration: const Duration(milliseconds: 150),
-                      pageBuilder: (context, animation, secondaryAnimation) => LoupeScreen(
+                    FastRoute(
+                      builder: (context) => LoupeScreen(
                         items: items,
                         scores: items.map((e) => e.sharpness).toList(),
                         isBests: List.generate(items.length, (_) => false),
                       ),
-                      transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                        return FadeTransition(opacity: animation, child: child);
-                      },
                     ),
                   );
                 },
@@ -201,12 +200,12 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
             ),
           ),
 
-          // 4列グリッド (Section 2.4)
+          // レスポンシブグリッド (スマホ: 2列、タブレット: 3列、PC: 4列)
           Expanded(
             child: GridView.builder(
               padding: const EdgeInsets.all(8),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 4,
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: crossAxisCount,
                 crossAxisSpacing: 4,
                 mainAxisSpacing: 4,
                 childAspectRatio: 1.0,
@@ -336,30 +335,44 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                for (final entry in breakdown.entries)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Row(
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 100),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(Icons.folder_outlined, size: 14, color: BestShotTheme.textSecondary),
-                        const SizedBox(width: 6),
-                        Text(
-                          'グループ #${entry.key} から ${entry.value}枚',
-                          style: const TextStyle(fontSize: 12, color: BestShotTheme.textPrimary),
-                        ),
+                        for (final entry in breakdown.entries)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.folder_outlined, size: 14, color: BestShotTheme.textSecondary),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'グループ #${entry.key} から ${entry.value}枚',
+                                    style: const TextStyle(fontSize: 12, color: BestShotTheme.textPrimary),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                       ],
                     ),
                   ),
+                ),
                 const Divider(color: BestShotTheme.dividerColor, height: 16),
-                Row(
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(
                       '合計: ${_currentItems.length}枚',
                       style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
                     ),
-                    const SizedBox(width: 12),
                     Text('│', style: TextStyle(color: BestShotTheme.dividerColor)),
-                    const SizedBox(width: 12),
                     Text(
                       '総容量: ${totalMb.toStringAsFixed(1)}MB',
                       style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: BestShotTheme.accentGold),

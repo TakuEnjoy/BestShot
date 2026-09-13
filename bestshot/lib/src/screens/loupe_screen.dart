@@ -542,15 +542,41 @@ class _LoupeScreenState extends State<LoupeScreen> {
     final isPortrait = size.height > size.width;
 
     final count = widget.items.length;
-    if (count <= 3) {
-      if (isPortrait) {
+    if (count == 1) {
+      return _buildPane(0);
+    } else if (count == 2) {
+      // 2枚比較時:
+      // 横長画面(!isPortrait)、折りたたみ展開・大画面(size.width >= 600)、
+      // または正方形に近い折りたたみアスペクト比(width / height >= 0.75 かつ width >= 480)の場合は左右2枚(Row)
+      final useHorizontalLayout = !isPortrait ||
+          size.width >= 600 ||
+          (size.height > 0 && (size.width / size.height) >= 0.75 && size.width >= 480);
+
+      if (useHorizontalLayout) {
+        return Row(
+          children: [
+            Expanded(child: _buildPane(0)),
+            Expanded(child: _buildPane(1)),
+          ],
+        );
+      } else {
         return Column(
+          children: [
+            Expanded(child: _buildPane(0)),
+            Expanded(child: _buildPane(1)),
+          ],
+        );
+      }
+    } else if (count == 3) {
+      final useHorizontalLayout = !isPortrait || size.width >= 720;
+      if (useHorizontalLayout) {
+        return Row(
           children: [
             for (int i = 0; i < count; i++) Expanded(child: _buildPane(i)),
           ],
         );
       } else {
-        return Row(
+        return Column(
           children: [
             for (int i = 0; i < count; i++) Expanded(child: _buildPane(i)),
           ],
@@ -744,108 +770,124 @@ class _LoupeScreenState extends State<LoupeScreen> {
             ),
             const SizedBox(height: 8),
             // Section 2.3 アクションフッター: [⬅ 画像を入れ替え] [📊 比較スコア] [🔄 マスク] [✖ 一括解除]
-            Row(
-              children: [
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    minimumSize: const Size(0, 28),
-                    side: const BorderSide(color: Color(0xFF2C2C2E)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      _activePaneIndex = (_activePaneIndex + 1) % widget.items.length;
-                    });
-                  },
-                  icon: const Icon(Icons.swap_horiz, size: 14, color: Color(0xFF8A8A8E)),
-                  label: const Text('入替', style: TextStyle(fontSize: 11, color: Colors.white)),
-                ),
-                const SizedBox(width: 6),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    minimumSize: const Size(0, 28),
-                    side: const BorderSide(color: Color(0xFF2C2C2E)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                  ),
-                  onPressed: () {
-                    showDialog(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                        backgroundColor: const Color(0xFF1C1C1E),
-                        title: const Text('比較スコア一覧', style: TextStyle(color: Colors.white, fontSize: 15)),
-                        content: Column(
+            LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            for (int i = 0; i < widget.items.length; i++)
-                              ListTile(
-                                dense: true,
-                                leading: Text('#${i + 1}', style: const TextStyle(color: Color(0xFF3A86FF), fontWeight: FontWeight.bold)),
-                                title: Text(_getFileName(widget.items[i]), style: const TextStyle(color: Colors.white, fontSize: 12)),
-                                trailing: Text(
-                                  '${widget.scores[i].toStringAsFixed(0)}点',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: _isBests[i] ? const Color(0xFFFFBE0B) : Colors.white70,
+                            OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                minimumSize: const Size(0, 28),
+                                side: const BorderSide(color: Color(0xFF2C2C2E)),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                              ),
+                              onPressed: () {
+                                setState(() {
+                                  _activePaneIndex = (_activePaneIndex + 1) % widget.items.length;
+                                });
+                              },
+                              icon: const Icon(Icons.swap_horiz, size: 14, color: Color(0xFF8A8A8E)),
+                              label: const Text('入替', style: TextStyle(fontSize: 11, color: Colors.white)),
+                            ),
+                            const SizedBox(width: 6),
+                            OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                minimumSize: const Size(0, 28),
+                                side: const BorderSide(color: Color(0xFF2C2C2E)),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                              ),
+                              onPressed: () {
+                                showDialog(
+                                  context: context,
+                                  builder: (_) => AlertDialog(
+                                    backgroundColor: const Color(0xFF1C1C1E),
+                                    title: const Text('比較スコア一覧', style: TextStyle(color: Colors.white, fontSize: 15)),
+                                    content: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        for (int i = 0; i < widget.items.length; i++)
+                                          ListTile(
+                                            dense: true,
+                                            leading: Text('#${i + 1}', style: const TextStyle(color: Color(0xFF3A86FF), fontWeight: FontWeight.bold)),
+                                            title: Text(_getFileName(widget.items[i]), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                                            trailing: Text(
+                                              '${widget.scores[i].toStringAsFixed(0)}点',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                color: _isBests[i] ? const Color(0xFFFFBE0B) : Colors.white70,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.of(context).pop(),
+                                        child: const Text('閉じる'),
+                                      ),
+                                    ],
                                   ),
+                                );
+                              },
+                              icon: const Icon(Icons.bar_chart, size: 14, color: Color(0xFFFFBE0B)),
+                              label: const Text('比較スコア', style: TextStyle(fontSize: 11, color: Colors.white)),
+                            ),
+                            const SizedBox(width: 6),
+                            OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                minimumSize: const Size(0, 28),
+                                side: BorderSide(
+                                  color: _showFocusMask ? const Color(0xFF00D084) : const Color(0xFF2C2C2E),
+                                ),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                              ),
+                              onPressed: _toggleFocusMask,
+                              icon: Icon(
+                                _showFocusMask ? Icons.blur_on : Icons.blur_off,
+                                size: 14,
+                                color: _showFocusMask ? const Color(0xFF00D084) : const Color(0xFF8A8A8E),
+                              ),
+                              label: Text(
+                                'マスク ${_showFocusMask ? "ON" : "OFF"}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: _showFocusMask ? const Color(0xFF00D084) : Colors.white,
                                 ),
                               ),
+                            ),
                           ],
                         ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(),
-                            child: const Text('閉じる'),
+                        const SizedBox(width: 8),
+                        // 一括解除
+                        TextButton.icon(
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            minimumSize: const Size(0, 28),
                           ),
-                        ],
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.bar_chart, size: 14, color: Color(0xFFFFBE0B)),
-                  label: const Text('比較スコア', style: TextStyle(fontSize: 11, color: Colors.white)),
-                ),
-                const SizedBox(width: 6),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    minimumSize: const Size(0, 28),
-                    side: BorderSide(
-                      color: _showFocusMask ? const Color(0xFF00D084) : const Color(0xFF2C2C2E),
-                    ),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                  ),
-                  onPressed: _toggleFocusMask,
-                  icon: Icon(
-                    _showFocusMask ? Icons.blur_on : Icons.blur_off,
-                    size: 14,
-                    color: _showFocusMask ? const Color(0xFF00D084) : const Color(0xFF8A8A8E),
-                  ),
-                  label: Text(
-                    'マスク ${_showFocusMask ? "ON" : "OFF"}',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: _showFocusMask ? const Color(0xFF00D084) : Colors.white,
+                          onPressed: () {
+                            for (final item in widget.items) {
+                              widget.onToggleDelete?.call(item.key, false);
+                            }
+                            setState(() {});
+                          },
+                          icon: const Icon(Icons.clear_all, size: 14, color: Color(0xFFFF006E)),
+                          label: const Text('一括解除', style: TextStyle(fontSize: 11, color: Color(0xFFFF006E))),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-                const Spacer(),
-                // 一括解除
-                TextButton.icon(
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    minimumSize: const Size(0, 28),
-                  ),
-                  onPressed: () {
-                    for (final item in widget.items) {
-                      widget.onToggleDelete?.call(item.key, false);
-                    }
-                    setState(() {});
-                  },
-                  icon: const Icon(Icons.clear_all, size: 14, color: Color(0xFFFF006E)),
-                  label: const Text('一括解除', style: TextStyle(fontSize: 11, color: Color(0xFFFF006E))),
-                ),
-              ],
+                );
+              },
             ),
           ],
         ),
@@ -1777,7 +1819,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
   /// ヒストグラムカード
   Widget _buildHistogramContent() {
     return Container(
-      width: 110,
+      width: 120,
       height: 64,
       padding: const EdgeInsets.all(5),
       decoration: BoxDecoration(
@@ -1797,13 +1839,15 @@ class _ZoomPaneState extends State<_ZoomPane> {
           const Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'HISTOGRAM',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 8,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
+              Flexible(
+                child: Text(
+                  'HISTOGRAM',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               Text(

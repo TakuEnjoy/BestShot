@@ -141,6 +141,9 @@ class BestShotTheme {
       canvasColor: backgroundPrimary,
       cardColor: surfaceColor,
       dividerColor: dividerColor,
+      splashFactory: NoSplash.splashFactory,
+      highlightColor: Colors.transparent,
+      splashColor: Colors.transparent,
       textTheme: textTheme,
       colorScheme: const ColorScheme(
         brightness: Brightness.dark,

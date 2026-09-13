@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -11,6 +12,7 @@ import '../services/analysis/analysis_types.dart';
 import '../services/deleting/delete_service.dart';
 import '../services/sorting/sort_service.dart';
 import '../theme/bestshot_theme.dart';
+import '../core/navigation/fast_route.dart';
 import 'group_detail_screen.dart';
 import 'loupe_screen.dart';
 
@@ -37,9 +39,22 @@ class GroupsScreen extends StatefulWidget {
 class _GroupsScreenState extends State<GroupsScreen> {
   late final Map<String, PhotoEntry> _entryByKey;
   List<PhotoEntry>? _sortedPortraitItems;
-  late final Set<String> _selectedForDelete;
+  late final ValueNotifier<Set<String>> _selectedForDeleteNotifier;
+  Set<String> get _selectedForDelete => _selectedForDeleteNotifier.value;
   final List<String> _loupeSelection = [];
   late List<PhotoGroup> _groups;
+
+  void _toggleDelete(String key, [bool? select]) {
+    final current = _selectedForDeleteNotifier.value;
+    final next = Set<String>.from(current);
+    final shouldSelect = select ?? !next.contains(key);
+    if (shouldSelect) {
+      next.add(key);
+    } else {
+      next.remove(key);
+    }
+    _selectedForDeleteNotifier.value = next;
+  }
 
   // 仕分け用の状態変数
   final Map<String, String> _selectedSortFolders = {};
@@ -100,7 +115,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         for (final e in g.items) e.key: e,
     };
     // Initially do not pre-select items for delete; let the user select manually
-    _selectedForDelete = <String>{};
+    _selectedForDeleteNotifier = ValueNotifier<Set<String>>(<String>{});
 
     // Initialize keyboard photo focus to the first bestKey
     if (_groups.isNotEmpty) {
@@ -134,6 +149,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   @override
   void dispose() {
+    _selectedForDeleteNotifier.dispose();
     _focusNode.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -170,8 +186,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
     _sortedPortraitItems = items;
     return items;
   }
-
-  int get _selectedCount => _selectedForDelete.length;
 
   Future<void> _exportBestShots() async {
     final selectedDirectory = await FilePicker.platform.getDirectoryPath();
@@ -260,18 +274,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (targets.isEmpty) return;
 
     final result = await Navigator.of(context).push<bool>(
-      PageRouteBuilder<bool>(
-        transitionDuration: const Duration(milliseconds: 150),
-        pageBuilder: (context, animation, secondaryAnimation) => DeleteReviewScreen(
+      FastRoute<bool>(
+        builder: (context) => DeleteReviewScreen(
           items: targets.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList(),
           onRemoveFromDelete: (key) {
-            setState(() => _selectedForDelete.remove(key));
+            _toggleDelete(key, false);
           },
           groups: _groups,
         ),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          return FadeTransition(opacity: animation, child: child);
-        },
       ),
     );
 
@@ -292,8 +302,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
       setState(() {
         _processingKeys.addAll(finalTargets);
-        _selectedForDelete.removeAll(finalTargets);
       });
+      _selectedForDeleteNotifier.value = Set<String>.from(_selectedForDelete)..removeAll(finalTargets);
 
       final taskId = 'delete_${DateTime.now().millisecondsSinceEpoch}';
       final task = _BackgroundTask(
@@ -372,9 +382,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
   void _scrollToActiveGroup(bool isPortrait) {
     if (!_scrollController.hasClients) return;
     final size = MediaQuery.of(context).size;
-    final isWide = size.width >= 800;
+    final isWide = size.width >= 750;
     final isMobile = size.width < 600;
-    final crossAxisCount = size.width >= 800 ? 2 : 1;
+    final crossAxisCount = size.width >= 1100 ? 3 : (size.width >= 750 ? 2 : 1);
 
     if (isPortrait) {
       double targetOffset;
@@ -401,7 +411,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
         );
       }
     } else {
-      final targetOffset = _keyboardGroupIndex * 220.0;
+      double targetOffset;
+      if (crossAxisCount > 1) {
+        final rowIndex = _keyboardGroupIndex ~/ crossAxisCount;
+        targetOffset = rowIndex * (370.0 + 8.0);
+      } else {
+        targetOffset = _keyboardGroupIndex * 220.0;
+      }
       final currentOffset = _scrollController.offset;
       final viewHeight = size.height;
       if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 300) {
@@ -570,7 +586,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
       return KeyEventResult.handled;
     }
 
-    if (key == LogicalKeyboardKey.space) {
+    if (key == LogicalKeyboardKey.space ||
+        key == LogicalKeyboardKey.keyD ||
+        key == LogicalKeyboardKey.keyX) {
       final targetKey = isPortrait
           ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
           : _keyboardPhotoKey;
@@ -994,10 +1012,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   void _openLoupe(List<PhotoEntry> items) {
     if (items.isEmpty) return;
+    for (final item in items.take(4)) {
+      precacheImage(MemoryImage(item.displayBytes), context);
+    }
     Navigator.of(context).push(
-      PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 150),
-        pageBuilder: (context, animation, secondaryAnimation) => LoupeScreen(
+      FastRoute(
+        builder: (context) => LoupeScreen(
           items: items,
           scores: items.map((e) => e.sharpness).toList(),
           isBests: items.map((e) {
@@ -1010,13 +1030,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
           }).toList(),
           initialSelectedForDelete: _selectedForDelete,
           onToggleDelete: (k, val) {
-            setState(() {
-              if (val) {
-                _selectedForDelete.add(k);
-              } else {
-                _selectedForDelete.remove(k);
-              }
-            });
+            _toggleDelete(k, val);
           },
           onSetBest: (k) {
             setState(() {
@@ -1030,11 +1044,31 @@ class _GroupsScreenState extends State<GroupsScreen> {
             });
           },
         ),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          return FadeTransition(opacity: animation, child: child);
-        },
       ),
     );
+  }
+
+  void _openLoupeForPhoto(PhotoGroup group, String photoKey) {
+    final best = group.items.firstWhere(
+      (e) => e.key == group.bestKey,
+      orElse: () => group.items.first,
+    );
+    final target = group.items.firstWhere(
+      (e) => e.key == photoKey,
+      orElse: () => group.items.first,
+    );
+    final List<PhotoEntry> compareItems;
+    if (best.key == target.key) {
+      if (group.items.length > 1) {
+        final second = group.items.firstWhere((e) => e.key != best.key);
+        compareItems = [best, second];
+      } else {
+        compareItems = [best];
+      }
+    } else {
+      compareItems = [best, target];
+    }
+    _openLoupe(compareItems);
   }
 
   void _showKeyboardShortcutsDialog(BuildContext context) {
@@ -1058,7 +1092,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
               _buildShortcutRow('← / →', '同じグループ内での写真選択の移動 / ルーペのペイン移動'),
               _buildShortcutRow('↑ / ↓', 'グループ間の移動'),
               _buildShortcutRow('1 〜 4', 'ルーペ画面でペインを直接選択'),
-              _buildShortcutRow('Space', '選択中の写真を削除候補に設定 / 解除'),
+              _buildShortcutRow('Space / D', '選択中の写真を削除候補に設定 / 解除'),
               _buildShortcutRow('Enter', '選択中の写真をルーペ（詳細比較）で表示'),
               _buildShortcutRow('B', '選択中の写真をこのグループの「Best」に設定'),
               _buildShortcutRow('L', '選択中の写真をルーペ比較対象に設定 / 解除（最大4枚）'),
@@ -1135,18 +1169,21 @@ class _GroupsScreenState extends State<GroupsScreen> {
       final sortFolder = _selectedSortFolders[e.key];
       final hasFolder = sortFolder != null;
 
-      return InkWell(
+      return GestureDetector(
         onTap: () {
+          HapticFeedback.selectionClick();
           setState(() {
             _keyboardPortraitIndex = index;
-            if (selectedForDelete) {
-              _selectedForDelete.remove(e.key);
+            if (loupeSelected) {
+              _loupeSelection.remove(e.key);
             } else {
-              _selectedForDelete.add(e.key);
+              if (_loupeSelection.length >= 4) {
+                _loupeSelection.removeAt(0);
+              }
+              _loupeSelection.add(e.key);
             }
           });
         },
-        borderRadius: BorderRadius.circular(16),
         child: Container(
           decoration: BoxDecoration(
             color: selectedForDelete
@@ -1224,14 +1261,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                       child: Checkbox(
                         value: selectedForDelete,
                         onChanged: (v) {
-                          setState(() {
-                            _keyboardPortraitIndex = index;
-                            if (v == true) {
-                              _selectedForDelete.add(e.key);
-                            } else {
-                              _selectedForDelete.remove(e.key);
-                            }
-                          });
+                          HapticFeedback.selectionClick();
+                          _keyboardPortraitIndex = index;
+                          _toggleDelete(e.key, v);
                         },
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(4),
@@ -1247,17 +1279,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         color: Colors.transparent,
                         child: InkWell(
                           onTap: () {
-                            setState(() {
-                              _keyboardPortraitIndex = index;
-                              if (loupeSelected) {
-                                _loupeSelection.remove(e.key);
-                              } else {
-                                if (_loupeSelection.length >= 4) {
-                                  _loupeSelection.removeAt(0);
-                                }
-                                _loupeSelection.add(e.key);
-                              }
-                            });
+                            _keyboardPortraitIndex = index;
+                            _openLoupe([e]);
                           },
                           borderRadius: BorderRadius.circular(20),
                           child: Container(
@@ -1351,18 +1374,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
       final sortFolder = _selectedSortFolders[e.key];
       final hasFolder = sortFolder != null;
 
-      return InkWell(
+      return GestureDetector(
         onTap: () {
-          setState(() {
-            _keyboardPortraitIndex = index;
-            if (selectedForDelete) {
-              _selectedForDelete.remove(e.key);
-            } else {
-              _selectedForDelete.add(e.key);
-            }
-          });
+          HapticFeedback.selectionClick();
+          _keyboardPortraitIndex = index;
+          _toggleDelete(e.key);
         },
-        borderRadius: BorderRadius.circular(16),
         child: Container(
           decoration: BoxDecoration(
             color: selectedForDelete
@@ -1441,14 +1458,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         child: Checkbox(
                           value: selectedForDelete,
                           onChanged: (v) {
-                            setState(() {
-                              _keyboardPortraitIndex = index;
-                              if (v == true) {
-                                _selectedForDelete.add(e.key);
-                              } else {
-                                _selectedForDelete.remove(e.key);
-                              }
-                            });
+                            HapticFeedback.selectionClick();
+                            _keyboardPortraitIndex = index;
+                            _toggleDelete(e.key, v);
                           },
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(4),
@@ -1638,16 +1650,11 @@ class _GroupsScreenState extends State<GroupsScreen> {
       return _ExpandableGroupCard(
         group: g,
         selectedForDelete: _selectedForDelete,
+        selectedForDeleteListenable: _selectedForDeleteNotifier,
         onToggleDelete: (key, v) {
-          setState(() {
-            _keyboardGroupIndex = index;
-            _keyboardPhotoKey = key;
-            if (v) {
-              _selectedForDelete.add(key);
-            } else {
-              _selectedForDelete.remove(key);
-            }
-          });
+          _keyboardGroupIndex = index;
+          _keyboardPhotoKey = key;
+          _toggleDelete(key, v);
         },
         loupeSelection: _loupeSelection,
         onToggleLoupe: (key) {
@@ -1665,15 +1672,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
           });
         },
         onSelectBestOnly: () {
-          setState(() {
-            for (final item in g.items) {
-              if (item.key != g.bestKey) {
-                _selectedForDelete.add(item.key);
-              } else {
-                _selectedForDelete.remove(item.key);
-              }
+          final next = Set<String>.from(_selectedForDelete);
+          for (final item in g.items) {
+            if (item.key != g.bestKey) {
+              next.add(item.key);
+            } else {
+              next.remove(item.key);
             }
-          });
+          }
+          _selectedForDeleteNotifier.value = next;
         },
         onSetBest: (k) {
           setState(() {
@@ -1714,20 +1721,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
           }
         },
         onOpenDetail: () {
+          for (final photo in g.items.take(6)) {
+            precacheImage(MemoryImage(photo.displayBytes), context);
+          }
           Navigator.of(context).push(
-            PageRouteBuilder(
-              transitionDuration: const Duration(milliseconds: 150),
-              pageBuilder: (context, animation, secondaryAnimation) => GroupDetailScreen(
+            FastRoute(
+              builder: (context) => GroupDetailScreen(
                 group: g,
                 selectedForDelete: _selectedForDelete,
+                selectedForDeleteNotifier: _selectedForDeleteNotifier,
                 onToggleDelete: (key, v) {
-                  setState(() {
-                    if (v) {
-                      _selectedForDelete.add(key);
-                    } else {
-                      _selectedForDelete.remove(key);
-                    }
-                  });
+                  _toggleDelete(key, v);
                 },
                 loupeSelection: _loupeSelection,
                 onToggleLoupe: (key) {
@@ -1765,15 +1769,25 @@ class _GroupsScreenState extends State<GroupsScreen> {
                 },
                 processingKeys: _processingKeys,
               ),
-              transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                return FadeTransition(
-                  opacity: animation,
-                  child: child,
-                );
-              },
             ),
           );
         },
+        onOpenLoupeForPhoto: (key) => _openLoupeForPhoto(g, key),
+      );
+    }
+
+    if (crossAxisCount > 1) {
+      return GridView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: crossAxisCount,
+          mainAxisSpacing: 8,
+          crossAxisSpacing: 8,
+          mainAxisExtent: 400,
+        ),
+        itemCount: displayGroups.length,
+        itemBuilder: (context, index) => buildItem(index),
       );
     }
 
@@ -1794,9 +1808,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
-    final isWide = size.width >= 800;
+    final isWide = size.width >= 750;
     final isMobile = size.width < 600;
-    final crossAxisCount = size.width >= 800 ? 2 : 1;
+    final crossAxisCount = size.width >= 1100 ? 3 : (size.width >= 750 ? 2 : 1);
 
     final isPortrait = widget.detectionMode == DetectionMode.portrait;
     final portraitItems = _getPortraitItems();
@@ -1920,7 +1934,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
           const Spacer(),
 
           // キーボードガイド
-          if (!Platform.isAndroid && !Platform.isIOS)
+          if (!isMobile && !Platform.isAndroid && !Platform.isIOS)
             IconButton(
               tooltip: 'キーボード操作ガイド',
               icon: const Icon(Icons.keyboard_command_key_rounded, size: 20, color: BestShotTheme.textSecondary),
@@ -1930,6 +1944,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
           // 再インポート / フォルダ変更
           IconButton(
             tooltip: 'フォルダ変更 / 再インポート',
+            visualDensity: isMobile ? VisualDensity.compact : VisualDensity.standard,
+            padding: isMobile ? const EdgeInsets.all(4) : null,
+            constraints: isMobile ? const BoxConstraints(minWidth: 34, minHeight: 34) : null,
             icon: const Icon(Icons.folder_open, size: 20, color: BestShotTheme.textSecondary),
             onPressed: () => Navigator.of(context).pop(),
           ),
@@ -1937,6 +1954,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
           // エクスポート
           IconButton(
             tooltip: 'ベストショットをエクスポート',
+            visualDensity: isMobile ? VisualDensity.compact : VisualDensity.standard,
+            padding: isMobile ? const EdgeInsets.all(4) : null,
+            constraints: isMobile ? const BoxConstraints(minWidth: 34, minHeight: 34) : null,
             icon: const Icon(Icons.folder_shared, size: 20, color: BestShotTheme.textSecondary),
             onPressed: canExport ? _exportBestShots : null,
           ),
@@ -1947,25 +1967,34 @@ class _GroupsScreenState extends State<GroupsScreen> {
             isLabelVisible: _selectedSortFolders.isNotEmpty,
             child: IconButton(
               tooltip: '仕分けを実行',
+              visualDensity: isMobile ? VisualDensity.compact : VisualDensity.standard,
+              padding: isMobile ? const EdgeInsets.all(4) : null,
+              constraints: isMobile ? const BoxConstraints(minWidth: 34, minHeight: 34) : null,
               icon: const Icon(Icons.folder_copy, size: 20, color: BestShotTheme.textSecondary),
               onPressed: canSort ? _runSortAndProcess : null,
             ),
           ),
 
-          const SizedBox(width: 8),
-
           // 削除レビューボタン (ゴミ箱へ)
-          if (_selectedCount > 0)
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: BestShotTheme.accentRed,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              ),
-              onPressed: canDelete ? _reviewAndDelete : null,
-              icon: const Icon(Icons.delete_outline, size: 16),
-              label: Text('$_selectedCount枚 削除確認'),
-            ),
+          ValueListenableBuilder<Set<String>>(
+            valueListenable: _selectedForDeleteNotifier,
+            builder: (context, selected, _) {
+              if (selected.isEmpty) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: BestShotTheme.accentRed,
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 12, vertical: 8),
+                  ),
+                  onPressed: canDelete ? _reviewAndDelete : null,
+                  icon: const Icon(Icons.delete_outline, size: 16),
+                  label: Text(isMobile ? '${selected.length}枚 削除' : '${selected.length}枚 削除確認'),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -1979,94 +2008,133 @@ class _GroupsScreenState extends State<GroupsScreen> {
         color: BestShotTheme.surfaceColor,
         border: Border(bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
       ),
-      child: Row(
-        children: [
-          // [ 🔍 フィルター ] ボタン
-          OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              minimumSize: const Size(0, 32),
-              side: BorderSide(
-                color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
-              ),
-              backgroundColor: _isFilterDrawerOpen
-                  ? BestShotTheme.accentBlue.withValues(alpha: 0.15)
-                  : Colors.transparent,
-            ),
-            onPressed: () => setState(() => _isFilterDrawerOpen = !_isFilterDrawerOpen),
-            icon: Icon(
-              Icons.tune,
-              size: 14,
-              color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
-            ),
-            label: Text(
-              'フィルター',
-              style: TextStyle(
-                fontSize: 12,
-                color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.textPrimary,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: constraints.maxWidth),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // [ 🔍 フィルター ] ボタン
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          minimumSize: const Size(0, 32),
+                          side: BorderSide(
+                            color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+                          ),
+                          backgroundColor: _isFilterDrawerOpen
+                              ? BestShotTheme.accentBlue.withValues(alpha: 0.15)
+                              : Colors.transparent,
+                        ),
+                        onPressed: () => setState(() => _isFilterDrawerOpen = !_isFilterDrawerOpen),
+                        icon: Icon(
+                          Icons.tune,
+                          size: 14,
+                          color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
+                        ),
+                        label: Text(
+                          'フィルター',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.textPrimary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
 
-          // [ 📷 連写のみ ] チップ
-          FilterChip(
-            label: const Text('連写のみ', style: TextStyle(fontSize: 11)),
-            selected: _filterBurstOnly,
-            onSelected: (v) => setState(() => _filterBurstOnly = v),
-            selectedColor: BestShotTheme.accentBlue.withValues(alpha: 0.2),
-            checkmarkColor: BestShotTheme.accentBlue,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-            side: BorderSide(
-              color: _filterBurstOnly ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-          ),
-          const SizedBox(width: 6),
+                      // [ 📷 連写のみ ] チップ
+                      FilterChip(
+                        label: const Text('連写のみ', style: TextStyle(fontSize: 11)),
+                        selected: _filterBurstOnly,
+                        onSelected: (v) => setState(() => _filterBurstOnly = v),
+                        selectedColor: BestShotTheme.accentBlue.withValues(alpha: 0.2),
+                        checkmarkColor: BestShotTheme.accentBlue,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                        side: BorderSide(
+                          color: _filterBurstOnly ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                      ),
+                      const SizedBox(width: 6),
 
-          // [ ⚠ 要確認のみ ] チップ
-          FilterChip(
-            label: const Text('要確認のみ', style: TextStyle(fontSize: 11)),
-            selected: _filterReviewOnly,
-            onSelected: (v) => setState(() => _filterReviewOnly = v),
-            selectedColor: BestShotTheme.accentRed.withValues(alpha: 0.2),
-            checkmarkColor: BestShotTheme.accentRed,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-            side: BorderSide(
-              color: _filterReviewOnly ? BestShotTheme.accentRed : BestShotTheme.dividerColor,
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-          ),
+                      // [ ⚠ 要確認のみ ] チップ
+                      FilterChip(
+                        label: const Text('要確認のみ', style: TextStyle(fontSize: 11)),
+                        selected: _filterReviewOnly,
+                        onSelected: (v) => setState(() => _filterReviewOnly = v),
+                        selectedColor: BestShotTheme.accentRed.withValues(alpha: 0.2),
+                        checkmarkColor: BestShotTheme.accentRed,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                        side: BorderSide(
+                          color: _filterReviewOnly ? BestShotTheme.accentRed : BestShotTheme.dividerColor,
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                      ),
+                    ],
+                  ),
 
-          const Spacer(),
-
-          // ルーペ選択状態表示
-          if (_loupeSelection.isNotEmpty) ...[
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: BestShotTheme.accentBlue,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                minimumSize: const Size(0, 30),
+                  // ルーペ選択状態表示
+                  if (_loupeSelection.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: BestShotTheme.accentBlue,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            minimumSize: const Size(0, 30),
+                          ),
+                          onPressed: () {
+                            final items = _loupeSelection.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList();
+                            if (items.length == 1) {
+                              final single = items.first;
+                              final group = _groups.firstWhere(
+                                (g) => g.items.any((e) => e.key == single.key),
+                                orElse: () => _groups.first,
+                              );
+                              final best = group.items.firstWhere(
+                                (e) => e.key == group.bestKey,
+                                orElse: () => group.items.first,
+                              );
+                              if (best.key != single.key) {
+                                _openLoupe([best, single]);
+                                return;
+                              } else if (group.items.length > 1) {
+                                final second = group.items.firstWhere((e) => e.key != best.key);
+                                _openLoupe([best, second]);
+                                return;
+                              }
+                            }
+                            _openLoupe(items);
+                          },
+                          icon: const Icon(Icons.zoom_in, size: 14),
+                          label: Text('比較 (${_loupeSelection.length}/4)', style: const TextStyle(fontSize: 11)),
+                        ),
+                        const SizedBox(width: 6),
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            minimumSize: const Size(0, 30),
+                          ),
+                          onPressed: () => setState(() => _loupeSelection.clear()),
+                          child: const Text('解除', style: TextStyle(fontSize: 11, color: BestShotTheme.textSecondary)),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
               ),
-              onPressed: () {
-                final items = _loupeSelection.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList();
-                _openLoupe(items);
-              },
-              icon: const Icon(Icons.zoom_in, size: 14),
-              label: Text('比較 (${_loupeSelection.length}/4)', style: const TextStyle(fontSize: 11)),
             ),
-            const SizedBox(width: 6),
-            TextButton(
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                minimumSize: const Size(0, 30),
-              ),
-              onPressed: () => setState(() => _loupeSelection.clear()),
-              child: const Text('解除', style: TextStyle(fontSize: 11, color: BestShotTheme.textSecondary)),
-            ),
-          ],
-        ],
+          );
+        },
       ),
     );
   }

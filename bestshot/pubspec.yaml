@@ -93,7 +93,7 @@ hooks:
         - objdetect
         - features2d
       android:
-        android_home: "C:\\Users\\makww\\AppData\\Local\\Android\\Sdk"
+        android_home: "C:\\android-sdk"
         ndk_version: "30.0.16138531"
 
   # To add custom fonts to your application, add a fonts section here,

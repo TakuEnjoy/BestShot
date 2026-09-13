@@ -17,7 +17,10 @@ class _PhotoTile extends StatefulWidget {
     required this.customFolders,
     required this.onSortFolderChanged,
     required this.isProcessing,
+    this.selectedForDeleteListenable,
+    this.itemKey,
     this.onSetBest,
+    this.onOpenLoupe,
   });
 
   final Uint8List bytes;
@@ -27,6 +30,8 @@ class _PhotoTile extends StatefulWidget {
   final String exifText;
   final bool isBest;
   final bool selectedForDelete;
+  final ValueListenable<Set<String>>? selectedForDeleteListenable;
+  final String? itemKey;
   final ValueChanged<bool> onChanged;
   final bool loupeSelected;
   final VoidCallback onToggleLoupe;
@@ -36,6 +41,7 @@ class _PhotoTile extends StatefulWidget {
   final ValueChanged<String?> onSortFolderChanged;
   final bool isProcessing;
   final VoidCallback? onSetBest;
+  final VoidCallback? onOpenLoupe;
 
   @override
   State<_PhotoTile> createState() => _PhotoTileState();
@@ -127,16 +133,31 @@ class _PhotoTileState extends State<_PhotoTile> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.selectedForDeleteListenable != null && widget.itemKey != null) {
+      return ValueListenableBuilder<Set<String>>(
+        valueListenable: widget.selectedForDeleteListenable!,
+        builder: (context, selectedSet, _) {
+          final isDelete = selectedSet.contains(widget.itemKey);
+          return _buildTileContent(context, isDelete);
+        },
+      );
+    }
+    return _buildTileContent(context, widget.selectedForDelete);
+  }
+
+  Widget _buildTileContent(BuildContext context, bool isDelete) {
     final theme = Theme.of(context);
     final isBest = widget.isBest;
-    final isDelete = widget.selectedForDelete;
     final sortFolder = widget.sortFolder;
     final hasFolder = sortFolder != null;
 
     // ボーダー（Pro Mode: 2px、純色、フラット、角丸4dp）
     Color borderColor = BestShotTheme.dividerColor;
     double borderWidth = 1.0;
-    if (widget.isKeyboardFocused) {
+    if (widget.loupeSelected) {
+      borderColor = BestShotTheme.accentBlue;
+      borderWidth = 2.5;
+    } else if (widget.isKeyboardFocused) {
       borderColor = BestShotTheme.accentBlue;
       borderWidth = 2.0;
     } else if (isDelete) {
@@ -156,185 +177,207 @@ class _PhotoTileState extends State<_PhotoTile> {
         onExit: (_) => setState(() => _isHovered = false),
         child: IgnorePointer(
           ignoring: widget.isProcessing,
-          child: InkWell(
-            onTap: () => widget.onChanged(!widget.selectedForDelete),
-            onDoubleTap: widget.onSetBest,
-            borderRadius: BorderRadius.circular(4),
-            child: Container(
-              decoration: BoxDecoration(
-                color: BestShotTheme.surfaceColor,
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: borderColor, width: borderWidth),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // サムネイル画像
-                  Image.memory(
-                    widget.bytes,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                    cacheWidth: 320,
+          child: Container(
+            decoration: BoxDecoration(
+              color: BestShotTheme.surfaceColor,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: borderColor, width: borderWidth),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // サムネイル画像（タップで選択トグル、ダブルタップでBest指定）
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      widget.onToggleLoupe();
+                    },
+                    onDoubleTap: () {
+                      HapticFeedback.selectionClick();
+                      widget.onSetBest?.call();
+                    },
+                    child: Image.memory(
+                      widget.bytes,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      cacheWidth: 320,
+                    ),
                   ),
+                ),
 
-                  // 削除マーク時のダーク半透明オーバーレイ (saveLayerを回避して高速化)
-                  if (isDelete)
-                    Positioned.fill(
+                // 削除マーク時のダーク半透明オーバーレイ (IgnorePointerでタップを阻害しない)
+                if (isDelete)
+                  Positioned.fill(
+                    child: IgnorePointer(
                       child: Container(
                         color: Colors.black.withValues(alpha: 0.55),
                       ),
                     ),
+                  ),
 
                   // Best Shot ゴールド角バッジ (⭐)
-                if (isBest)
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      decoration: const BoxDecoration(
-                        color: BestShotTheme.accentGold,
-                        borderRadius: BorderRadius.only(bottomRight: Radius.circular(4)),
+                  if (isBest)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                        decoration: const BoxDecoration(
+                          color: BestShotTheme.accentGold,
+                          borderRadius: BorderRadius.only(bottomRight: Radius.circular(4)),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.star, size: 11, color: BestShotTheme.backgroundPrimary),
+                            SizedBox(width: 2),
+                            Text(
+                              'Best',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: BestShotTheme.backgroundPrimary,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.star, size: 11, color: BestShotTheme.backgroundPrimary),
-                          SizedBox(width: 2),
-                          Text(
-                            'Best',
-                            style: TextStyle(
-                              fontSize: 9,
+                    ),
+
+                  // 鮮鋭度バッジ (Best以外で左上、タップでBestに指定可能)
+                  if (!isBest)
+                    Positioned(
+                      left: 4,
+                      top: 4,
+                      child: GestureDetector(
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          widget.onSetBest?.call();
+                        },
+                        child: Container(
+                          height: 18,
+                          padding: const EdgeInsets.symmetric(horizontal: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.65),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            widget.sharpness.toStringAsFixed(0),
+                            style: const TextStyle(
+                              fontSize: 10,
                               fontWeight: FontWeight.bold,
-                              color: BestShotTheme.backgroundPrimary,
+                              color: BestShotTheme.textPrimary,
                             ),
                           ),
-                        ],
+                        ),
+                      ),
+                    ),
+
+                  // 削除チェック (右上 - クリックまたはキーボードショートカットでのみ削除トグル)
+                  Positioned(
+                    right: 4,
+                    top: 4,
+                    child: Checkbox(
+                      value: isDelete,
+                      onChanged: (v) {
+                        HapticFeedback.selectionClick();
+                        widget.onChanged(v ?? !isDelete);
+                      },
+                      activeColor: BestShotTheme.accentRed,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
+                      side: const BorderSide(color: Colors.white, width: 1.5),
+                    ),
+                  ),
+
+                  // 写真上オーバーレイ: #000000 40% Opacity 半透明バー (EXIFテキスト)
+                  if (widget.exifText.isNotEmpty)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 26,
+                      child: Container(
+                        color: Colors.black.withValues(alpha: 0.4),
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                        child: Text(
+                          widget.exifText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 9,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ),
+
+                  // ルーペ比較ボタン (右下 - タップで比較画面へ直接遷移)
+                  Positioned(
+                    right: 4,
+                    bottom: 4,
+                    child: Tooltip(
+                      message: 'ルーペで比較',
+                      child: GestureDetector(
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          if (widget.onOpenLoupe != null) {
+                            widget.onOpenLoupe!();
+                          } else {
+                            widget.onToggleLoupe();
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: widget.loupeSelected
+                                ? BestShotTheme.accentBlue
+                                : Colors.black.withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                          child: Icon(
+                            widget.loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
+                            size: 14,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
                     ),
                   ),
 
-                // 鮮鋭度バッジ (Best以外で左上、タップでBestに指定可能)
-                if (!isBest)
+                  // 仕分けフォルダボタン (左下)
                   Positioned(
                     left: 4,
-                    top: 4,
-                    child: GestureDetector(
-                      onTap: widget.onSetBest,
+                    bottom: 4,
+                    child: _buildSortFolderButtonForTile(theme),
+                  ),
+
+                  // バックグラウンド処理中オーバーレイ
+                  if (widget.isProcessing)
+                    Positioned.fill(
                       child: Container(
-                        height: 18,
-                        padding: const EdgeInsets.symmetric(horizontal: 5),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.65),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                        alignment: Alignment.center,
-                        child: Text(
-                          widget.sharpness.toStringAsFixed(0),
-                          style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: BestShotTheme.textPrimary,
+                        color: Colors.black.withValues(alpha: 0.6),
+                        child: const Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-
-                // 削除チェック (右上)
-                Positioned(
-                  right: 2,
-                  top: 2,
-                  child: Checkbox(
-                    value: widget.selectedForDelete,
-                    onChanged: (v) => widget.onChanged(v ?? false),
-                    activeColor: BestShotTheme.accentRed,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
-                    side: const BorderSide(color: Colors.white, width: 1.5),
-                  ),
-                ),
-
-                // 写真上オーバーレイ: #000000 40% Opacity 半透明バー (EXIFテキスト)
-                if (widget.exifText.isNotEmpty)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 26,
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.4),
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                      child: Text(
-                        widget.exifText,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 9,
-                          color: Colors.white,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                // ルーペ比較ボタン (右下)
-                Positioned(
-                  right: 4,
-                  bottom: 4,
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: widget.onToggleLoupe,
-                      borderRadius: BorderRadius.circular(2),
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: widget.loupeSelected
-                              ? BestShotTheme.accentBlue
-                              : Colors.black.withValues(alpha: 0.6),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                        child: Icon(
-                          widget.loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
-                          size: 14,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
-                // 仕分けフォルダボタン (左下)
-                Positioned(
-                  left: 4,
-                  bottom: 4,
-                  child: _buildSortFolderButtonForTile(theme),
-                ),
-
-                // バックグラウンド処理中オーバーレイ
-                if (widget.isProcessing)
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.6),
-                      child: const Center(
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
-      ),
-    ),
-  );
-}
-}
+      );
+    }
+  }

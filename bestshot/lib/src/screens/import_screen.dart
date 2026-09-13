@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -15,8 +14,9 @@ import 'package:path_provider/path_provider.dart';
 import '../services/analysis/embedding_service.dart';
 import '../platform/folder_picker_windows.dart';
 import 'groups_screen.dart';
-import '../widgets/global_background.dart';
-import '../widgets/glass_container.dart';
+import '../core/navigation/fast_route.dart';
+import 'package:flutter/services.dart';
+import '../theme/bestshot_theme.dart';
 
 class ImportScreen extends StatefulWidget {
   const ImportScreen({super.key});
@@ -66,6 +66,104 @@ class _ImportScreenState extends State<ImportScreen> {
       _burstMinutes = m;
       _burstSeconds = s;
     });
+  }
+
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  KeyEventResult _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (_busy) return KeyEventResult.ignored;
+
+    final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
+    if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyO) {
+      _runFolderImportAndAnalyze(!Platform.isWindows);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter) {
+      _runFolderImportAndAnalyze(!Platform.isWindows);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _showShortcutsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: BestShotTheme.surfaceColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: const BorderSide(color: BestShotTheme.dividerColor),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.keyboard_command_key_rounded, size: 20, color: BestShotTheme.accentBlue),
+            SizedBox(width: 8),
+            Text('キーボードショートカット', style: TextStyle(color: BestShotTheme.textPrimary, fontSize: 15, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _dialogShortcutRow('Ctrl + O', 'フォルダーを指定してスキャン開始'),
+            const SizedBox(height: 8),
+            _dialogShortcutRow('Enter', 'インポート開始 / 決定'),
+            const SizedBox(height: 8),
+            _dialogShortcutRow('Esc', 'ダイアログ / 処理のキャンセル'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('閉じる', style: TextStyle(color: BestShotTheme.accentBlue)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dialogShortcutRow(String keyStr, String description) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(
+            color: BestShotTheme.backgroundPrimary,
+            borderRadius: BorderRadius.circular(3),
+            border: Border.all(color: BestShotTheme.dividerColor),
+          ),
+          child: Text(
+            keyStr,
+            style: const TextStyle(
+              fontSize: 11,
+              fontFamily: 'monospace',
+              fontWeight: FontWeight.bold,
+              color: BestShotTheme.accentGold,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            description,
+            style: const TextStyle(fontSize: 12, color: BestShotTheme.textPrimary),
+          ),
+        ),
+      ],
+    );
   }
 
   Future<void> _runImportAndAnalyze(
@@ -281,14 +379,9 @@ class _ImportScreenState extends State<ImportScreen> {
       });
 
       Navigator.of(context).push(
-        PageRouteBuilder(
-          transitionDuration: const Duration(milliseconds: 200),
-          pageBuilder: (context, animation, secondaryAnimation) =>
+        FastRoute(
+          builder: (context) =>
               GroupsScreen(groups: groups, detectionMode: _detectionMode),
-          transitionsBuilder: (context, animation, secondaryAnimation, child) => FadeTransition(
-            opacity: animation,
-            child: child,
-          ),
         ),
       );
     } catch (e, stack) {
@@ -501,7 +594,18 @@ class _ImportScreenState extends State<ImportScreen> {
             final isOverLimit = totalSelected > _maxCount;
 
             return AlertDialog(
-              title: const Text('撮影日（日付）で絞り込み'),
+              backgroundColor: BestShotTheme.surfaceColor,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+                side: const BorderSide(color: BestShotTheme.dividerColor),
+              ),
+              title: const Row(
+                children: [
+                  Icon(Icons.calendar_today_outlined, size: 18, color: BestShotTheme.accentBlue),
+                  SizedBox(width: 8),
+                  Text('撮影日（日付）で絞り込み', style: TextStyle(color: BestShotTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.bold)),
+                ],
+              ),
               content: Container(
                 constraints: const BoxConstraints(maxWidth: 480),
                 width: MediaQuery.of(context).size.width * 0.9,
@@ -510,13 +614,13 @@ class _ImportScreenState extends State<ImportScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'フォルダ: ${scanResult.folderPath}',
+                      'フォルダー: ${scanResult.folderPath}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
+                      style: const TextStyle(color: BestShotTheme.textSecondary, fontSize: 11),
                     ),
                     const SizedBox(height: 12),
-                    // クイックコントロール行（折り返し対応のWrap）
+                    // クイックコントロール行
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -524,23 +628,35 @@ class _ImportScreenState extends State<ImportScreen> {
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         Wrap(
-                          spacing: 4,
+                          spacing: 6,
                           children: [
-                            TextButton(
+                            OutlinedButton(
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: BestShotTheme.dividerColor),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
                               onPressed: () {
                                 setState(() {
                                   selectedDates.addAll(allDates);
                                 });
                               },
-                              child: const Text('すべて選択'),
+                              child: const Text('すべて選択', style: TextStyle(color: BestShotTheme.textPrimary, fontSize: 12)),
                             ),
-                            TextButton(
+                            OutlinedButton(
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: BestShotTheme.dividerColor),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
                               onPressed: () {
                                 setState(() {
                                   selectedDates.clear();
                                 });
                               },
-                              child: const Text('クリア'),
+                              child: const Text('クリア', style: TextStyle(color: BestShotTheme.textSecondary, fontSize: 12)),
                             ),
                           ],
                         ),
@@ -548,45 +664,51 @@ class _ImportScreenState extends State<ImportScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             // 期間で選択
-                            TextButton.icon(
+                            OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: BestShotTheme.dividerColor),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
                               onPressed: () async {
                                 final range = await showDateRangePicker(
                                   context: context,
                                   firstDate: DateTime(2000),
-                                  lastDate: DateTime.now().add(
-                                    const Duration(days: 365),
+                                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                                  builder: (context, child) => Theme(
+                                    data: ThemeData.dark().copyWith(
+                                      colorScheme: const ColorScheme.dark(
+                                        primary: BestShotTheme.accentBlue,
+                                        surface: BestShotTheme.surfaceColor,
+                                      ),
+                                    ),
+                                    child: child!,
                                   ),
                                 );
                                 if (range != null) {
                                   setState(() {
                                     selectedDates.clear();
                                     for (final d in allDates) {
-                                      if (d.isAfter(
-                                            range.start.subtract(
-                                              const Duration(seconds: 1),
-                                            ),
-                                          ) &&
-                                          d.isBefore(
-                                            range.end.add(
-                                              const Duration(days: 1),
-                                            ),
-                                          )) {
+                                      if (d.isAfter(range.start.subtract(const Duration(seconds: 1))) &&
+                                          d.isBefore(range.end.add(const Duration(days: 1)))) {
                                         selectedDates.add(d);
                                       }
                                     }
                                   });
                                 }
                               },
-                              icon: const Icon(Icons.date_range, size: 16),
-                              label: const Text('期間で選択'),
+                              icon: const Icon(Icons.date_range, size: 14, color: BestShotTheme.accentBlue),
+                              label: const Text('期間で選択', style: TextStyle(color: BestShotTheme.textPrimary, fontSize: 12)),
                             ),
+                            const SizedBox(width: 4),
                             // ソートトグル
                             IconButton(
                               tooltip: descending ? '新しい順' : '古い順',
                               icon: Icon(
-                                descending
-                                    ? Icons.arrow_downward
-                                    : Icons.arrow_upward,
+                                descending ? Icons.arrow_downward : Icons.arrow_upward,
+                                size: 16,
+                                color: BestShotTheme.textSecondary,
                               ),
                               onPressed: () {
                                 setState(() {
@@ -598,13 +720,14 @@ class _ImportScreenState extends State<ImportScreen> {
                         ),
                       ],
                     ),
-                    const Divider(),
+                    const Divider(color: BestShotTheme.dividerColor, height: 16),
                     // 日付リスト
                     Flexible(
                       child: Container(
                         height: 240,
                         decoration: BoxDecoration(
-                          border: Border.all(color: Colors.black12),
+                          color: BestShotTheme.backgroundPrimary,
+                          border: Border.all(color: BestShotTheme.dividerColor),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: ListView.builder(
@@ -618,8 +741,12 @@ class _ImportScreenState extends State<ImportScreen> {
                             final isChecked = selectedDates.contains(date);
 
                             return CheckboxListTile(
-                              title: Text('$dateStr ($count 枚)'),
+                              title: Text(
+                                '$dateStr ($count 枚)',
+                                style: const TextStyle(fontSize: 13, color: BestShotTheme.textPrimary),
+                              ),
                               value: isChecked,
+                              activeColor: BestShotTheme.accentBlue,
                               dense: true,
                               controlAffinity: ListTileControlAffinity.leading,
                               onChanged: (val) {
@@ -638,33 +765,46 @@ class _ImportScreenState extends State<ImportScreen> {
                     ),
                     const SizedBox(height: 12),
                     // 選択枚数表示と警告
-                    Text(
-                      '選択中: $totalSelected 枚',
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        color: isOverLimit ? Colors.orange : null,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    if (isOverLimit)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          '※ 最大インポート件数（$_maxCount枚）を超えています。上位 $_maxCount枚のみインポートされます。',
+                    Row(
+                      children: [
+                        Text(
+                          '選択中: $totalSelected 枚',
                           style: TextStyle(
-                            color: Colors.orange.shade800,
-                            fontSize: 11,
+                            color: isOverLimit ? BestShotTheme.accentGold : BestShotTheme.textPrimary,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
                           ),
                         ),
-                      ),
+                        if (isOverLimit) ...[
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '※ 上限 ($_maxCount枚) を超えた分は自動除外されます',
+                              style: const TextStyle(color: BestShotTheme.accentGold, fontSize: 11),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
                 ),
               ),
               actions: [
-                TextButton(
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: BestShotTheme.dividerColor),
+                    foregroundColor: BestShotTheme.textSecondary,
+                  ),
                   onPressed: () => Navigator.of(context).pop(null),
                   child: const Text('キャンセル'),
                 ),
-                FilledButton(
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: BestShotTheme.accentBlue,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                  ),
                   onPressed: selectedDates.isEmpty
                       ? null
                       : () {
@@ -699,511 +839,851 @@ class _ImportScreenState extends State<ImportScreen> {
   Widget build(BuildContext context) {
     final isWindows = Platform.isWindows;
     final isAndroid = Platform.isAndroid;
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
     final size = MediaQuery.of(context).size;
-    final isWide = size.width >= 800;
+    final isWide = size.width >= 850;
     final isSmallMobile = size.width < 600;
 
-    // 1. Premium Hero Header (Expressive Rounded Container)
-    final heroHeader = GlassContainer(
-      padding: EdgeInsets.all(isSmallMobile ? 16 : 24),
-      child: Column(
+    return Focus(
+      focusNode: _focusNode,
+      autofocus: true,
+      onKeyEvent: (node, event) => _handleKeyEvent(event),
+      child: Scaffold(
+        backgroundColor: BestShotTheme.backgroundPrimary,
+        appBar: PreferredSize(
+          preferredSize: const Size.fromHeight(56),
+          child: _buildTopBar(context, isSmallMobile, isWindows),
+        ),
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: isWide ? 1200 : 640),
+              child: SingleChildScrollView(
+                padding: EdgeInsets.symmetric(
+                  horizontal: isSmallMobile ? 14 : 24,
+                  vertical: isSmallMobile ? 12 : 20,
+                ),
+                child: isWide
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // メインステージ (ドロップゾーン、進捗、ステータス)
+                          Expanded(
+                            flex: 6,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _buildDropzone(context, isWindows, isSmallMobile),
+                                _buildProgressDisplay(),
+                                _buildStatusDisplay(),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 20),
+                          // 右側インスペクター (パイプライン設定、エンジン仕様、システム診断)
+                          Expanded(
+                            flex: 4,
+                            child: _buildParametersSidebar(context, isSmallMobile, isAndroid),
+                          ),
+                        ],
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _buildDropzone(context, isWindows, isSmallMobile),
+                          _buildProgressDisplay(),
+                          _buildStatusDisplay(),
+                          const SizedBox(height: 16),
+                          _buildParametersSidebar(context, isSmallMobile, isAndroid),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopBar(BuildContext context, bool isSmallMobile, bool isWindows) {
+    return Container(
+      height: 56,
+      padding: EdgeInsets.symmetric(horizontal: isSmallMobile ? 14 : 24),
+      decoration: const BoxDecoration(
+        color: BestShotTheme.backgroundPrimary,
+        border: Border(bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+      ),
+      child: Row(
         children: [
           Container(
-            padding: EdgeInsets.all(isSmallMobile ? 12 : 16),
+            padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              color: colorScheme.primaryContainer.withValues(alpha: 0.6),
-              shape: BoxShape.circle,
+              color: BestShotTheme.accentBlue.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: BestShotTheme.accentBlue.withValues(alpha: 0.3)),
             ),
-            child: Icon(
-              Icons.auto_awesome_motion_rounded,
-              size: isSmallMobile ? 32 : 44,
-              color: colorScheme.primary,
+            child: const Icon(
+              Icons.camera,
+              size: 18,
+              color: BestShotTheme.accentBlue,
             ),
           ),
-          SizedBox(height: isSmallMobile ? 12 : 16),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'BestShot',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        letterSpacing: 0.5,
+                        color: BestShotTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: BestShotTheme.surfaceColor,
+                        borderRadius: BorderRadius.circular(2),
+                        border: Border.all(color: BestShotTheme.dividerColor),
+                      ),
+                      child: const Text(
+                        'PRO',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          color: BestShotTheme.accentGold,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (!isSmallMobile)
+                  Text(
+                    'CULLING & BEST SHOT WORKSTATION',
+                    style: TextStyle(
+                      fontSize: 9,
+                      letterSpacing: 0.8,
+                      fontWeight: FontWeight.w500,
+                      color: BestShotTheme.textSecondary.withValues(alpha: 0.8),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Engine status indicator
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: isSmallMobile ? 6 : 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: BestShotTheme.surfaceColor,
+              borderRadius: BorderRadius.circular(3),
+              border: Border.all(color: BestShotTheme.dividerColor),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: _busy ? BestShotTheme.accentGold : BestShotTheme.accentGreen,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                if (!isSmallMobile) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    _busy ? 'PROCESSING' : 'ENGINE READY',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                      color: _busy ? BestShotTheme.accentGold : BestShotTheme.accentGreen,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (!isSmallMobile && isWindows) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: 'キーボードショートカット [Ctrl+O]',
+              icon: const Icon(Icons.keyboard_command_key_rounded, size: 18, color: BestShotTheme.textSecondary),
+              onPressed: () => _showShortcutsDialog(context),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPipelineMiniSteps(bool isSmallMobile) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: BestShotTheme.backgroundPrimary,
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: BestShotTheme.dividerColor),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _miniStep('01', 'フォルダー選択', active: true),
+          _miniArrow(),
+          _miniStep('02', '鮮鋭度・特徴量解析'),
+          if (!isSmallMobile) ...[
+            _miniArrow(),
+            _miniStep('03', 'Best自動抽出'),
+            _miniArrow(),
+            _miniStep('04', '仕分け'),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _miniStep(String num, String label, {bool active = false}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          num,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'monospace',
+            color: active ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: active ? FontWeight.bold : FontWeight.normal,
+            color: active ? BestShotTheme.textPrimary : BestShotTheme.textSecondary,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _miniArrow() {
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 6),
+      child: Icon(Icons.chevron_right, size: 12, color: BestShotTheme.textSecondary),
+    );
+  }
+
+  Widget _buildDropzone(BuildContext context, bool isWindows, bool isSmallMobile) {
+    if (_busy) return const SizedBox.shrink();
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: isSmallMobile ? 20 : 36,
+        vertical: isSmallMobile ? 28 : 44,
+      ),
+      decoration: BoxDecoration(
+        color: BestShotTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: BestShotTheme.dividerColor),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildPipelineMiniSteps(isSmallMobile),
+          SizedBox(height: isSmallMobile ? 28 : 36),
+          Icon(
+            Icons.folder_open_rounded,
+            size: isSmallMobile ? 48 : 56,
+            color: BestShotTheme.accentBlue,
+          ),
+          const SizedBox(height: 16),
           Text(
-            '最高の瞬間を、AIが提案します。',
-            textAlign: TextAlign.center,
-            style: theme.textTheme.titleLarge?.copyWith(
+            isWindows ? 'フォルダーを指定してスキャン開始' : 'スキャンするフォルダーを選択',
+            style: TextStyle(
+              fontSize: isSmallMobile ? 16 : 19,
               fontWeight: FontWeight.bold,
-              fontSize: isSmallMobile ? 18 : 22,
-              letterSpacing: 0.2,
-              color: Colors.white.withValues(alpha: 0.98),
+              letterSpacing: 0.3,
+              color: BestShotTheme.textPrimary,
             ),
           ),
-          SizedBox(height: isSmallMobile ? 6 : 8),
+          const SizedBox(height: 6),
           Text(
-            '一眼レフやミラーレスの連写・類似写真を、内容ベースで高速グループ化して「Best」を見つけ出します。',
+            '一眼レフ・ミラーレスのRAW/JPEG連写を高精度解析し、ベストショットを自動抽出',
             textAlign: TextAlign.center,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: Colors.white.withValues(alpha: 0.7),
-              fontSize: isSmallMobile ? 12 : 13.5,
-              height: 1.5,
+            style: TextStyle(
+              fontSize: 12,
+              color: BestShotTheme.textSecondary.withValues(alpha: 0.9),
+              height: 1.4,
             ),
+          ),
+          SizedBox(height: isSmallMobile ? 24 : 32),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: BestShotTheme.accentBlue,
+              foregroundColor: Colors.white,
+              padding: EdgeInsets.symmetric(
+                horizontal: isSmallMobile ? 28 : 36,
+                vertical: isSmallMobile ? 14 : 16,
+              ),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+              elevation: 0,
+            ),
+            onPressed: () => _runFolderImportAndAnalyze(!isWindows),
+            icon: const Icon(Icons.folder_open, size: 20),
+            label: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  isWindows ? 'フォルダーを開く' : 'フォルダーを選択',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 0.3),
+                ),
+                if (isWindows) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                    child: const Text('Ctrl+O', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white70)),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.check_circle_outline, size: 12, color: BestShotTheme.textSecondary),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  '対応: RAW (DNG/CR2/NEF/ARW)  •  JPEG / HEIF  •  PNG',
+                  style: TextStyle(
+                    fontSize: 11,
+                    letterSpacing: 0.3,
+                    color: BestShotTheme.textSecondary.withValues(alpha: 0.8),
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
+  }
 
-    // 2. Info Card (Tech specs)
-    final infoCard = _InfoCard();
+  Widget _buildProgressDisplay() {
+    if (!_busy) return const SizedBox.shrink();
 
-    // 3. Parameters Card
-    final parametersCard = GlassContainer(
-      padding: EdgeInsets.all(isSmallMobile ? 16 : 24),
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: BestShotTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: BestShotTheme.dividerColor),
+      ),
       child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: colorScheme.primary.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    Icons.tune_rounded,
-                    size: isSmallMobile ? 18 : 22,
-                    color: colorScheme.primary,
-                  ),
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: BestShotTheme.accentBlue.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(2),
                 ),
-                const SizedBox(width: 12),
-                Text(
-                  '解析・グループ化設定',
-                  style: theme.textTheme.titleMedium?.copyWith(
+                child: Text(
+                  _stage.toUpperCase(),
+                  style: const TextStyle(
+                    fontSize: 11,
                     fontWeight: FontWeight.bold,
-                    fontSize: isSmallMobile ? 15 : 17,
+                    color: BestShotTheme.accentBlue,
+                    fontFamily: 'monospace',
                   ),
                 ),
-              ],
-            ),
-            SizedBox(height: isSmallMobile ? 14 : 20),
-            Text(
-              '検出モード',
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.85),
-                fontSize: isSmallMobile ? 12 : 13,
-                fontWeight: FontWeight.w600,
               ),
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<DetectionMode>(
-              isExpanded: true,
-              initialValue: _detectionMode,
-              decoration: InputDecoration(
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: isSmallMobile ? 10 : 14,
-                ),
-              ),
-              items: [
-                const DropdownMenuItem(
-                  value: DetectionMode.standard,
-                  child: Text('標準（全体ピント・構図スコア）'),
-                ),
-                if (isAndroid)
-                  const DropdownMenuItem(
-                    value: DetectionMode.portrait,
-                    child: Text('ポートレート（顔優先・目閉じ判定）'),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _status,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: BestShotTheme.textPrimary,
                   ),
-              ],
-              onChanged: _busy
-                  ? null
-                  : (v) {
-                      if (v == null) return;
-                      if (v == DetectionMode.portrait && !isAndroid) {
-                        setState(() => _detectionMode = DetectionMode.standard);
-                        return;
-                      }
-                      setState(() => _detectionMode = v);
-                    },
-            ),
-            SizedBox(height: isSmallMobile ? 14 : 20),
-            Text(
-              '連写としてまとめる時間窓',
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.85),
-                fontSize: isSmallMobile ? 12 : 13,
-                fontWeight: FontWeight.w600,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '合計: ${_formatBurstWindow(_burstWindowSeconds)}（1秒〜60分以内を1グループ化）',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: Colors.white.withValues(alpha: 0.55),
-                fontSize: isSmallMobile ? 11 : 12,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<int>(
-                    initialValue: _burstMinutes.clamp(0, 60),
-                    decoration: InputDecoration(
-                      labelText: '分',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      isDense: true,
-                      contentPadding: isSmallMobile
-                          ? const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            )
-                          : null,
-                    ),
-                    items: [
-                      for (var i = 0; i <= 60; i++)
-                        DropdownMenuItem(
-                          value: i,
-                          child: Text(i.toString().padLeft(2, '0')),
-                        ),
-                    ],
-                    onChanged: _busy
-                        ? null
-                        : (v) {
-                            if (v == null) return;
-                            setState(() => _burstMinutes = v);
-                            _normalizeBurstTotal();
-                          },
+              if (_progress != null)
+                Text(
+                  '${(_progress! * 100).toStringAsFixed(0)}%',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: 'monospace',
+                    color: BestShotTheme.accentBlue,
                   ),
                 ),
-                SizedBox(width: isSmallMobile ? 8 : 12),
-                Expanded(
-                  child: DropdownButtonFormField<int>(
-                    initialValue: _burstSeconds.clamp(0, 59),
-                    decoration: InputDecoration(
-                      labelText: '秒',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      isDense: true,
-                      contentPadding: isSmallMobile
-                          ? const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            )
-                          : null,
-                    ),
-                    items: [
-                      for (var i = 0; i < 60; i++)
-                        DropdownMenuItem(
-                          value: i,
-                          child: Text(i.toString().padLeft(2, '0')),
-                        ),
-                    ],
-                    onChanged: _busy
-                        ? null
-                        : (v) {
-                            if (v == null) return;
-                            setState(() => _burstSeconds = v);
-                            _normalizeBurstTotal();
-                          },
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: isSmallMobile ? 14 : 20),
-            Text(
-              '最大インポート件数',
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.85),
-                fontSize: isSmallMobile ? 12 : 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<int>(
-              initialValue: _maxCount,
-              decoration: InputDecoration(
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                isDense: true,
-                contentPadding: isSmallMobile
-                    ? const EdgeInsets.symmetric(horizontal: 16, vertical: 10)
-                    : null,
-              ),
-              items: const [
-                DropdownMenuItem(value: 50, child: Text('50枚')),
-                DropdownMenuItem(value: 100, child: Text('100枚')),
-                DropdownMenuItem(value: 200, child: Text('200枚')),
-                DropdownMenuItem(value: 500, child: Text('500枚')),
-                DropdownMenuItem(value: 1000, child: Text('1000枚')),
-              ],
-              onChanged: _busy
-                  ? null
-                  : (v) {
-                      if (v == null) return;
-                      setState(() => _maxCount = v);
-                    },
-            ),
-          ],
-        ),
-    );
-
-    // 4. Hero Import Button (Expressive Large Pill/Rounded Container)
-    Widget? importButton;
-    if (!_busy) {
-      importButton = Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              colorScheme.primary,
-              const Color(0xFF6366F1), // Expressive Indigo accent
             ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
           ),
-          borderRadius: BorderRadius.circular(28),
-          boxShadow: [
-            BoxShadow(
-              color: colorScheme.primary.withValues(alpha: 0.35),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
+          const SizedBox(height: 16),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              value: _progress,
+              minHeight: 6,
+              backgroundColor: BestShotTheme.backgroundPrimary,
+              valueColor: const AlwaysStoppedAnimation<Color>(BestShotTheme.accentBlue),
+            ),
+          ),
+          const SizedBox(height: 18),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: BestShotTheme.accentRed),
+              foregroundColor: BestShotTheme.accentRed,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+            ),
+            onPressed: () {
+              setState(() {
+                _status = 'キャンセル中...';
+                _cancelled = true;
+              });
+            },
+            icon: const Icon(Icons.cancel_outlined, size: 16),
+            label: const Text('処理を中断', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusDisplay() {
+    if (_busy || _status.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: _isError
+              ? BestShotTheme.accentRed.withValues(alpha: 0.1)
+              : BestShotTheme.surfaceColor,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: _isError
+                ? BestShotTheme.accentRed.withValues(alpha: 0.5)
+                : BestShotTheme.dividerColor,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              _isError ? Icons.error_outline_rounded : Icons.info_outline_rounded,
+              color: _isError ? BestShotTheme.accentRed : BestShotTheme.accentBlue,
+              size: 18,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                _status,
+                style: TextStyle(
+                  color: _isError ? BestShotTheme.accentRed : BestShotTheme.textPrimary,
+                  fontSize: 13,
+                ),
+              ),
             ),
           ],
         ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () => _runFolderImportAndAnalyze(!isWindows),
-            borderRadius: BorderRadius.circular(28),
-            child: Padding(
-              padding: EdgeInsets.symmetric(
-                vertical: isSmallMobile ? 18 : 26,
-                horizontal: 16,
+      ),
+    );
+  }
+
+  Widget _buildParametersSidebar(BuildContext context, bool isSmallMobile, bool isAndroid) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: BestShotTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: BestShotTheme.dividerColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.tune_rounded, size: 15, color: BestShotTheme.accentBlue),
+              SizedBox(width: 8),
+              Text(
+                'PIPELINE CONFIGURATION',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.8,
+                  color: BestShotTheme.textSecondary,
+                ),
               ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // 1. 検出モード
+          const Text(
+            '検出・評価モード (Detection Mode)',
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: _modeSegmentItem(
+                  title: '標準モード',
+                  icon: Icons.auto_awesome_mosaic_outlined,
+                  selected: _detectionMode == DetectionMode.standard,
+                  onTap: _busy ? null : () => setState(() => _detectionMode = DetectionMode.standard),
+                ),
+              ),
+              if (isAndroid) ...[
+                const SizedBox(width: 6),
+                Expanded(
+                  child: _modeSegmentItem(
+                    title: 'ポートレート',
+                    icon: Icons.face_rounded,
+                    selected: _detectionMode == DetectionMode.portrait,
+                    onTap: _busy ? null : () => setState(() => _detectionMode = DetectionMode.portrait),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // 2. 連写判定インターバル
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Expanded(
+                child: Text(
+                  '連写・同一シーン判定時間窓',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _formatBurstWindow(_burstWindowSeconds),
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: BestShotTheme.accentGold,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 5,
+            runSpacing: 5,
+            children: [
+              _presetBurstChip(5, '5秒 (連写)'),
+              _presetBurstChip(15, '15秒 (標準)'),
+              _presetBurstChip(30, '30秒 (長連写)'),
+              _presetBurstChip(60, '60秒 (1分)'),
+              _customBurstChip(),
+            ],
+          ),
+          // カスタム入力行
+          if (_isCustomBurstSelected()) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: BestShotTheme.backgroundPrimary,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: BestShotTheme.dividerColor),
+              ),
+              child: Row(
                 children: [
-                  Container(
-                    padding: EdgeInsets.all(isSmallMobile ? 10 : 14),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.18),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.folder_open_rounded,
-                      size: isSmallMobile ? 28 : 36,
-                      color: Colors.white,
+                  Expanded(
+                    child: DropdownButtonFormField<int>(
+                      initialValue: _burstMinutes.clamp(0, 60),
+                      dropdownColor: BestShotTheme.surfaceColor,
+                      decoration: const InputDecoration(
+                        labelText: '分 (Min)',
+                        labelStyle: TextStyle(fontSize: 10, color: BestShotTheme.textSecondary),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      ),
+                      items: [
+                        for (var i = 0; i <= 60; i++)
+                          DropdownMenuItem(
+                            value: i,
+                            child: Text(i.toString().padLeft(2, '0'), style: const TextStyle(fontSize: 11)),
+                          ),
+                      ],
+                      onChanged: _busy
+                          ? null
+                          : (v) {
+                              if (v == null) return;
+                              setState(() => _burstMinutes = v);
+                              _normalizeBurstTotal();
+                            },
                     ),
                   ),
-                  SizedBox(height: isSmallMobile ? 10 : 14),
-                  Text(
-                    isWindows ? 'フォルダを指定してインポート' : 'スキャンするフォルダを選択',
-                    style: TextStyle(
-                      fontSize: isSmallMobile ? 15 : 17,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.3,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    'サブフォルダ内の画像も自動的に再帰スキャンされます',
-                    style: TextStyle(
-                      fontSize: isSmallMobile ? 11 : 12,
-                      color: Colors.white.withValues(alpha: 0.75),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: DropdownButtonFormField<int>(
+                      initialValue: _burstSeconds.clamp(0, 59),
+                      dropdownColor: BestShotTheme.surfaceColor,
+                      decoration: const InputDecoration(
+                        labelText: '秒 (Sec)',
+                        labelStyle: TextStyle(fontSize: 10, color: BestShotTheme.textSecondary),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      ),
+                      items: [
+                        for (var i = 0; i < 60; i++)
+                          DropdownMenuItem(
+                            value: i,
+                            child: Text(i.toString().padLeft(2, '0'), style: const TextStyle(fontSize: 11)),
+                          ),
+                      ],
+                      onChanged: _busy
+                          ? null
+                          : (v) {
+                              if (v == null) return;
+                              setState(() => _burstSeconds = v);
+                              _normalizeBurstTotal();
+                            },
                     ),
                   ),
                 ],
               ),
             ),
+          ],
+          const SizedBox(height: 16),
+
+          // 3. 最大インポート件数
+          const Text(
+            '最大インポート件数 (Batch Limit)',
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 5,
+            runSpacing: 5,
+            children: [
+              _presetMaxCountChip(50, '50枚'),
+              _presetMaxCountChip(100, '100枚'),
+              _presetMaxCountChip(200, '200枚 (標準)'),
+              _presetMaxCountChip(500, '500枚'),
+              _presetMaxCountChip(1000, '1000枚'),
+            ],
+          ),
+          const SizedBox(height: 18),
+          const Divider(color: BestShotTheme.dividerColor, height: 1),
+          const SizedBox(height: 12),
+
+          // 5. システム診断
+          const Text(
+            'SYSTEM DIAGNOSTICS',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.8,
+              color: BestShotTheme.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 6),
+          _diagnosticRow('Isolate Pool', '${Platform.numberOfProcessors} Threads Active'),
+          _diagnosticRow('Memory Cache', '256MB LRU Image Cache'),
+          _diagnosticRow('Engines', 'Laplacian + ORB + pHash 64bit'),
+        ],
+      ),
+    );
+  }
+
+  bool _isCustomBurstSelected() {
+    return !([5, 15, 30, 60].contains(_burstWindowSeconds));
+  }
+
+  Widget _presetBurstChip(int seconds, String label) {
+    final selected = _burstWindowSeconds == seconds;
+    return InkWell(
+      onTap: _busy
+          ? null
+          : () {
+              setState(() {
+                _burstMinutes = seconds ~/ 60;
+                _burstSeconds = seconds % 60;
+              });
+            },
+      borderRadius: BorderRadius.circular(3),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: selected ? BestShotTheme.accentBlue.withValues(alpha: 0.2) : BestShotTheme.backgroundPrimary,
+          borderRadius: BorderRadius.circular(3),
+          border: Border.all(
+            color: selected ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+            width: selected ? 1.5 : 1.0,
           ),
         ),
-      );
-    }
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            color: selected ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
 
-    // 5. Status and Progress Display (Expressive Card & Pill Bar)
-    Widget? progressDisplay;
-    if (_busy) {
-      progressDisplay = GlassContainer(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            SizedBox(
-              width: 44,
-              height: 44,
-              child: CircularProgressIndicator(
-                strokeWidth: 4,
-                valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
-              ),
-            ),
-            const SizedBox(height: 18),
-            if (_stage.isNotEmpty)
-              Text(
-                _stage,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: colorScheme.primary,
-                ),
-              ),
-            const SizedBox(height: 8),
-            Text(
-              _status,
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: Colors.white.withValues(alpha: 0.9),
-                height: 1.4,
-              ),
-            ),
-            if (_progress != null) ...[
-              const SizedBox(height: 18),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(999),
-                child: LinearProgressIndicator(
-                  value: _progress,
-                  minHeight: 10,
-                  backgroundColor: colorScheme.primary.withValues(alpha: 0.15),
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    colorScheme.primary,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '${(_progress! * 100).toStringAsFixed(0)}%',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: colorScheme.primary,
-                ),
-              ),
-            ],
-            const SizedBox(height: 18),
-            FilledButton.tonalIcon(
-              onPressed: () {
+  Widget _customBurstChip() {
+    final selected = _isCustomBurstSelected();
+    return InkWell(
+      onTap: _busy
+          ? null
+          : () {
+              if (!selected) {
                 setState(() {
-                  _status = 'キャンセル中...';
-                  _cancelled = true;
+                  _burstMinutes = 0;
+                  _burstSeconds = 45; // Default custom value
                 });
-              },
-              icon: const Icon(Icons.cancel_outlined, size: 18),
-              label: const Text('キャンセル'),
-              style: FilledButton.styleFrom(
-                backgroundColor: colorScheme.errorContainer.withValues(alpha: 0.4),
-                foregroundColor: colorScheme.error,
+              }
+            },
+      borderRadius: BorderRadius.circular(3),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: selected ? BestShotTheme.accentBlue.withValues(alpha: 0.2) : BestShotTheme.backgroundPrimary,
+          borderRadius: BorderRadius.circular(3),
+          border: Border.all(
+            color: selected ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+            width: selected ? 1.5 : 1.0,
+          ),
+        ),
+        child: Text(
+          'カスタム',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            color: selected ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _presetMaxCountChip(int count, String label) {
+    final selected = _maxCount == count;
+    return InkWell(
+      onTap: _busy ? null : () => setState(() => _maxCount = count),
+      borderRadius: BorderRadius.circular(3),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: selected ? BestShotTheme.accentBlue.withValues(alpha: 0.2) : BestShotTheme.backgroundPrimary,
+          borderRadius: BorderRadius.circular(3),
+          border: Border.all(
+            color: selected ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+            width: selected ? 1.5 : 1.0,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            color: selected ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+
+
+  Widget _modeSegmentItem({
+    required String title,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(3),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+        decoration: BoxDecoration(
+          color: selected ? BestShotTheme.accentBlue.withValues(alpha: 0.15) : BestShotTheme.backgroundPrimary,
+          borderRadius: BorderRadius.circular(3),
+          border: Border.all(
+            color: selected ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+            width: selected ? 1.5 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 14, color: selected ? BestShotTheme.accentBlue : BestShotTheme.textSecondary),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                title,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                  color: selected ? BestShotTheme.textPrimary : BestShotTheme.textSecondary,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
         ),
-      );
-    }
-
-    // 6. Non-busy error/info status
-    Widget? errorDisplay;
-    if (!_busy && _status.isNotEmpty) {
-      errorDisplay = Padding(
-        padding: const EdgeInsets.only(top: 16),
-        child: GlassContainer(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-          backgroundColor: _isError
-                ? colorScheme.error.withValues(alpha: 0.12)
-                : colorScheme.secondary.withValues(alpha: 0.08),
-          borderColor: _isError
-                  ? colorScheme.error.withValues(alpha: 0.3)
-                  : colorScheme.secondary.withValues(alpha: 0.2),
-          child: Row(
-            children: [
-              Icon(
-                _isError
-                    ? Icons.error_outline_rounded
-                    : Icons.info_outline_rounded,
-                color: _isError
-                    ? colorScheme.error
-                    : colorScheme.secondary,
-                size: 22,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  _status,
-                  style: TextStyle(
-                    color: _isError
-                        ? colorScheme.error
-                        : Colors.white.withValues(alpha: 0.95),
-                    fontSize: 13.5,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'BestShot',
-          style: TextStyle(
-            fontWeight: FontWeight.w700, // Slightly less bold for pro look
-            fontSize: 22,
-            letterSpacing: 1.2,
-            color: Colors.white,
-          ),
-        ),
       ),
-      body: GlobalBackground(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: isWide ? 1150 : 580),
-            child: SingleChildScrollView(
-              padding: EdgeInsets.symmetric(
-                horizontal: isSmallMobile ? 16 : 24,
-                vertical: isSmallMobile ? 12 : 20,
+    );
+  }
+
+  Widget _diagnosticRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          Text(label, style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: const TextStyle(
+                fontSize: 11,
+                fontFamily: 'monospace',
+                color: BestShotTheme.textPrimary,
               ),
-              child: isWide
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // 左カラム (説明、インポートボタン、進捗、InfoCard)
-                        Expanded(
-                          flex: 6,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              heroHeader,
-                              const SizedBox(height: 24),
-                              ?importButton,
-                              ?progressDisplay,
-                              ?errorDisplay,
-                              const SizedBox(height: 24),
-                              infoCard,
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 24),
-                        // 右カラム (設定パネル)
-                        Expanded(flex: 4, child: parametersCard),
-                      ],
-                    )
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        heroHeader,
-                        SizedBox(height: isSmallMobile ? 12 : 20),
-                        infoCard,
-                        SizedBox(height: isSmallMobile ? 12 : 20),
-                        parametersCard,
-                        SizedBox(height: isSmallMobile ? 16 : 24),
-                        ?importButton,
-                        ?progressDisplay,
-                        ?errorDisplay,
-                      ],
-                    ),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1223,64 +1703,4 @@ String _formatBurstWindow(int seconds) {
   return '$hours 時間 $minRem 分 $rem 秒';
 }
 
-class _InfoCard extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    return GlassContainer(
-      padding: const EdgeInsets.all(20),
-      child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: colorScheme.secondary.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Icon(
-                Icons.analytics_rounded,
-                color: colorScheme.secondary,
-                size: 26,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'AI判定ロジックについて',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  DefaultTextStyle(
-                    style: theme.textTheme.bodySmall!.copyWith(
-                      color: Colors.white.withValues(alpha: 0.7),
-                      height: 1.5,
-                      fontSize: 12,
-                    ),
-                    child: const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('• 類似グルーピング: 高精度PerceptualHash (pHash) 解析'),
-                        Text('• ピント解像評価: OpenCV Laplacian分散 による輪郭抽出'),
-                        Text('• メモリ保護: 画像の軽量サムネイル化 ＆ 別Isolateでの並列解析'),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-    );
-  }
-}
 
