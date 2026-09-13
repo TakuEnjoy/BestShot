@@ -127,6 +127,20 @@ class AnalyzerIsolate {
           if (workerSendPorts.containsKey(workerId)) {
             assignNextTask(workerId, workerSendPorts[workerId]!);
           }
+        } else if (message is _WorkerErrorMessage) {
+          if (!completer.isCompleted) {
+            final target = message.filePath != null
+                ? p.basename(message.filePath!)
+                : (message.failedKey ?? 'Worker ${message.workerId}');
+            completer.completeError(
+              AnalysisException(
+                '写真解析中にエラーが発生しました ($target): ${message.errorMessage}',
+                itemKey: message.failedKey,
+                filePath: message.filePath,
+                cause: message.errorMessage,
+              ),
+            );
+          }
         } else if (message is _WorkerDoneMessage) {
           finishedWorkers++;
           if (finishedWorkers >= actualWorkerCount) {
@@ -170,7 +184,16 @@ class AnalyzerIsolate {
     // Isolate.spawn の entrypoint は「void Function(T)」である必要があるため、
     // async を直接渡さずに内部の async 処理へ委譲する。
     _entryAsync(message).catchError((e, s) {
-      developer.log('Analyzer _entryAsync error: $e\n$s');
+      developer.log('Analyzer _entryAsync fatal error: $e\n$s');
+      try {
+        message.mainSendPort.send(
+          _WorkerErrorMessage(
+            workerId: message.workerId,
+            errorMessage: 'Isolate初期化失敗: $e',
+            stackTrace: s.toString(),
+          ),
+        );
+      } catch (_) {}
     });
   }
 
@@ -241,21 +264,35 @@ class AnalyzerIsolate {
           break;
         } else if (msg is _MainTaskMessage) {
           final input = msg.input;
-          final bytes = input.data?.materialize().asUint8List();
-          final out = await _analyzeOne(
-            input.key,
-            bytes,
-            filePath: input.filePath,
-            mode: message.mode,
-            faceDetector: faceDetector,
-            tmpDir: tmpDir,
-            faceCascade: faceCascade,
-            eyeCascade: eyeCascade,
-            orbDetector: orbDetector,
-          );
-          message.mainSendPort.send(
-            _WorkerResultMessage(workerId: message.workerId, output: out),
-          );
+          try {
+            final bytes = input.data?.materialize().asUint8List();
+            final out = await _analyzeOne(
+              input.key,
+              bytes,
+              filePath: input.filePath,
+              mode: message.mode,
+              faceDetector: faceDetector,
+              tmpDir: tmpDir,
+              faceCascade: faceCascade,
+              eyeCascade: eyeCascade,
+              orbDetector: orbDetector,
+            );
+            message.mainSendPort.send(
+              _WorkerResultMessage(workerId: message.workerId, output: out),
+            );
+          } catch (e, s) {
+            developer.log('Error analyzing item ${input.key} (${input.filePath}): $e\n$s');
+            message.mainSendPort.send(
+              _WorkerErrorMessage(
+                workerId: message.workerId,
+                failedKey: input.key,
+                filePath: input.filePath,
+                errorMessage: e.toString(),
+                stackTrace: s.toString(),
+              ),
+            );
+            break;
+          }
         }
       }
     } finally {
@@ -324,7 +361,7 @@ class AnalyzerIsolate {
       };
       if (rawExts.contains(ext)) {
         final jpegBytes = JpegUtils.extractEmbeddedJpeg(fileBytes);
-        rawBytes = jpegBytes ?? fileBytes;
+        rawBytes = jpegBytes != null ? Uint8List.fromList(jpegBytes) : fileBytes;
       } else {
         rawBytes = fileBytes;
       }
@@ -1308,6 +1345,21 @@ class _WorkerDoneMessage extends _WorkerMessage {
   final int workerId;
 }
 
+class _WorkerErrorMessage extends _WorkerMessage {
+  _WorkerErrorMessage({
+    required this.workerId,
+    this.failedKey,
+    this.filePath,
+    required this.errorMessage,
+    this.stackTrace,
+  });
+  final int workerId;
+  final String? failedKey;
+  final String? filePath;
+  final String errorMessage;
+  final String? stackTrace;
+}
+
 sealed class _MainMessage {}
 
 class _MainTaskMessage extends _MainMessage {
@@ -1316,3 +1368,16 @@ class _MainTaskMessage extends _MainMessage {
 }
 
 class _MainShutdownMessage extends _MainMessage {}
+
+/// Exception thrown when image analysis fails in an isolate.
+class AnalysisException implements Exception {
+  AnalysisException(this.message, {this.itemKey, this.filePath, this.cause});
+  final String message;
+  final String? itemKey;
+  final String? filePath;
+  final Object? cause;
+
+  @override
+  String toString() => message;
+}
+

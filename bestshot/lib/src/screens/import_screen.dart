@@ -373,7 +373,7 @@ class _ImportScreenState extends State<ImportScreen> {
         _status = '類似写真をグループ化中...';
         _progress = null;
       });
-      final groups = PhotoGrouper.group(
+      final groups = await PhotoGrouper.groupAsync(
         enrichedEntries,
         GroupingConfig(burstWindowSeconds: _burstWindowSeconds),
       );

@@ -336,13 +336,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
         task.statusText = 'ゴミ箱へ移動中...';
       });
 
-      await DeleteService.moveToTrash(entries);
+      final result = await DeleteService.moveToTrash(entries);
 
       if (mounted) {
         setState(() {
           _processingKeys.removeAll(targets);
 
-          for (final entry in entries) {
+          for (final entry in result.success) {
             for (var i = 0; i < _groups.length; i++) {
               final g = _groups[i];
               if (g.items.any((item) => item.key == entry.key)) {
@@ -357,9 +357,23 @@ class _GroupsScreenState extends State<GroupsScreen> {
           _clampKeyboardIndices();
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('ゴミ箱へ移動しました')),
-        );
+        if (result.isAllSuccess) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${result.success.length}枚をゴミ箱へ移動しました')),
+          );
+        } else {
+          final failedTotal = result.failed.length + result.unprocessed.length;
+          final detail = result.errorMessage != null ? '\n詳細: ${result.errorMessage}' : '';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '${result.success.length}枚を移動、$failedTotal枚の移動に失敗しました。$detail',
+              ),
+              backgroundColor: Colors.redAccent,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -367,7 +381,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
           _processingKeys.removeAll(targets);
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('削除失敗: $e')),
+          SnackBar(content: Text('削除処理エラー: $e')),
         );
       }
     } finally {

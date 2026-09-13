@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' as math;
 
 import 'package:exif/exif.dart';
 import 'package:flutter/foundation.dart';
@@ -153,9 +154,33 @@ class ImportService {
       '.orf',
     };
 
+    // Detect RAW or large files (> 12MB) to limit concurrency and in-flight memory footprint
+    var hasLargeOrRawFiles = false;
+    final sampleCount = math.min(files.length, 10);
+    for (int i = 0; i < sampleCount; i++) {
+      final ext = p.extension(files[i].path).toLowerCase();
+      if (rawExts.contains(ext)) {
+        hasLargeOrRawFiles = true;
+        break;
+      }
+    }
+    if (!hasLargeOrRawFiles && files.isNotEmpty) {
+      try {
+        if (await files.first.length() > 12 * 1024 * 1024) {
+          hasLargeOrRawFiles = true;
+        }
+      } catch (_) {}
+    }
+
+    final isMobile = Platform.isAndroid || Platform.isIOS;
     final processorCount = Platform.numberOfProcessors;
-    final maxWorkers = (processorCount ~/ 2).clamp(1, 6);
+    // For large/RAW files: 1 worker on mobile, max 2 on desktop.
+    // For normal files: 2 workers on mobile, max 4 on desktop.
+    final maxWorkers = hasLargeOrRawFiles
+        ? (isMobile ? 1 : 2)
+        : (isMobile ? 2 : (processorCount ~/ 2).clamp(1, 4));
     final workerCount = files.length < maxWorkers ? files.length : maxWorkers;
+    final chunkSize = hasLargeOrRawFiles ? 2 : 4;
 
     final out = <ImportedItem>[];
     var done = 0;
@@ -177,8 +202,6 @@ class ImportService {
         if (isCancelled?.call() == true) return;
 
         final startIndex = currentIndex;
-        final chunkSize =
-            5; // Process 5 files per isolate spawn to balance overhead vs progress updates
         currentIndex += chunkSize;
 
         if (startIndex >= files.length) return;
@@ -414,10 +437,42 @@ Future<List<_ImportPayload?>> Function() _createIsolateTask(
       final f = File(path);
       try {
         final ext = p.extension(f.path).toLowerCase();
-        final bytes = await f.readAsBytes();
-        final decodeSource = rawExts.contains(ext)
-            ? (JpegUtils.extractEmbeddedJpeg(bytes) ?? bytes)
-            : bytes;
+        Uint8List decodeSource;
+
+        if (rawExts.contains(ext)) {
+          // Priority thumbnail extraction:
+          // In RAW files (DNG, NEF, ARW, CR2, CR3), embedded preview JPEG is almost always
+          // in the first 8MB header. Reading only the first 8MB avoids reading 50-100MB into RAM!
+          Uint8List? previewJpg;
+          final fileSize = await f.length();
+          final readHeaderSize = math.min(fileSize, 8 * 1024 * 1024);
+          try {
+            final raf = await f.open();
+            try {
+              final headerBytes = await raf.read(readHeaderSize);
+              final extracted = JpegUtils.extractEmbeddedJpeg(headerBytes);
+              if (extracted != null) {
+                previewJpg = Uint8List.fromList(extracted);
+              }
+            } finally {
+              await raf.close();
+            }
+          } catch (_) {}
+
+          if (previewJpg == null && fileSize > readHeaderSize) {
+            // If not found in first 8MB, fall back to reading whole file
+            final fullBytes = await f.readAsBytes();
+            final extracted = JpegUtils.extractEmbeddedJpeg(fullBytes);
+            if (extracted != null) {
+              previewJpg = Uint8List.fromList(extracted);
+            } else {
+              previewJpg = fullBytes;
+            }
+          }
+          decodeSource = previewJpg ?? await f.readAsBytes();
+        } else {
+          decodeSource = await f.readAsBytes();
+        }
 
         Uint8List? thumbJpg;
         try {
