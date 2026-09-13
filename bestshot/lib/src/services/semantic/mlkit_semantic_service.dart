@@ -15,6 +15,9 @@ class MlKitSemanticService {
   final ObjectDetector _objectDetector;
   final FaceDetector _faceDetector;
 
+  bool _objectDetectionAvailable = true;
+  bool _faceDetectionAvailable = true;
+
   static Future<MlKitSemanticService> create() async {
     final objectDetector = ObjectDetector(
       options: ObjectDetectorOptions(
@@ -33,8 +36,20 @@ class MlKitSemanticService {
   }
 
   Future<void> close() async {
-    await _objectDetector.close();
-    await _faceDetector.close();
+    if (_objectDetectionAvailable) {
+      try {
+        await _objectDetector.close();
+      } catch (e) {
+        developer.log('Error closing object detector: $e');
+      }
+    }
+    if (_faceDetectionAvailable) {
+      try {
+        await _faceDetector.close();
+      } catch (e) {
+        developer.log('Error closing face detector: $e');
+      }
+    }
   }
 
   Future<List<PhotoEntry>> enrich(
@@ -75,8 +90,25 @@ class MlKitSemanticService {
       await File(fp).writeAsBytes(bytes, flush: true);
       final input = InputImage.fromFilePath(fp);
 
-      final objects = await _objectDetector.processImage(input);
-      final faces = await _faceDetector.processImage(input);
+      List<DetectedObject> objects = const [];
+      if (_objectDetectionAvailable) {
+        try {
+          objects = await _objectDetector.processImage(input);
+        } catch (err) {
+          developer.log('Object detection unavailable, disabling for session: $err');
+          _objectDetectionAvailable = false;
+        }
+      }
+
+      List<Face> faces = const [];
+      if (_faceDetectionAvailable) {
+        try {
+          faces = await _faceDetector.processImage(input);
+        } catch (err) {
+          developer.log('Face detection unavailable, disabling for session: $err');
+          _faceDetectionAvailable = false;
+        }
+      }
       final faceScore = _faceQualityScore(faces);
 
       if (objects.isEmpty) {

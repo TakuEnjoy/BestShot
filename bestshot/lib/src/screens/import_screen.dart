@@ -337,21 +337,29 @@ class _ImportScreenState extends State<ImportScreen> {
           _status = 'ML Kitで被写体/表情を解析中...';
           _progress = 0;
         });
-        final svc = await MlKitSemanticService.create();
         try {
-          enrichedEntries = await svc.enrich(
-            entries,
-            onProgress: (done, total) {
-              if (!mounted) return;
-              setState(() {
-                _progress = total <= 0 ? null : (done / total).clamp(0.0, 1.0);
-                _status = 'ML Kit解析中... ($done / $total)';
-              });
-            },
-            isCancelled: () => _cancelled,
-          );
-        } finally {
-          await svc.close();
+          final svc = await MlKitSemanticService.create();
+          try {
+            enrichedEntries = await svc.enrich(
+              entries,
+              onProgress: (done, total) {
+                if (!mounted) return;
+                setState(() {
+                  _progress = total <= 0 ? null : (done / total).clamp(0.0, 1.0);
+                  _status = 'ML Kit解析中... ($done / $total)';
+                });
+              },
+              isCancelled: () => _cancelled,
+            );
+          } finally {
+            try {
+              await svc.close();
+            } catch (e) {
+              debugPrint('Error closing MlKitSemanticService: $e');
+            }
+          }
+        } catch (e, stack) {
+          debugPrint('ML Kit semantic analysis skipped due to error: $e\n$stack');
         }
       }
 
@@ -764,8 +772,9 @@ class _ImportScreenState extends State<ImportScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    // 選択枚数表示と警告
+                    // 選択枚数表示
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
                           '選択中: $totalSelected 枚',
@@ -775,18 +784,50 @@ class _ImportScreenState extends State<ImportScreen> {
                             fontSize: 13,
                           ),
                         ),
-                        if (isOverLimit) ...[
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '※ 上限 ($_maxCount枚) を超えた分は自動除外されます',
-                              style: const TextStyle(color: BestShotTheme.accentGold, fontSize: 11),
-                              overflow: TextOverflow.ellipsis,
+                        if (isOverLimit)
+                          Text(
+                            '上限: $_maxCount 枚',
+                            style: const TextStyle(
+                              color: BestShotTheme.textSecondary,
+                              fontSize: 12,
                             ),
                           ),
-                        ],
                       ],
                     ),
+                    if (isOverLimit) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: BestShotTheme.accentGold.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: BestShotTheme.accentGold.withValues(alpha: 0.4),
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(
+                              Icons.warning_amber_rounded,
+                              size: 16,
+                              color: BestShotTheme.accentGold,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '上限 ($_maxCount枚) を超えた分は自動除外されます (先頭から $_maxCount枚 をインポート)',
+                                style: const TextStyle(
+                                  color: BestShotTheme.accentGold,
+                                  fontSize: 11,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
