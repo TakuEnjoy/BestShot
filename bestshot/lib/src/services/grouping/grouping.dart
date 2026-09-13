@@ -66,12 +66,14 @@ class PhotoGrouper {
   // ADVANCED GROUPING: Multi-Candidate Generation + Constrained Clustering
   // =========================================================================
   static List<PhotoGroup> _groupAdvanced(List<PhotoEntry> items, GroupingConfig config) {
-    // 1. Sort items chronologically
+    // 1. Sort items chronologically (with key as stable tie-breaker)
     final sorted = items.toList()
       ..sort((a, b) {
         final ta = a.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
         final tb = b.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return ta.compareTo(tb);
+        final cmp = ta.compareTo(tb);
+        if (cmp != 0) return cmp;
+        return a.key.toLowerCase().compareTo(b.key.toLowerCase());
       });
 
     final n = sorted.length;

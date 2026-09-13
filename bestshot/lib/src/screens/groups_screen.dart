@@ -912,11 +912,11 @@ class _GroupsScreenState extends State<GroupsScreen> {
     textController.dispose();
 
     if (newFolder != null && newFolder.isNotEmpty) {
-      final RegExp invalidChars = RegExp(r'[<>:"/\\|?*]');
-      if (invalidChars.hasMatch(newFolder)) {
+      final validation = SortService.validateFolderName(newFolder);
+      if (!validation.isValid) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('フォルダ名に使用できない文字が含まれています。')),
+            SnackBar(content: Text(validation.errorMessage ?? '無効なフォルダ名です')),
           );
         }
         return;

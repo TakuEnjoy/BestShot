@@ -106,14 +106,11 @@ Float32List _calcHueHistogram(cv.Mat bgr) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('Production PhotoGrouper groups Test folder into exactly 20 ground-truth clusters', () async {
-    final dirPath = r'C:\Users\makww\Documents\AiProjects\Test';
-    final dir = Directory(dirPath);
-    if (!dir.existsSync()) {
-      print('Test folder not present at $dirPath, skipping real folder test.');
-      return;
-    }
+  final dirPath = Platform.environment['BESTSHOT_TEST_DIR'] ?? r'C:\Users\makww\Documents\AiProjects\Test';
+  final dir = Directory(dirPath);
+  final isAvailable = dir.existsSync();
 
+  test('Production PhotoGrouper groups Test folder into exactly 20 ground-truth clusters', () async {
     final files = dir.listSync().whereType<File>().toList();
     files.sort((a, b) => p.basename(a.path).toLowerCase().compareTo(p.basename(b.path).toLowerCase()));
 
@@ -262,5 +259,5 @@ void main() {
         reason: 'Ground truth mismatch: Expected $expected, but got $actualNames',
       );
     }
-  });
+  }, skip: isAvailable ? false : 'Test folder not present at $dirPath (set BESTSHOT_TEST_DIR to enable)');
 }

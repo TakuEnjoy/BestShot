@@ -8,7 +8,79 @@ class SortResult {
   final List<String> failedFiles; // 失敗したファイルの元パス一覧
 }
 
+class FolderValidationResult {
+  const FolderValidationResult({required this.isValid, this.errorMessage});
+  final bool isValid;
+  final String? errorMessage;
+}
+
 class SortService {
+  /// Windows reserved device names that cannot be used as folder/file names.
+  static const Set<String> _reservedWindowsNames = {
+    'CON', 'PRN', 'AUX', 'NUL',
+    'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+    'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+  };
+
+  /// Validates [name] as a safe relative folder name.
+  /// Prevents path traversal (e.g. `..`), reserved OS names, illegal characters,
+  /// control characters, and trailing periods or spaces.
+  static FolderValidationResult validateFolderName(String? name) {
+    if (name == null || name.trim().isEmpty) {
+      return const FolderValidationResult(isValid: false, errorMessage: 'フォルダ名を入力してください');
+    }
+
+    final trimmed = name.trim();
+
+    // Check path traversal & directory separators
+    if (trimmed == '.' ||
+        trimmed == '..' ||
+        trimmed.contains('/') ||
+        trimmed.contains(r'\') ||
+        trimmed.contains('..')) {
+      return const FolderValidationResult(
+        isValid: false,
+        errorMessage: 'フォルダ名にパス区切り記号や「..」を含めることはできません',
+      );
+    }
+
+    // Trailing dot or space check (Windows filesystem limitation)
+    if (trimmed.endsWith('.') || trimmed.endsWith(' ')) {
+      return const FolderValidationResult(
+        isValid: false,
+        errorMessage: 'フォルダ名の末尾にピリオドや空白を使用することはできません',
+      );
+    }
+
+    // Windows reserved device names
+    final upper = trimmed.toUpperCase();
+    if (_reservedWindowsNames.contains(upper)) {
+      return FolderValidationResult(
+        isValid: false,
+        errorMessage: '「$trimmed」はシステム予約語のため使用できません',
+      );
+    }
+
+    // Check length (MAX_PATH safety)
+    if (trimmed.length > 50) {
+      return const FolderValidationResult(
+        isValid: false,
+        errorMessage: 'フォルダ名は50文字以内で入力してください',
+      );
+    }
+
+    // Invalid filesystem characters: < > : " / \ | ? * and control chars (0-31)
+    final invalidChars = RegExp(r'[<>:"/\\|?*\x00-\x1F]');
+    if (invalidChars.hasMatch(trimmed)) {
+      return const FolderValidationResult(
+        isValid: false,
+        errorMessage: 'フォルダ名に使用できない記号が含まれています',
+      );
+    }
+
+    return const FolderValidationResult(isValid: true);
+  }
+
   /// 選択された写真の一括移動またはコピーを実行します。
   /// [sortMap] : PhotoKey ➔ FolderName
   /// [entries] : PhotoEntry のリスト（ファイルの元パス取得用）
@@ -81,8 +153,24 @@ class SortService {
         continue;
       }
 
+      final validation = validateFolderName(folderName);
+      if (!validation.isValid) {
+        failed.add(srcPath);
+        done++;
+        onProgress?.call(done, total);
+        continue;
+      }
+
       final srcDir = p.dirname(srcPath);
       final destDir = Directory(p.join(srcDir, folderName));
+      final canonicalSrc = p.canonicalize(srcDir);
+      final canonicalDest = p.canonicalize(destDir.path);
+      if (!p.isWithin(canonicalSrc, canonicalDest)) {
+        failed.add(srcPath);
+        done++;
+        onProgress?.call(done, total);
+        continue;
+      }
       var destPath = '';
 
       try {

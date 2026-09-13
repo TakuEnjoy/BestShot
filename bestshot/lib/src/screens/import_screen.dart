@@ -69,11 +69,46 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   late final FocusNode _focusNode;
+  bool _embeddingModelAvailable = false;
+  String? _embeddingModelPath;
 
   @override
   void initState() {
     super.initState();
     _focusNode = FocusNode();
+    _checkEmbeddingModel();
+  }
+
+  Future<void> _checkEmbeddingModel() async {
+    try {
+      final supportDir = await getApplicationSupportDirectory();
+      final candidatePaths = [
+        p.join(Directory.current.path, 'assets', 'models', 'embedding.onnx'),
+        p.join(Directory.current.path, 'models', 'embedding.onnx'),
+        p.join(supportDir.path, 'models', 'embedding.onnx'),
+      ];
+      for (final cp in candidatePaths) {
+        if (await File(cp).exists()) {
+          if (mounted) {
+            setState(() {
+              _embeddingModelAvailable = true;
+              _embeddingModelPath = cp;
+            });
+          }
+          debugPrint('[Embedding] Model detected at: $cp');
+          return;
+        }
+      }
+      debugPrint('[Embedding] embedding.onnx not found. Using ORB + pHash + Color hybrid grouping.');
+      if (mounted) {
+        setState(() {
+          _embeddingModelAvailable = false;
+          _embeddingModelPath = null;
+        });
+      }
+    } catch (e) {
+      debugPrint('[Embedding] Error checking model availability: $e');
+    }
   }
 
   @override
@@ -273,17 +308,19 @@ class _ImportScreenState extends State<ImportScreen> {
       }
 
       // Embedding feature extraction (ONNX Runtime, Windows / Android)
-      final supportDir = await getApplicationSupportDirectory();
-      final candidatePaths = [
-        p.join(Directory.current.path, 'assets', 'models', 'embedding.onnx'),
-        p.join(Directory.current.path, 'models', 'embedding.onnx'),
-        p.join(supportDir.path, 'models', 'embedding.onnx'),
-      ];
-      String? foundModelPath;
-      for (final cp in candidatePaths) {
-        if (await File(cp).exists()) {
-          foundModelPath = cp;
-          break;
+      String? foundModelPath = _embeddingModelPath;
+      if (foundModelPath == null || !File(foundModelPath).existsSync()) {
+        final supportDir = await getApplicationSupportDirectory();
+        final candidatePaths = [
+          p.join(Directory.current.path, 'assets', 'models', 'embedding.onnx'),
+          p.join(Directory.current.path, 'models', 'embedding.onnx'),
+          p.join(supportDir.path, 'models', 'embedding.onnx'),
+        ];
+        for (final cp in candidatePaths) {
+          if (await File(cp).exists()) {
+            foundModelPath = cp;
+            break;
+          }
         }
       }
 
@@ -322,6 +359,8 @@ class _ImportScreenState extends State<ImportScreen> {
             embService.dispose();
           }
         }
+      } else if (!_cancelled) {
+        debugPrint('[Embedding] Model (embedding.onnx) not found. Skipping ONNX embedding inference; using ORB + pHash + Color hybrid grouping.');
       }
 
       if (_cancelled) {
@@ -1557,6 +1596,14 @@ class _ImportScreenState extends State<ImportScreen> {
           _diagnosticRow('Isolate Pool', '${Platform.numberOfProcessors} Threads Active'),
           _diagnosticRow('Memory Cache', '256MB LRU Image Cache'),
           _diagnosticRow('Engines', 'Laplacian + ORB + pHash 64bit'),
+          _diagnosticRow(
+            'Embedding ONNX',
+            _embeddingModelAvailable ? '有効 (Active)' : '無効 (未配置)',
+            valueColor: _embeddingModelAvailable ? BestShotTheme.accentGreen : BestShotTheme.textSecondary,
+            tooltip: _embeddingModelAvailable
+                ? '画像埋め込み推論が有効です (${p.basename(_embeddingModelPath ?? "embedding.onnx")})'
+                : 'embedding.onnx が未配置のため、ORB+pHash+Colorハイブリッド方式でグループ化します',
+          ),
         ],
       ),
     );
@@ -1705,8 +1752,8 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
-  Widget _diagnosticRow(String label, String value) {
-    return Padding(
+  Widget _diagnosticRow(String label, String value, {Color? valueColor, String? tooltip}) {
+    final row = Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(
         children: [
@@ -1716,10 +1763,10 @@ class _ImportScreenState extends State<ImportScreen> {
             child: Text(
               value,
               textAlign: TextAlign.end,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11,
                 fontFamily: 'monospace',
-                color: BestShotTheme.textPrimary,
+                color: valueColor ?? BestShotTheme.textPrimary,
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -1727,6 +1774,14 @@ class _ImportScreenState extends State<ImportScreen> {
         ],
       ),
     );
+
+    if (tooltip != null) {
+      return Tooltip(
+        message: tooltip,
+        child: row,
+      );
+    }
+    return row;
   }
 }
 

@@ -9,16 +9,17 @@ import 'package:bestshot/src/services/grouping/grouping.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
-  test('Full pipeline test on all 39 test images', () async {
-    final dir = Directory(r'C:\Users\makww\Documents\AiProjects\Test');
-    if (!dir.existsSync()) {
-      print('Local test directory not found, skipping.');
-      return;
-    }
-    final files = dir.listSync().whereType<File>().toList()
-      ..sort((a, b) => p.basename(a.path).compareTo(p.basename(b.path)));
+  final testDirPath = Platform.environment['BESTSHOT_TEST_DIR'] ?? r'C:\Users\makww\Documents\AiProjects\Test';
+  final dir = Directory(testDirPath);
+  final isAvailable = dir.existsSync();
 
-    expect(files.length, equals(39));
+  test(
+    'Full pipeline test on all 39 test images',
+    () async {
+      final files = dir.listSync().whereType<File>().toList()
+        ..sort((a, b) => p.basename(a.path).compareTo(p.basename(b.path)));
+
+      expect(files.length, equals(39));
 
     print('Step 1: Importing files with ImportService...');
     final imported = await ImportService.importSelectedFiles(
@@ -96,5 +97,5 @@ void main() {
     expect(sub81.items.map((e) => e.key).toList()..sort(), equals(['81.jpg', '82.jpg', '83.dng']));
     final sub131 = subsetGroups.firstWhere((g) => g.items.any((e) => e.key == '131.jpg'));
     expect(sub131.items.map((e) => e.key).toList()..sort(), equals(['131.jpg', '132.jpg']));
-  });
+  }, skip: isAvailable ? false : 'Test images directory not found at $testDirPath (set BESTSHOT_TEST_DIR to enable)');
 }
