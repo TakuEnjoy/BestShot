@@ -62,3 +62,5 @@ bestshot/.idea/
 .env
 *.pfx
 *.p12
+.venv/
+venv/

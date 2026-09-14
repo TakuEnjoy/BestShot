@@ -14,6 +14,14 @@ Output:
 import os
 import sys
 
+# Ensure UTF-8 output on Windows terminals (avoids UnicodeEncodeError on emoji/unicode)
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 def export_model():
     try:
         import torch
@@ -43,15 +51,29 @@ def export_model():
     print(f"[2/3] Exporting to ONNX: {out_path} ...")
     dummy_input = torch.randn(1, 3, 224, 224)
 
-    torch.onnx.export(
-        model,
-        dummy_input,
-        out_path,
-        input_names=["input"],
-        output_names=["output"],
-        dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}},
-        opset_version=14,
-    )
+    try:
+        # Prefer TorchScript-based exporter (dynamo=False) for maximum reliability across PyTorch versions
+        torch.onnx.export(
+            model,
+            dummy_input,
+            out_path,
+            input_names=["input"],
+            output_names=["output"],
+            dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}},
+            opset_version=14,
+            dynamo=False,
+        )
+    except TypeError:
+        # Older PyTorch versions do not take dynamo argument
+        torch.onnx.export(
+            model,
+            dummy_input,
+            out_path,
+            input_names=["input"],
+            output_names=["output"],
+            dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}},
+            opset_version=14,
+        )
 
     size_mb = os.path.getsize(out_path) / (1024 * 1024)
     print(f"[3/3] Export successful!")
