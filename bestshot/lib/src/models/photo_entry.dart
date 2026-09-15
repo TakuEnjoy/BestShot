@@ -128,7 +128,7 @@ class PhotoEntry {
   /// Luma histogram (256 entries).
   final Uint8List histogram;
 
-  /// HSV Hue histogram (180 entries).
+  /// Combined HSV color histogram (692 entries: H=180 + S=256 + V=256).
   final Float32List? hueHistogram;
 
   /// Embeddings for multi-crop (e.g. 'full', 'center', 'tl', 'tr', 'bl', 'br').
@@ -157,10 +157,15 @@ class PhotoEntry {
 
   DateTime? get capturedAt => exif?.capturedAt;
 
+  Offset? _cachedFocusPoint;
+  bool _focusPointComputed = false;
+
   /// Focus point in normalized coordinates (0.0 .. 1.0) derived from local Laplacian variance.
   Offset? get focusPoint {
+    if (_focusPointComputed) return _cachedFocusPoint;
+    _focusPointComputed = true;
     final sharps = debugGridSharps;
-    if (sharps == null || sharps.length != 16) return null;
+    if (sharps == null || sharps.length != 16) return _cachedFocusPoint = null;
 
     int bestIdx = 0;
     double maxVal = -1;
@@ -170,7 +175,7 @@ class PhotoEntry {
         bestIdx = i;
       }
     }
-    if (maxVal <= 0) return null;
+    if (maxVal <= 0) return _cachedFocusPoint = null;
 
     // Calculate center of mass for top-3 sharpest cells for sub-grid accuracy
     final entries = List.generate(16, (i) => MapEntry(i, sharps[i]))
@@ -196,10 +201,10 @@ class PhotoEntry {
     if (totalWeight <= 0) {
       final c = bestIdx % 4;
       final r = bestIdx ~/ 4;
-      return Offset((c + 0.5) / 4.0, (r + 0.5) / 4.0);
+      return _cachedFocusPoint = Offset((c + 0.5) / 4.0, (r + 0.5) / 4.0);
     }
 
-    return Offset(
+    return _cachedFocusPoint = Offset(
       (weightedX / totalWeight).clamp(0.08, 0.92),
       (weightedY / totalWeight).clamp(0.08, 0.92),
     );
@@ -284,50 +289,20 @@ class PhotoEntry {
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
-    return other is PhotoEntry &&
-        other.key == key &&
-        other.origin == origin &&
-        listEquals(other.displayBytes, displayBytes) &&
-        other.assetId == assetId &&
-        other.filePath == filePath &&
-        other.pHashHex == pHashHex &&
+    if (other is! PhotoEntry) return false;
+    if (other.key != key) return false;
+    return other.origin == origin &&
         other.sharpness == sharpness &&
         other.exposureScore == exposureScore &&
-        other.orbRows == orbRows &&
-        other.orbCols == orbCols &&
-        listEquals(other.orbBytes, orbBytes) &&
-        listEquals(other.orbKeypoints, orbKeypoints) &&
-        listEquals(other.histogram, histogram) &&
-        listEquals(other.hueHistogram, hueHistogram) &&
-        other.exif == exif &&
-        listEquals(other.semanticObjects, semanticObjects) &&
         other.faceQualityScore == faceQualityScore &&
-        other.portrait == portrait &&
-        listEquals(other.debugGridSharps, debugGridSharps);
+        other.pHashHex == pHashHex &&
+        other.filePath == filePath &&
+        other.assetId == assetId &&
+        other.exif == exif;
   }
 
   @override
-  int get hashCode {
-    return key.hashCode ^
-        origin.hashCode ^
-        Object.hashAll(displayBytes) ^
-        assetId.hashCode ^
-        filePath.hashCode ^
-        pHashHex.hashCode ^
-        sharpness.hashCode ^
-        exposureScore.hashCode ^
-        orbRows.hashCode ^
-        orbCols.hashCode ^
-        Object.hashAll(orbBytes) ^
-        Object.hashAll(orbKeypoints) ^
-        Object.hashAll(histogram) ^
-        (hueHistogram != null ? Object.hashAll(hueHistogram!) : 0) ^
-        exif.hashCode ^
-        Object.hashAll(semanticObjects) ^
-        faceQualityScore.hashCode ^
-        portrait.hashCode ^
-        (debugGridSharps != null ? Object.hashAll(debugGridSharps!) : 0);
-  }
+  int get hashCode => key.hashCode;
 
   @override
   String toString() {

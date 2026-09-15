@@ -126,7 +126,9 @@ class DeleteService {
     } else if (assetEntries.isNotEmpty) {
       final ids = assetEntries.map((e) => e.assetId!).toList();
       try {
-        final deletedIds = await PhotoManager.editor.deleteWithIds(ids);
+        final deletedIds = await PhotoManager.editor
+            .deleteWithIds(ids)
+            .timeout(const Duration(seconds: 30));
         final deletedIdSet = deletedIds.toSet();
         for (final entry in assetEntries) {
           if (deletedIdSet.contains(entry.assetId)) {

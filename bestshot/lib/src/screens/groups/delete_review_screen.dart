@@ -24,11 +24,14 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
   bool _isHolding = false;
   double _cachedTotalMb = 0.0;
 
+  final Map<String, int> _fileSizeCache = {};
+
   @override
   void initState() {
     super.initState();
     _currentItems = List.from(widget.items);
-    _cachedTotalMb = _calculateTotalMb();
+    _cachedTotalMb = _calculateTotalMbFast();
+    _loadExactFileSizes();
     _holdController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1000),
@@ -38,6 +41,37 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
         _onHoldCompleted();
       }
     });
+  }
+
+  Future<void> _loadExactFileSizes() async {
+    for (final item in _currentItems) {
+      if (item.filePath != null && !_fileSizeCache.containsKey(item.key)) {
+        try {
+          final f = File(item.filePath!);
+          if (await f.exists()) {
+            _fileSizeCache[item.key] = await f.length();
+          }
+        } catch (_) {}
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _cachedTotalMb = _calculateTotalMbFast();
+      });
+    }
+  }
+
+  double _calculateTotalMbFast() {
+    double totalBytes = 0;
+    for (final item in _currentItems) {
+      final cached = _fileSizeCache[item.key];
+      if (cached != null) {
+        totalBytes += cached;
+      } else {
+        totalBytes += item.displayBytes.length;
+      }
+    }
+    return totalBytes / (1024 * 1024);
   }
 
   @override
@@ -57,23 +91,6 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
         _loupeSelection.add(key);
       }
     });
-  }
-
-  double _calculateTotalMb() {
-    double totalBytes = 0;
-    for (final item in _currentItems) {
-      if (item.filePath != null) {
-        try {
-          final f = File(item.filePath!);
-          if (f.existsSync()) {
-            totalBytes += f.lengthSync();
-            continue;
-          }
-        } catch (_) {}
-      }
-      totalBytes += item.displayBytes.length;
-    }
-    return totalBytes / (1024 * 1024);
   }
 
   Map<String, int> _getGroupBreakdown() {
@@ -269,7 +286,7 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                                 setState(() {
                                   _currentItems.remove(item);
                                   _loupeSelection.remove(item.key);
-                                  _cachedTotalMb = _calculateTotalMb();
+                                  _cachedTotalMb = _calculateTotalMbFast();
                                 });
                                 if (_currentItems.isEmpty) {
                                   Navigator.of(context).pop(false);

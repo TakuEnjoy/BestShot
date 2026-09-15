@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:exif/exif.dart';
 import 'package:flutter/foundation.dart';
@@ -166,8 +167,12 @@ class ImportService {
     }
     if (!hasLargeOrRawFiles && files.isNotEmpty) {
       try {
-        if (await files.first.length() > 12 * 1024 * 1024) {
-          hasLargeOrRawFiles = true;
+        final sampleCount = files.length > 5 ? 5 : files.length;
+        for (var i = 0; i < sampleCount; i++) {
+          if (await files[i].length() > 12 * 1024 * 1024) {
+            hasLargeOrRawFiles = true;
+            break;
+          }
         }
       } catch (_) {}
     }
@@ -266,10 +271,12 @@ class FolderScanResult {
 
 Future<ExifSummary?> _readExifSummary(File f) async {
   try {
-    // Read first 256KB; enough for most EXIF blocks.
-    final bytes = await f
-        .openRead(0, 256 * 1024)
-        .fold<List<int>>(<int>[], (a, b) => a..addAll(b));
+    // Read first 256KB efficiently using BytesBuilder.
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in f.openRead(0, 256 * 1024)) {
+      builder.add(chunk);
+    }
+    final bytes = builder.takeBytes();
     final tags = await readExifFromBytes(bytes);
 
     String? getTag(String key) => tags[key]?.printable;
@@ -319,7 +326,8 @@ Future<ExifSummary?> _readExifSummary(File f) async {
       imageWidth: imgW,
       imageHeight: imgH,
     );
-  } catch (_) {
+  } catch (e) {
+    debugPrint('[ImportService] EXIF read skipped for ${f.path}: $e');
     return null;
   }
 }

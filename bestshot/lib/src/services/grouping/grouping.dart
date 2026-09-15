@@ -1,5 +1,6 @@
 import 'dart:isolate';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import '../../models/photo_entry.dart';
 import '../../models/photo_group.dart';
 import 'pair_evaluator.dart';
@@ -45,11 +46,26 @@ class GroupingConfig {
 
 class PhotoGrouper {
   /// Asynchronously groups [items] in a background isolate to avoid blocking the UI thread.
+  /// Strips large displayBytes thumbnails before isolate boundary to reduce transfer cost from 100+ MB to <2 MB.
   static Future<List<PhotoGroup>> groupAsync(
     List<PhotoEntry> items,
     GroupingConfig config,
-  ) {
-    return Isolate.run(() => group(items, config));
+  ) async {
+    if (items.isEmpty) return [];
+
+    // Map original entries by key to restore full displayBytes after grouping
+    final itemMap = {for (final item in items) item.key: item};
+
+    // Strip bulky displayBytes before sending across isolate boundary
+    final lightItems = items.map((e) => e.copyWith(displayBytes: Uint8List(0))).toList();
+
+    final lightGroups = await Isolate.run(() => group(lightItems, config));
+
+    // Restore original entries with displayBytes
+    return lightGroups.map((g) {
+      final restoredItems = g.items.map((e) => itemMap[e.key] ?? e).toList();
+      return g.copyWith(items: restoredItems);
+    }).toList();
   }
 
   static List<PhotoGroup> group(List<PhotoEntry> items, GroupingConfig config) {

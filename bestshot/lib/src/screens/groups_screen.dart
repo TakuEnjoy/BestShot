@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -70,6 +71,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
   bool _filterReviewOnly = false;
   bool _isFilterDrawerOpen = false;
   int _bottomNavIndex = 0;
+  Timer? _filterDebounceTimer;
 
   List<PhotoGroup>? _cachedFilteredGroups;
   String _lastFilterQuery = '';
@@ -168,6 +170,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   @override
   void dispose() {
+    _filterDebounceTimer?.cancel();
     _selectedForDeleteNotifier.dispose();
     _focusNode.dispose();
     _scrollController.dispose();
@@ -1248,6 +1251,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                           e.displayBytes,
                           width: 120,
                           height: 120,
+                          cacheWidth: 320,
                           fit: BoxFit.cover,
                           gaplessPlayback: true,
                         ),
@@ -2197,7 +2201,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
               isDense: true,
               contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             ),
-            onChanged: (v) => setState(() => _filterQuery = v),
+            onChanged: (v) {
+              _filterDebounceTimer?.cancel();
+              _filterDebounceTimer = Timer(const Duration(milliseconds: 200), () {
+                if (mounted) {
+                  setState(() => _filterQuery = v);
+                }
+              });
+            },
           ),
           const SizedBox(height: 16),
 

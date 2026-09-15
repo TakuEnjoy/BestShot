@@ -232,18 +232,25 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 
   String _formatFileSizeRaw(PhotoEntry e) {
+    if (_fileSizeCache.containsKey(e.key)) {
+      return _fileSizeCache[e.key]!;
+    }
     if (e.filePath != null) {
       try {
         final f = File(e.filePath!);
         if (f.existsSync()) {
           final bytes = f.lengthSync();
           final mb = bytes / (1024 * 1024);
-          return '${mb.toStringAsFixed(1)}MB';
+          final res = '${mb.toStringAsFixed(1)}MB';
+          _fileSizeCache[e.key] = res;
+          return res;
         }
       } catch (_) {}
     }
     final approxMb = e.displayBytes.length / (1024 * 1024);
-    return '${approxMb.toStringAsFixed(1)}MB';
+    final res = '${approxMb.toStringAsFixed(1)}MB';
+    _fileSizeCache[e.key] = res;
+    return res;
   }
 
   String _formatResolution(PhotoEntry e) {

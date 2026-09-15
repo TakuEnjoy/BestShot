@@ -373,20 +373,24 @@ class AnalyzerIsolate {
     cv.CascadeClassifier? eyeCascade,
     required cv.ORB orbDetector,
   }) async {
+    const rawExts = <String>{
+      '.dng',
+      '.arw',
+      '.nef',
+      '.cr2',
+      '.cr3',
+      '.raf',
+      '.rw2',
+      '.orf',
+    };
+
     Uint8List rawBytes;
-    if (filePath != null) {
-      final fileBytes = await File(filePath).readAsBytes();
+    if (displayBytes != null && displayBytes.isNotEmpty) {
+      // displayBytes（インポート時に抽出済みの高品質JPEG）を直接活用してディスク再読み込みをスキップ
+      rawBytes = displayBytes;
+    } else if (filePath != null) {
       final ext = p.extension(filePath).toLowerCase();
-      final rawExts = <String>{
-        '.dng',
-        '.arw',
-        '.nef',
-        '.cr2',
-        '.cr3',
-        '.raf',
-        '.rw2',
-        '.orf',
-      };
+      final fileBytes = await File(filePath).readAsBytes();
       if (rawExts.contains(ext)) {
         final jpegBytes = JpegUtils.extractEmbeddedJpeg(fileBytes);
         rawBytes = jpegBytes != null ? Uint8List.fromList(jpegBytes) : fileBytes;
@@ -394,7 +398,7 @@ class AnalyzerIsolate {
         rawBytes = fileBytes;
       }
     } else {
-      rawBytes = displayBytes ?? Uint8List(0);
+      rawBytes = Uint8List(0);
     }
 
     if (rawBytes.isEmpty) {

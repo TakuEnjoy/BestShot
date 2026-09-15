@@ -167,14 +167,14 @@ class _LoupeScreenState extends State<LoupeScreen> {
     if (_focusMaskBusy) return;
     setState(() => _focusMaskBusy = true);
     try {
-      for (final item in widget.items) {
+      await Future.wait(widget.items.map((item) async {
         final key = item.key;
-        if (_focusMaskPngByKey[key] != null) continue;
+        if (_focusMaskPngByKey[key] != null) return;
 
         // Check if the mask is already cached in memory for this session
         if (LoupeScreen._sessionMaskCache.containsKey(key)) {
           _focusMaskPngByKey[key] = LoupeScreen._sessionMaskCache[key];
-          continue;
+          return;
         }
 
         var b = _loadedBytes[key];
@@ -187,16 +187,15 @@ class _LoupeScreenState extends State<LoupeScreen> {
         }
         if (b == null) {
           // Do not poison cache with null if bytes could not be loaded yet
-          continue;
+          return;
         }
         final png = await compute(focusMaskPngFromBytes, b);
-        if (!mounted) return;
         if (png != null) {
           _focusMaskPngByKey[key] = png;
           // Store the computed mask in the session cache
           LoupeScreen._sessionMaskCache[key] = png;
         }
-      }
+      }));
     } finally {
       if (mounted) setState(() => _focusMaskBusy = false);
     }

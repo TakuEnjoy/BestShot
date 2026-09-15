@@ -196,7 +196,7 @@ class SortService {
           final ext = p.extension(srcBaseName);
           final baseWithoutExt = p.basenameWithoutExtension(srcBaseName);
           var counter = 1;
-          while (true) {
+          while (counter <= 9999) {
             final newName = '${baseWithoutExt}_$counter$ext';
             destPath = p.join(destDir.path, newName);
             destFile = File(destPath);
@@ -204,6 +204,9 @@ class SortService {
               break;
             }
             counter++;
+          }
+          if (counter > 9999) {
+            throw Exception('ファイル名の一意化上限を超えました: $srcBaseName');
           }
         }
 
@@ -219,14 +222,14 @@ class SortService {
           await iosSink.close();
         }
 
-        // (B) ベリファイ（ファイルサイズの検証）
+        // (B) サイズ検証
         final srcLen = await srcFile.length();
         final tmpLen = await tmpFile.length();
         if (srcLen != tmpLen) {
-          throw Exception('検証エラー: 転送後のファイルサイズが一致しません');
+          throw Exception('ファイルサイズの不一致を検出しました (元: $srcLen bytes, コピー: $tmpLen bytes)');
         }
 
-        // (C) 本ファイル名へリネーム
+        // (C) アトミックな確定
         await tmpFile.rename(destPath);
 
         // (D) 移動モードなら元ファイルを安全に削除
@@ -239,12 +242,14 @@ class SortService {
         onProgress?.call(done, total);
       } catch (e) {
         // エラー発生時は中途半端な一時ファイル（.tmp）をクリーンアップ
-        final tmpPath = '$destPath.tmp';
-        final tmpFile = File(tmpPath);
-        if (await tmpFile.exists()) {
-          try {
-            await tmpFile.delete();
-          } catch (_) {}
+        if (destPath.isNotEmpty) {
+          final tmpPath = '$destPath.tmp';
+          final tmpFile = File(tmpPath);
+          if (await tmpFile.exists()) {
+            try {
+              await tmpFile.delete();
+            } catch (_) {}
+          }
         }
 
         failed.add(srcPath);
