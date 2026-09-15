@@ -71,12 +71,30 @@ class _GroupsScreenState extends State<GroupsScreen> {
   bool _isFilterDrawerOpen = false;
   int _bottomNavIndex = 0;
 
+  List<PhotoGroup>? _cachedFilteredGroups;
+  String _lastFilterQuery = '';
+  bool _lastFilterBurstOnly = false;
+  bool _lastFilterReviewOnly = false;
+  List<PhotoGroup>? _lastGroupsRef;
+
   List<PhotoGroup> get _filteredGroups {
+    if (_cachedFilteredGroups != null &&
+        identical(_lastGroupsRef, _groups) &&
+        _lastFilterQuery == _filterQuery &&
+        _lastFilterBurstOnly == _filterBurstOnly &&
+        _lastFilterReviewOnly == _filterReviewOnly) {
+      return _cachedFilteredGroups!;
+    }
+    _lastGroupsRef = _groups;
+    _lastFilterQuery = _filterQuery;
+    _lastFilterBurstOnly = _filterBurstOnly;
+    _lastFilterReviewOnly = _filterReviewOnly;
+
     if (!_filterBurstOnly && !_filterReviewOnly && _filterQuery.isEmpty) {
-      return _groups;
+      return _cachedFilteredGroups = _groups;
     }
     final q = _filterQuery.trim().toLowerCase();
-    return _groups.where((g) {
+    return _cachedFilteredGroups = _groups.where((g) {
       if (_filterBurstOnly && !g.isBurst) return false;
       if (_filterReviewOnly && !g.needsReview) return false;
       if (q.isNotEmpty) {
@@ -135,6 +153,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         }
       }
       _sortedPortraitItems = null;
+      _clampKeyboardIndices();
     }
   }
 
@@ -340,8 +359,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
       if (mounted) {
         setState(() {
-          _processingKeys.removeAll(targets);
-
           for (final entry in result.success) {
             for (var i = 0; i < _groups.length; i++) {
               final g = _groups[i];
@@ -377,14 +394,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _processingKeys.removeAll(targets);
-        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('削除処理エラー: $e')),
         );
       }
     } finally {
+      _processingKeys.removeAll(targets);
       if (mounted) {
         setState(() {
           _backgroundTasks.removeWhere((t) => t.id == task.id);
@@ -796,8 +811,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
       if (mounted) {
         setState(() {
-          _processingKeys.removeAll(currentSortMap.keys);
-
           if (!isCopy && successKeys.isNotEmpty) {
             for (final key in successKeys) {
               for (var i = 0; i < _groups.length; i++) {
@@ -842,9 +855,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _processingKeys.removeAll(currentSortMap.keys);
-        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('処理中にシステムエラーが発生しました: $e'),
@@ -853,6 +863,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         );
       }
     } finally {
+      _processingKeys.removeAll(currentSortMap.keys);
       if (mounted) {
         setState(() {
           _backgroundTasks.removeWhere((t) => t.id == task.id);

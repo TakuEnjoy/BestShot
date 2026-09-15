@@ -53,8 +53,8 @@ class PhotoGroup {
   }
 
   int? _cachedGeometricMatchRate;
-  int get geometricMatchRate {
-    if (_cachedGeometricMatchRate != null) return _cachedGeometricMatchRate!;
+  int? get geometricMatchRate {
+    if (_cachedGeometricMatchRate != null) return _cachedGeometricMatchRate;
     for (final item in items) {
       final exp = item.groupExplanation;
       if (exp != null && exp.inliers != null && exp.inliers! > 0) {
@@ -62,7 +62,7 @@ class PhotoGroup {
         return _cachedGeometricMatchRate = ratio;
       }
     }
-    return _cachedGeometricMatchRate = 88;
+    return null;
   }
 
   PhotoGroup copyWith({

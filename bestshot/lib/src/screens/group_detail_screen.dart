@@ -84,6 +84,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 
   bool _handleKeyEvent(KeyEvent event) {
+    if (!mounted) return false;
+    if (ModalRoute.of(context)?.isCurrent != true) return false;
     if (event is! KeyDownEvent) return false;
     final key = event.logicalKey;
     final activeKey = _activeKeyNotifier.value;
@@ -245,11 +247,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 
   String _formatResolution(PhotoEntry e) {
-    if (e.exif != null) {
-      // Return representative resolution or aspect ratio
-      return '4000×3000';
+    if (e.exif?.resolution != null) {
+      return e.exif!.resolution!;
     }
-    return '4000×3000';
+    return '解像度情報なし';
   }
 
   String _getTimeRange() {

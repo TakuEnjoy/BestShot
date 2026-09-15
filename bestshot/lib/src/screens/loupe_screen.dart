@@ -77,11 +77,13 @@ class _LoupeScreenState extends State<LoupeScreen> {
   final List<Matrix4> _initialMatrices = [];
 
   late List<bool> _isBests;
+  late Set<String> _localSelectedForDelete;
 
   @override
   void initState() {
     super.initState();
     _isBests = List.of(widget.isBests);
+    _localSelectedForDelete = Set<String>.from(widget.initialSelectedForDelete ?? const <String>{});
     _focusNode = FocusNode();
     for (var i = 0; i < widget.items.length; i++) {
       _controllers.add(TransformationController());
@@ -102,6 +104,10 @@ class _LoupeScreenState extends State<LoupeScreen> {
     super.didUpdateWidget(oldWidget);
     if (!listEquals(oldWidget.isBests, widget.isBests)) {
       _isBests = List.of(widget.isBests);
+    }
+    if (widget.initialSelectedForDelete != null &&
+        widget.initialSelectedForDelete != oldWidget.initialSelectedForDelete) {
+      _localSelectedForDelete = Set<String>.from(widget.initialSelectedForDelete!);
     }
   }
 
@@ -338,9 +344,14 @@ class _LoupeScreenState extends State<LoupeScreen> {
     if (key == LogicalKeyboardKey.space) {
       if (_activePaneIndex >= 0 && _activePaneIndex < count) {
         final itemKey = widget.items[_activePaneIndex].key;
-        final currentlySelected =
-            widget.initialSelectedForDelete?.contains(itemKey) ?? false;
-        widget.onToggleDelete?.call(itemKey, !currentlySelected);
+        final currentlySelected = _localSelectedForDelete.contains(itemKey);
+        final nextSelected = !currentlySelected;
+        if (nextSelected) {
+          _localSelectedForDelete.add(itemKey);
+        } else {
+          _localSelectedForDelete.remove(itemKey);
+        }
+        widget.onToggleDelete?.call(itemKey, nextSelected);
         setState(() {});
       }
       return KeyEventResult.handled;
@@ -525,10 +536,35 @@ class _LoupeScreenState extends State<LoupeScreen> {
     } else {
       // ピント位置を中心にして3.0倍に拡大
       const scale = 3.0;
-      final renderBox = context.findRenderObject() as RenderBox?;
-      final viewport = renderBox?.size ?? const Size(800, 600);
-      final tx = (viewport.width / 2) - (pt.dx * viewport.width * scale);
-      final ty = (viewport.height / 2) - (pt.dy * viewport.height * scale);
+      final size = MediaQuery.of(context).size;
+      final isPortrait = size.height > size.width;
+      final count = widget.items.length;
+      double paneW = size.width;
+      double paneH = size.height;
+
+      if (count == 2) {
+        final useHorizontal = !isPortrait ||
+            size.width >= 600 ||
+            (size.height > 0 && (size.width / size.height) >= 0.75 && size.width >= 480);
+        if (useHorizontal) {
+          paneW = size.width / 2;
+        } else {
+          paneH = size.height / 2;
+        }
+      } else if (count == 3) {
+        final useHorizontal = !isPortrait || size.width >= 720;
+        if (useHorizontal) {
+          paneW = size.width / 3;
+        } else {
+          paneH = size.height / 3;
+        }
+      } else if (count >= 4) {
+        paneW = size.width / 2;
+        paneH = size.height / 2;
+      }
+
+      final tx = (paneW / 2) - (pt.dx * paneW * scale);
+      final ty = (paneH / 2) - (pt.dy * paneH * scale);
       final m = Matrix4.identity()
         ..translateByDouble(tx, ty, 0.0, 1.0)
         ..scaleByDouble(scale, scale, 1.0, 1.0);
@@ -628,8 +664,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
     final item = widget.items[_activePaneIndex];
     final key = item.key;
     final isBest = _isBests[_activePaneIndex];
-    final selectedForDelete =
-        widget.initialSelectedForDelete?.contains(key) ?? false;
+    final selectedForDelete = _localSelectedForDelete.contains(key);
 
     final screenWidth = MediaQuery.of(context).size.width;
     final isNarrow = screenWidth < 500;
@@ -655,7 +690,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Row(
-              children: [
+               children: [
                 // Active photo indicator info
                 Expanded(
                   child: Column(
@@ -689,7 +724,13 @@ class _LoupeScreenState extends State<LoupeScreen> {
                 // Toggle Delete button
                 InkWell(
                   onTap: () {
-                    widget.onToggleDelete?.call(key, !selectedForDelete);
+                    final nextSelected = !selectedForDelete;
+                    if (nextSelected) {
+                      _localSelectedForDelete.add(key);
+                    } else {
+                      _localSelectedForDelete.remove(key);
+                    }
+                    widget.onToggleDelete?.call(key, nextSelected);
                     setState(() {});
                   },
                   borderRadius: BorderRadius.circular(4),
@@ -886,6 +927,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
                           ),
                           onPressed: () {
                             for (final item in widget.items) {
+                              _localSelectedForDelete.remove(item.key);
                               widget.onToggleDelete?.call(item.key, false);
                             }
                             setState(() {});

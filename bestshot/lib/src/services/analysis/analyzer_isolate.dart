@@ -104,8 +104,17 @@ class AnalyzerIsolate {
       rethrow;
     }
 
+    void shutdownWorkers() {
+      for (final sp in workerSendPorts.values) {
+        try {
+          sp.send(const _MainShutdownMessage());
+        } catch (_) {}
+      }
+    }
+
     sub = receivePort.listen((message) {
       if (isCancelled?.call() == true) {
+        shutdownWorkers();
         if (!completer.isCompleted) {
           completer.completeError(Exception('キャンセルされました'));
         }
@@ -128,6 +137,7 @@ class AnalyzerIsolate {
             assignNextTask(workerId, workerSendPorts[workerId]!);
           }
         } else if (message is _WorkerErrorMessage) {
+          shutdownWorkers();
           if (!completer.isCompleted) {
             final target = message.filePath != null
                 ? p.basename(message.filePath!)
@@ -152,13 +162,21 @@ class AnalyzerIsolate {
 
     errSub = errorPort.listen((e) {
       if (isCancelled?.call() == true) return;
-      if (!completer.isCompleted) completer.completeError(e);
+      shutdownWorkers();
+      if (!completer.isCompleted) {
+        if (e is List && e.isNotEmpty) {
+          completer.completeError(Exception(e.first.toString()));
+        } else {
+          completer.completeError(e is Exception ? e : Exception(e.toString()));
+        }
+      }
     });
 
     if (isCancelled != null) {
       cancelTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
         if (isCancelled()) {
           timer.cancel();
+          shutdownWorkers();
           if (!completer.isCompleted) {
             completer.completeError(Exception('キャンセルされました'));
           }
@@ -170,6 +188,16 @@ class AnalyzerIsolate {
       return await completer.future;
     } finally {
       cancelTimer?.cancel();
+      shutdownWorkers();
+
+      // ワーカーの正常終了（リソース解放）を短時間待機
+      if (finishedWorkers < actualWorkerCount) {
+        final deadline = DateTime.now().add(const Duration(milliseconds: 300));
+        while (finishedWorkers < actualWorkerCount && DateTime.now().isBefore(deadline)) {
+          await Future.delayed(const Duration(milliseconds: 20));
+        }
+      }
+
       await sub.cancel();
       await errSub.cancel();
       receivePort.close();
@@ -374,7 +402,7 @@ class AnalyzerIsolate {
     }
 
     cv.Mat? mat;
-    late cv.Mat work;
+    cv.Mat? work;
 
     try {
       mat = cv.imdecode(rawBytes, cv.IMREAD_COLOR);
@@ -409,18 +437,18 @@ class AnalyzerIsolate {
       } else {
         work = mat;
       }
-
-      final pHashHex = _calcEqualizedPHashHexFromMat(work);
+      final analysisWork = work;
+      final pHashHex = _calcEqualizedPHashHexFromMat(analysisWork);
       final (fullSharpness, debugGridSharps) = _calcLaplacianVarianceFromMat(
-        work,
+        analysisWork,
         () {
-          final res = cv.imencode('.jpg', work, params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, jpegQuality]));
+          final res = cv.imencode('.jpg', analysisWork, params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, jpegQuality]));
           return res.$1 ? res.$2 : null;
         },
       );
-      final (exposure, histogram) = _calcExposureAndHistogramFromMat(work);
-      final hueHistogram = _calcHueHistogramFromMat(work);
-      final orb = _calcOrbDescriptorsFromMat(work, orbDetector);
+      final (exposure, histogram) = _calcExposureAndHistogramFromMat(analysisWork);
+      final hueHistogram = _calcHueHistogramFromMat(analysisWork);
+      final orb = _calcOrbDescriptorsFromMat(analysisWork, orbDetector);
 
       var hasFace = false;
       var faceX = 0;
@@ -510,7 +538,7 @@ class AnalyzerIsolate {
       developer.log('Isolate analysis error for key $key: $e\n$stack');
       return _emptyOutput(key);
     } finally {
-      if (work != mat) {
+      if (work != null && work != mat) {
         work.dispose();
       }
       mat?.dispose();
@@ -518,18 +546,27 @@ class AnalyzerIsolate {
   }
 
   static String _calcEqualizedPHashHexFromMat(cv.Mat mat) {
+    cv.Mat? small;
+    cv.Mat? gray;
+    cv.Mat? eq;
+    cv.Mat? fGray;
+    cv.Mat? dctMat;
+    cv.Mat? top8x8;
     try {
-      final small = cv.resize(mat, (32, 32));
-      final gray = cv.cvtColor(small, cv.COLOR_BGR2GRAY);
-      final eq = cv.equalizeHist(gray);
-      final fGray = eq.convertTo(cv.MatType.CV_32FC1);
-      final dctMat = cv.dct(fGray);
-      final top8x8 = dctMat.region(cv.Rect(0, 0, 8, 8));
+      small = cv.resize(mat, (32, 32));
+      gray = cv.cvtColor(small, cv.COLOR_BGR2GRAY);
+      eq = cv.equalizeHist(gray);
+      fGray = eq.convertTo(cv.MatType.CV_32FC1);
+      dctMat = cv.dct(fGray);
+      top8x8 = dctMat.region(cv.Rect(0, 0, 8, 8));
+      final cellVals = List<double>.filled(64, 0.0);
       final vals = <double>[];
       for (int r = 0; r < 8; r++) {
         for (int c = 0; c < 8; c++) {
+          final v = top8x8.at<double>(r, c);
+          cellVals[r * 8 + c] = v;
           if (r == 0 && c == 0) continue;
-          vals.add(top8x8.at<double>(r, c));
+          vals.add(v);
         }
       }
       vals.sort();
@@ -539,19 +576,20 @@ class AnalyzerIsolate {
         for (int c = 0; c < 8; c++) {
           if (r == 0 && c == 0) continue;
           hash <<= 1;
-          if (top8x8.at<double>(r, c) > median) hash |= BigInt.one;
+          if (cellVals[r * 8 + c] > median) hash |= BigInt.one;
         }
       }
-      small.dispose();
-      gray.dispose();
-      eq.dispose();
-      fGray.dispose();
-      dctMat.dispose();
-      top8x8.dispose();
       return hash.toRadixString(16).padLeft(16, '0');
     } catch (e, s) {
       developer.log('Error in _calcEqualizedPHashHexFromMat: $e\n$s');
       return '0000000000000000';
+    } finally {
+      small?.dispose();
+      gray?.dispose();
+      eq?.dispose();
+      fGray?.dispose();
+      dctMat?.dispose();
+      top8x8?.dispose();
     }
   }
 
@@ -700,6 +738,7 @@ class AnalyzerIsolate {
     cv.Mat? gray;
     cv.Mat? cl;
     cv.Mat? desc;
+    cv.VecKeyPoint? kps;
     try {
       gray = cv.cvtColor(mat, cv.COLOR_BGR2GRAY);
       final clahe = cv.createCLAHE(clipLimit: 3.0, tileGridSize: (8, 8));
@@ -709,28 +748,26 @@ class AnalyzerIsolate {
       final emptyMat = cv.Mat.empty();
       final result = orbDetector.detectAndCompute(cl, emptyMat);
       desc = result.$2;
-      final kps = result.$1;
-      
+      kps = result.$1;
+
       emptyMat.dispose();
-      
+
       if (desc.isEmpty) {
-        kps.dispose();
         return _OrbDesc.empty();
       }
-      
+
       final rows = desc.rows > 800 ? 800 : desc.rows;
       final cols = desc.cols;
       final elemSize = desc.elemSize;
       final bytesLen = rows * cols * elemSize;
       final all = desc.data;
-      
+
       if (all.length < bytesLen) {
-        kps.dispose();
         return _OrbDesc.empty();
       }
-      
+
       final sliced = Uint8List.fromList(all.sublist(0, bytesLen));
-      
+
       // Extract keypoints [x, y, x, y, ...] up to 'rows'
       final kpList = Float32List(rows * 2);
       for (var i = 0; i < rows; i++) {
@@ -738,13 +775,13 @@ class AnalyzerIsolate {
         kpList[i * 2] = kp.x;
         kpList[i * 2 + 1] = kp.y;
       }
-      
-      kps.dispose();
+
       return _OrbDesc(rows: rows, cols: cols, bytes: sliced, keypoints: kpList);
     } catch (e, s) {
       developer.log('Error in _calcOrbDescriptorsFromMat: $e\n$s');
       return _OrbDesc.empty();
     } finally {
+      kps?.dispose();
       gray?.dispose();
       cl?.dispose();
       desc?.dispose();
@@ -759,11 +796,12 @@ class AnalyzerIsolate {
     cv.Mat? histHNorm;
     cv.Mat? histSNorm;
     cv.Mat? histVNorm;
+    cv.Mat? emptyMask;
     try {
       if (bgr.isEmpty) return null;
 
       hsv = cv.cvtColor(bgr, cv.COLOR_BGR2HSV);
-      final emptyMask = cv.Mat.empty();
+      emptyMask = cv.Mat.empty();
 
       histH = cv.calcHist(
         cv.VecMat.fromList([hsv]),
@@ -795,8 +833,6 @@ class AnalyzerIsolate {
       histVNorm = cv.Mat.empty();
       cv.normalize(histV, histVNorm, alpha: 1.0, beta: 0.0, normType: cv.NORM_L1);
 
-      emptyMask.dispose();
-
       final hData = histHNorm.data;
       final sHistData = histSNorm.data;
       final vHistData = histVNorm.data;
@@ -813,6 +849,7 @@ class AnalyzerIsolate {
       developer.log('Error in _calcHueHistogramFromMat: $e\n$s');
       return null;
     } finally {
+      emptyMask?.dispose();
       hsv?.dispose();
       histH?.dispose();
       histS?.dispose();
@@ -1360,14 +1397,18 @@ class _WorkerErrorMessage extends _WorkerMessage {
   final String? stackTrace;
 }
 
-sealed class _MainMessage {}
+sealed class _MainMessage {
+  const _MainMessage();
+}
 
 class _MainTaskMessage extends _MainMessage {
   _MainTaskMessage({required this.input});
   final _TransferableInput input;
 }
 
-class _MainShutdownMessage extends _MainMessage {}
+class _MainShutdownMessage extends _MainMessage {
+  const _MainShutdownMessage();
+}
 
 /// Exception thrown when image analysis fails in an isolate.
 class AnalysisException implements Exception {

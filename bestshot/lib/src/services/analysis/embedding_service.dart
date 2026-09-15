@@ -54,9 +54,12 @@ class WindowsOnnxEmbeddingService implements EmbeddingService {
       
       OrtEnv.instance.init();
       final sessionOptions = OrtSessionOptions();
-      final modelBytes = await file.readAsBytes();
-      _session = OrtSession.fromBuffer(modelBytes, sessionOptions);
-      sessionOptions.release();
+      try {
+        final modelBytes = await file.readAsBytes();
+        _session = OrtSession.fromBuffer(modelBytes, sessionOptions);
+      } finally {
+        sessionOptions.release();
+      }
 
       // Retrieve first input name dynamically if available
       final inputs = _session?.inputNames;

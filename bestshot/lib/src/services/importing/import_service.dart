@@ -243,8 +243,11 @@ class ImportService {
     }
 
     final futures = List.generate(workerCount, (_) => worker());
-    await Future.wait(futures);
-    receivePort.close();
+    try {
+      await Future.wait(futures);
+    } finally {
+      receivePort.close();
+    }
 
     if (out.isEmpty && files.isNotEmpty) {
       throw Exception('全てのファイルの読み込みまたはデコードに失敗しました。\n詳細:\n$firstError');
@@ -296,6 +299,14 @@ Future<ExifSummary?> _readExifSummary(File f) async {
       getTag('EXIF ExposureBiasValue') ?? getTag('ExposureBiasValue'),
     );
 
+    int? parseIntTag(String? val) {
+      if (val == null) return null;
+      return int.tryParse(val.replaceAll(RegExp(r'[^\d]'), ''));
+    }
+
+    final imgW = parseIntTag(getTag('EXIF ExifImageWidth') ?? getTag('Image ImageWidth'));
+    final imgH = parseIntTag(getTag('EXIF ExifImageLength') ?? getTag('Image ImageLength'));
+
     return ExifSummary(
       fNumber: fnum,
       shutter: expo,
@@ -305,6 +316,8 @@ Future<ExifSummary?> _readExifSummary(File f) async {
       cameraModel: cameraModel,
       lensModel: lensModel,
       exposureBias: exposureBias,
+      imageWidth: imgW,
+      imageHeight: imgH,
     );
   } catch (_) {
     return null;

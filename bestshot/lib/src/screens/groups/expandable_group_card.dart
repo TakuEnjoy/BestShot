@@ -96,25 +96,26 @@ class _ExpandableGroupCard extends StatelessWidget {
         ),
         child: Padding(
           padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 1. ヘッダー行 (グループID, 枚数, 削除候補ボタン, ステータスバッジ, 詳細ボタン)
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final isCompact = constraints.maxWidth < 650;
-                final badges = <Widget>[
-                  _Badge(
-                    label: group.isBurst ? '📷 連写' : '📷 単写',
-                    color: BestShotTheme.hoverColor,
-                    textColor: BestShotTheme.textPrimary,
-                  ),
-                  _Badge(
-                    label: '🔍 一致率 $matchRate%',
-                    color: BestShotTheme.hoverColor,
-                    textColor: BestShotTheme.accentBlue,
-                  ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 1. ヘッダー行 (グループID, 枚数, 削除候補ボタン, ステータスバッジ, 詳細ボタン)
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final isCompact = constraints.maxWidth < 650;
+                  final displayMatchRate = matchRate ?? pHashRate;
+                  final badges = <Widget>[
+                    _Badge(
+                      label: group.isBurst ? '📷 連写' : '📷 単写',
+                      color: BestShotTheme.hoverColor,
+                      textColor: BestShotTheme.textPrimary,
+                    ),
+                    _Badge(
+                      label: '🔍 一致率 $displayMatchRate%',
+                      color: BestShotTheme.hoverColor,
+                      textColor: BestShotTheme.accentBlue,
+                    ),
                   if (group.bestKey.isNotEmpty)
                     const _Badge(
                       label: '⭐ Best済',
