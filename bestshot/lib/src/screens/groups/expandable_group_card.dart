@@ -40,7 +40,32 @@ class _ExpandableGroupCard extends StatelessWidget {
   final void Function(String photoKey)? onOpenLoupeForPhoto;
 
   int _getPHashSimilarity() {
-    return 94;
+    if (group.items.length <= 1) return 100;
+    final best = group.items.firstWhere(
+      (e) => e.key == group.bestKey,
+      orElse: () => group.items.first,
+    );
+    final bestVal = int.tryParse(best.pHashHex, radix: 16);
+    if (bestVal == null) return 100;
+
+    double totalSim = 0;
+    int count = 0;
+    for (final item in group.items) {
+      if (item.key == best.key) continue;
+      final itemVal = int.tryParse(item.pHashHex, radix: 16);
+      if (itemVal != null) {
+        var v = bestVal ^ itemVal;
+        v = v - ((v >> 1) & 0x5555555555555555);
+        v = (v & 0x3333333333333333) + ((v >> 2) & 0x3333333333333333);
+        v = (v + (v >> 4)) & 0x0F0F0F0F0F0F0F0F;
+        final dist = (((v * 0x0101010101010101) >> 56) & 0x7F).clamp(0, 64);
+        final sim = ((64 - dist) / 64.0 * 100).clamp(0.0, 100.0);
+        totalSim += sim;
+        count++;
+      }
+    }
+    if (count == 0) return 100;
+    return (totalSim / count).round();
   }
 
   @override

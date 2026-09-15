@@ -113,22 +113,32 @@ class SortService {
     int successCount = 0;
     final List<String> failed = [];
 
-    // 1. 事前チェック（書き込み権限のテスト）
+    // 1. 事前チェック（フォルダ名バリデーション & 仕分け先書き込み権限のテスト）
     try {
-      final Set<String> targetParentDirs = {};
+      final Set<String> destDirs = {};
       for (final t in targets) {
+        final folderName = t.value;
+        final valRes = validateFolderName(folderName);
+        if (!valRes.isValid) {
+          throw Exception('無効なフォルダ名です ($folderName): ${valRes.errorMessage}');
+        }
         final parentDir = p.dirname(t.key.filePath!);
-        targetParentDirs.add(parentDir);
+        final destDir = p.join(parentDir, folderName);
+        destDirs.add(destDir);
       }
 
-      // 各インポート元フォルダの直下にテスト用ファイルを作成してみる
-      for (final parent in targetParentDirs) {
-        final testFile = File(p.join(parent, '.bestshot_write_test_tmp'));
+      // 各仕分け先フォルダを作成し、直下にテスト用ファイルを作成してみる
+      for (final dest in destDirs) {
+        final d = Directory(dest);
+        if (!await d.exists()) {
+          await d.create(recursive: true);
+        }
+        final testFile = File(p.join(dest, '.bestshot_write_test_tmp'));
         try {
           await testFile.writeAsString('test');
           await testFile.delete();
         } catch (e) {
-          throw Exception('書き込み権限がありません: $parent (エラー: $e)');
+          throw Exception('書き込み権限がありません: $dest (エラー: $e)');
         }
       }
     } catch (e) {

@@ -71,7 +71,7 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
           }
         } catch (_) {}
       }
-      totalBytes += item.displayBytes.length * 8;
+      totalBytes += item.displayBytes.length;
     }
     return totalBytes / (1024 * 1024);
   }

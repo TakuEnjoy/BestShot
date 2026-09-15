@@ -152,17 +152,18 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
   void _selectAllForDelete() {
     final current = _deleteSelectionNotifier.value;
-    final allMarked = _items.every((e) => current.contains(e.key));
+    final nonBestItems = _items.where((e) => e.key != widget.group.bestKey).toList();
+    if (nonBestItems.isEmpty) return;
+
+    final allMarked = nonBestItems.every((e) => current.contains(e.key));
     final next = Set<String>.from(current);
-    for (final e in _items) {
-      if (e.key != widget.group.bestKey) {
-        if (allMarked) {
-          next.remove(e.key);
-          widget.onToggleDelete(e.key, false);
-        } else {
-          next.add(e.key);
-          widget.onToggleDelete(e.key, true);
-        }
+    for (final e in nonBestItems) {
+      if (allMarked) {
+        next.remove(e.key);
+        widget.onToggleDelete(e.key, false);
+      } else {
+        next.add(e.key);
+        widget.onToggleDelete(e.key, true);
       }
     }
     _deleteSelectionNotifier.value = next;
@@ -239,7 +240,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         }
       } catch (_) {}
     }
-    final approxMb = (e.displayBytes.length * 8) / (1024 * 1024);
+    final approxMb = e.displayBytes.length / (1024 * 1024);
     return '${approxMb.toStringAsFixed(1)}MB';
   }
 

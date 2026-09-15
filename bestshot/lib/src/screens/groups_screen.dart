@@ -607,13 +607,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
           ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
           : _keyboardPhotoKey;
       if (targetKey != null) {
-        setState(() {
-          if (_selectedForDelete.contains(targetKey)) {
-            _selectedForDelete.remove(targetKey);
-          } else {
-            _selectedForDelete.add(targetKey);
-          }
-        });
+        _toggleDelete(targetKey);
       }
       return KeyEventResult.handled;
     }

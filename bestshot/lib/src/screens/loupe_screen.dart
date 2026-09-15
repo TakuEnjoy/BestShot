@@ -149,7 +149,11 @@ class _LoupeScreenState extends State<LoupeScreen> {
         }
       }));
     } catch (e) {
-      _error = e;
+      if (mounted) {
+        setState(() {
+          _error = e;
+        });
+      }
     }
   }
 
@@ -159,7 +163,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
     try {
       for (final item in widget.items) {
         final key = item.key;
-        if (_focusMaskPngByKey.containsKey(key)) continue;
+        if (_focusMaskPngByKey[key] != null) continue;
 
         // Check if the mask is already cached in memory for this session
         if (LoupeScreen._sessionMaskCache.containsKey(key)) {
@@ -167,17 +171,23 @@ class _LoupeScreenState extends State<LoupeScreen> {
           continue;
         }
 
-        final b = _loadedBytes[key];
+        var b = _loadedBytes[key];
         if (b == null) {
-          _focusMaskPngByKey[key] = null;
+          // If _loadAll hasn't finished yet, try loading full bytes directly
+          b = await _loadFull(item);
+          if (b != null && mounted) {
+            _loadedBytes[key] = b;
+          }
+        }
+        if (b == null) {
+          // Do not poison cache with null if bytes could not be loaded yet
           continue;
         }
         final png = await compute(focusMaskPngFromBytes, b);
         if (!mounted) return;
-        _focusMaskPngByKey[key] = png;
-
-        // Store the computed mask in the session cache
         if (png != null) {
+          _focusMaskPngByKey[key] = png;
+          // Store the computed mask in the session cache
           LoupeScreen._sessionMaskCache[key] = png;
         }
       }
@@ -1133,8 +1143,11 @@ class _ZoomPaneState extends State<_ZoomPane> {
   }
 
   Widget _buildFaceOverlay(double w, double h) {
-    final imgW = _imageWidth!;
-    final imgH = _imageHeight!;
+    final imgW = _imageWidth;
+    final imgH = _imageHeight;
+    if (imgW == null || imgH == null || imgW == 0 || imgH == 0) {
+      return const SizedBox.shrink();
+    }
     final p = widget.item.portrait;
     final fx = p.faceX / imgW * w;
     final fy = p.faceY / imgH * h;

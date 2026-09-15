@@ -67,6 +67,9 @@ class DeleteService {
 
         try {
           RecycleBinWindows.moveToRecycleBin([path]);
+          if (File(path).existsSync()) {
+            throw Exception('ゴミ箱への移動が完了しませんでした（ファイルが残存しています）');
+          }
           success.add(entry);
         } catch (e, s) {
           developer.log('Windows recycle bin error for $path: $e\n$s');
@@ -118,7 +121,9 @@ class DeleteService {
         .where((e) => e.origin == PhotoOrigin.deviceAsset && e.assetId != null)
         .toList();
 
-    if (assetEntries.isNotEmpty) {
+    if (failed.isNotEmpty) {
+      unprocessed.addAll(assetEntries);
+    } else if (assetEntries.isNotEmpty) {
       final ids = assetEntries.map((e) => e.assetId!).toList();
       try {
         final deletedIds = await PhotoManager.editor.deleteWithIds(ids);
