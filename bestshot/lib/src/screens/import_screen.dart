@@ -1092,110 +1092,16 @@ class _ImportScreenState extends State<ImportScreen> {
                   ),
               ],
             ),
-          ),
-          const SizedBox(width: 8),
-          // Engine status indicator
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: isSmallMobile ? 6 : 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: BestShotTheme.surfaceColor,
-              borderRadius: BorderRadius.circular(3),
-              border: Border.all(color: BestShotTheme.dividerColor),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 7,
-                  height: 7,
-                  decoration: BoxDecoration(
-                    color: _busy ? BestShotTheme.accentGold : BestShotTheme.accentGreen,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                if (!isSmallMobile) ...[
-                  const SizedBox(width: 6),
-                  Text(
-                    _busy ? 'PROCESSING' : 'ENGINE READY',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
-                      color: _busy ? BestShotTheme.accentGold : BestShotTheme.accentGreen,
-                    ),
-                  ),
-                ],
-              ],
             ),
           ),
-          if (!isSmallMobile && isWindows) ...[
-            const SizedBox(width: 8),
+          if (!isSmallMobile && isWindows)
             IconButton(
               tooltip: 'キーボードショートカット [Ctrl+O]',
               icon: const Icon(Icons.keyboard_command_key_rounded, size: 18, color: BestShotTheme.textSecondary),
               onPressed: () => _showShortcutsDialog(context),
             ),
-          ],
         ],
       ),
-    );
-  }
-
-  Widget _buildPipelineMiniSteps(bool isSmallMobile) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: BestShotTheme.backgroundPrimary,
-        borderRadius: BorderRadius.circular(3),
-        border: Border.all(color: BestShotTheme.dividerColor),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _miniStep('01', 'フォルダー選択', active: true),
-          _miniArrow(),
-          _miniStep('02', '鮮鋭度・特徴量解析'),
-          if (!isSmallMobile) ...[
-            _miniArrow(),
-            _miniStep('03', 'Best自動抽出'),
-            _miniArrow(),
-            _miniStep('04', '仕分け'),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _miniStep(String num, String label, {bool active = false}) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          num,
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.bold,
-            fontFamily: 'monospace',
-            color: active ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
-          ),
-        ),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: active ? FontWeight.bold : FontWeight.normal,
-            color: active ? BestShotTheme.textPrimary : BestShotTheme.textSecondary,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _miniArrow() {
-    return const Padding(
-      padding: EdgeInsets.symmetric(horizontal: 6),
-      child: Icon(Icons.chevron_right, size: 12, color: BestShotTheme.textSecondary),
     );
   }
 
@@ -1215,8 +1121,6 @@ class _ImportScreenState extends State<ImportScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildPipelineMiniSteps(isSmallMobile),
-          SizedBox(height: isSmallMobile ? 28 : 36),
           Icon(
             Icons.folder_open_rounded,
             size: isSmallMobile ? 48 : 56,
@@ -1488,27 +1392,9 @@ class _ImportScreenState extends State<ImportScreen> {
           const SizedBox(height: 16),
 
           // 2. 連写判定インターバル
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Expanded(
-                child: Text(
-                  '連写・同一シーン判定時間窓',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                _formatBurstWindow(_burstWindowSeconds),
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: BestShotTheme.accentGold,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ],
+          const Text(
+            '連写・同一シーン判定時間窓',
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
           ),
           const SizedBox(height: 6),
           Wrap(
@@ -1819,18 +1705,5 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 }
 
-String _formatBurstWindow(int seconds) {
-  if (seconds < 60) return '$seconds 秒';
-  final minutes = seconds ~/ 60;
-  final rem = seconds % 60;
-  if (minutes < 60) {
-    return rem == 0 ? '$minutes 分' : '$minutes 分 $rem 秒';
-  }
-  final hours = minutes ~/ 60;
-  final minRem = minutes % 60;
-  if (minRem == 0 && rem == 0) return '$hours 時間';
-  if (rem == 0) return '$hours 時間 $minRem 分';
-  return '$hours 時間 $minRem 分 $rem 秒';
-}
 
 
