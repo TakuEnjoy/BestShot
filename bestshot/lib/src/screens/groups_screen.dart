@@ -223,7 +223,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
   }
 
   Future<void> _exportBestShots() async {
-    final selectedDirectory = await FilePicker.platform.getDirectoryPath();
+    final selectedDirectory = await FilePicker.getDirectoryPath();
     if (selectedDirectory == null) return; // Cancelled
 
     if (!mounted) return;

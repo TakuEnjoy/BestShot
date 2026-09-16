@@ -16,16 +16,19 @@ import CoreImage
     let options = [CIDetectorAccuracy: CIDetectorAccuracyHigh]
     faceDetector = CIDetector(ofType: CIDetectorTypeFace, context: nil, options: options)
     
+    registerMethodChannel(with: window?.rootViewController as? FlutterViewController)
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     
-    // Register custom MethodChannel using the implicit engine's registry
-    // This works for both the main engine and any background isolates
-    let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "VisionPlugin")
-    registerMethodChannel(with: registrar?.messenger())
+    // Need to register channel on background engine too
+    if let flutterEngine = engineBridge as? FlutterEngine {
+      let registrar = flutterEngine.registrar(forPlugin: "VisionPlugin")
+      registerMethodChannel(with: flutterEngine.binaryMessenger)
+    }
   }
   
   private func registerMethodChannel(with binaryMessenger: FlutterBinaryMessenger?) {

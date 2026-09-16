@@ -5,7 +5,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
-import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import '../semantic/native_face_detector.dart';
 import 'package:image/image.dart' as img;
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:path/path.dart' as p;
@@ -25,23 +25,7 @@ class AnalyzerIsolate {
   }) async {
     if (inputs.isEmpty) return [];
 
-    if (mode == DetectionMode.portrait && Platform.isWindows) {
-      final support = await getApplicationSupportDirectory();
-      final cascadeDir = Directory(p.join(support.path, 'cascades'));
-      if (!await cascadeDir.exists()) {
-        await cascadeDir.create(recursive: true);
-      }
-      await _ensureAssetFile(
-        assetPath: 'assets/cascades/haarcascade_frontalface_default.xml',
-        outPath: p.join(cascadeDir.path, 'haarcascade_frontalface_default.xml'),
-      );
-      await _ensureAssetFile(
-        assetPath: 'assets/cascades/haarcascade_eye.xml',
-        outPath: p.join(cascadeDir.path, 'haarcascade_eye.xml'),
-      );
-    }
-
-    final isMobile = Platform.isAndroid || Platform.isIOS;
+    final isMobile = true;
     final processorCount = Platform.numberOfProcessors;
     final maxWorkers = isMobile ? 3 : 6;
     final calculatedWorkerCount = (processorCount ~/ 2).clamp(1, maxWorkers);
@@ -243,19 +227,13 @@ class AnalyzerIsolate {
     final isAndroid = Platform.isAndroid;
     final isWindows = Platform.isWindows;
 
-    FaceDetector? faceDetector;
+    NativeFaceDetector? faceDetector;
     Directory? tmpDir;
     cv.CascadeClassifier? faceCascade;
     cv.CascadeClassifier? eyeCascade;
 
-    if (message.mode == DetectionMode.portrait && isAndroid) {
-      faceDetector = FaceDetector(
-        options: FaceDetectorOptions(
-          enableClassification: true,
-          enableLandmarks: true,
-          performanceMode: FaceDetectorMode.accurate,
-        ),
-      );
+    if (message.mode == DetectionMode.portrait) {
+      faceDetector = NativeFaceDetector();
     }
 
     cv.ORB? orbDetector;
@@ -367,7 +345,7 @@ class AnalyzerIsolate {
     Uint8List? displayBytes, {
     String? filePath,
     required DetectionMode mode,
-    FaceDetector? faceDetector,
+    NativeFaceDetector? faceDetector,
     Directory? tmpDir,
     cv.CascadeClassifier? faceCascade,
     cv.CascadeClassifier? eyeCascade,
@@ -1097,7 +1075,7 @@ class AnalyzerIsolate {
 
   static Future<_PortraitResult> _portraitAnalyzeAndroid(
     Uint8List bytes, {
-    required FaceDetector faceDetector,
+    required NativeFaceDetector faceDetector,
     required Directory tmpDir,
   }) async {
     cv.Mat? mat;
@@ -1114,10 +1092,8 @@ class AnalyzerIsolate {
       final file = File(fp);
       await file.writeAsBytes(bytes, flush: true);
 
-      final input = InputImage.fromFilePath(fp);
-      final faces = await faceDetector.processImage(input);
+      final faces = await faceDetector.processImage(fp);
 
-      // Clean up the temp file immediately.
       if (await file.exists()) {
         await file.delete();
       }
@@ -1126,27 +1102,30 @@ class AnalyzerIsolate {
         return const _PortraitResult.none();
       }
 
-      // Find largest area to determine threshold
+      final imageWidth = mat.cols;
+      final imageHeight = mat.rows;
+
+      // Find largest area
       double maxArea = 0;
       for (final f in faces) {
-        final area = (f.boundingBox.width * f.boundingBox.height).toDouble();
+        final area = f.width * imageWidth * f.height * imageHeight;
         if (area > maxArea) {
           maxArea = area;
         }
       }
 
-      // Keep only faces that are at least 25% of the largest face area
+      // Keep faces >= 25% of largest area
       final mainFaces = faces.where((f) {
-        final area = f.boundingBox.width * f.boundingBox.height;
+        final area = f.width * imageWidth * f.height * imageHeight;
         return area >= (maxArea * 0.25);
       }).toList();
 
-      // Primary face is the largest one
-      Face primaryFace = mainFaces.first;
-      var primaryArea =
-          primaryFace.boundingBox.width * primaryFace.boundingBox.height;
+      if (mainFaces.isEmpty) return const _PortraitResult.none();
+
+      var primaryFace = mainFaces.first;
+      var primaryArea = primaryFace.width * imageWidth * primaryFace.height * imageHeight;
       for (final f in mainFaces.skip(1)) {
-        final area = f.boundingBox.width * f.boundingBox.height;
+        final area = f.width * imageWidth * f.height * imageHeight;
         if (area > primaryArea) {
           primaryFace = f;
           primaryArea = area;
@@ -1154,35 +1133,24 @@ class AnalyzerIsolate {
       }
 
       double totalFaceSharpness = 0.0;
-      double totalEyeSharpness = 0.0;
-      int eyeSharpnessCount = 0;
       double minEyeOpen = 1.0;
       bool anyEyesClosed = false;
       bool allBothEyesDetected = true;
       bool anyBothEyesDetected = false;
 
       for (final face in mainFaces) {
-        final bb = face.boundingBox;
-        final rx = bb.left.round();
-        final ry = bb.top.round();
-        final rw = bb.width.round();
-        final rh = bb.height.round();
+        final rx = (face.x * imageWidth).round().clamp(0, imageWidth - 1);
+        final ry = (face.y * imageHeight).round().clamp(0, imageHeight - 1);
+        final rw = (face.width * imageWidth).round().clamp(1, imageWidth - rx);
+        final rh = (face.height * imageHeight).round().clamp(1, imageHeight - ry);
 
-        // Sharpness calculation in face ROI
         final roi = cv.Rect(rx, ry, rw, rh);
         var fSharp = _calcLaplacianVarianceInRoi(mat, roi);
         if (fSharp <= 0) {
-          fSharp = _fallbackLaplacianVariance(
-            bytes,
-            x: rx,
-            y: ry,
-            w: rw,
-            h: rh,
-          );
+          fSharp = _fallbackLaplacianVariance(bytes, x: rx, y: ry, w: rw, h: rh);
         }
         totalFaceSharpness += fSharp;
 
-        // Eye open probability (0.0 to 1.0)
         final le = face.leftEyeOpenProbability;
         final re = face.rightEyeOpenProbability;
         double? faceEyeAvg;
@@ -1212,69 +1180,27 @@ class AnalyzerIsolate {
             anyEyesClosed = true;
           }
         }
-
-        // Eye Sharpness (using landmarks)
-        final leftLandmark = face.landmarks[FaceLandmarkType.leftEye];
-        final rightLandmark = face.landmarks[FaceLandmarkType.rightEye];
-
-        if (leftLandmark != null) {
-          final ex = leftLandmark.position.x;
-          final ey = leftLandmark.position.y;
-          final ew = (rw * 0.15)
-              .round(); // Eye ROI size approx 15% of face width
-          final eroi = cv.Rect(
-            (ex - ew / 2).round(),
-            (ey - ew / 2).round(),
-            ew,
-            ew,
-          );
-          final v = _calcLaplacianVarianceInRoi(mat, eroi);
-          if (v > 0) {
-            totalEyeSharpness += v;
-            eyeSharpnessCount++;
-          }
-        }
-        if (rightLandmark != null) {
-          final ex = rightLandmark.position.x;
-          final ey = rightLandmark.position.y;
-          final ew = (rw * 0.15).round();
-          final eroi = cv.Rect(
-            (ex - ew / 2).round(),
-            (ey - ew / 2).round(),
-            ew,
-            ew,
-          );
-          final v = _calcLaplacianVarianceInRoi(mat, eroi);
-          if (v > 0) {
-            totalEyeSharpness += v;
-            eyeSharpnessCount++;
-          }
-        }
       }
 
       final avgFaceSharpness = totalFaceSharpness / mainFaces.length;
-      var avgEyeSharpness = -1.0;
-      if (eyeSharpnessCount > 0) {
-        final avgV = totalEyeSharpness / eyeSharpnessCount;
-        avgEyeSharpness = (avgV / 1000.0).clamp(0.0, 1.0);
-      }
+      final finalEyeOpenAvg = (minEyeOpen == 1.0 && !anyBothEyesDetected) ? null : minEyeOpen;
 
-      final finalEyeOpenAvg = (minEyeOpen == 1.0 && !anyBothEyesDetected)
-          ? null
-          : minEyeOpen;
+      final prx = (primaryFace.x * imageWidth).round();
+      final pry = (primaryFace.y * imageHeight).round();
+      final prw = (primaryFace.width * imageWidth).round();
+      final prh = (primaryFace.height * imageHeight).round();
 
-      final pBb = primaryFace.boundingBox;
       return _PortraitResult(
         hasFace: true,
-        faceX: pBb.left.round(),
-        faceY: pBb.top.round(),
-        faceW: pBb.width.round(),
-        faceH: pBb.height.round(),
+        faceX: prx,
+        faceY: pry,
+        faceW: prw,
+        faceH: prh,
         faceSharpness: avgFaceSharpness,
         eyeOpenAvg: finalEyeOpenAvg,
         eyesClosed: anyEyesClosed,
         bothEyesDetected: allBothEyesDetected,
-        eyeSharpness: avgEyeSharpness,
+        eyeSharpness: -1.0, // Eye landmarks not supported natively yet
       );
     } catch (e) {
       return const _PortraitResult.none();

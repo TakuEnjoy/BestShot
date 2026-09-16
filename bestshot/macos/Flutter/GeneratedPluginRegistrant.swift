@@ -5,7 +5,7 @@
 import FlutterMacOS
 import Foundation
 
-import file_picker
+import file_picker_darwin
 import photo_manager
 
 func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {

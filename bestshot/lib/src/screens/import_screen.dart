@@ -12,7 +12,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../services/analysis/embedding_service.dart';
-import '../platform/folder_picker_windows.dart';
+import '../platform/folder_picker.dart';
 import 'groups_screen.dart';
 import '../core/navigation/fast_route.dart';
 import 'package:flutter/services.dart';
@@ -578,7 +578,7 @@ class _ImportScreenState extends State<ImportScreen> {
     String? dir;
     try {
       if (isAndroidSAF) {
-        dir = await FilePicker.platform.getDirectoryPath();
+        dir = await FilePicker.getDirectoryPath();
       } else {
         dir = FolderPickerWindows.pickFolder();
       }
