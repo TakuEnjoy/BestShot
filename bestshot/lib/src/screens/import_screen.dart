@@ -79,26 +79,68 @@ class _ImportScreenState extends State<ImportScreen> {
     _checkEmbeddingModel();
   }
 
-  Future<void> _checkEmbeddingModel() async {
+  static Future<String?> findEmbeddingModelPath() async {
     try {
       final supportDir = await getApplicationSupportDirectory();
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final currentDir = Directory.current.path;
+
       final candidatePaths = [
-        p.join(Directory.current.path, 'assets', 'models', 'embedding.onnx'),
-        p.join(Directory.current.path, 'models', 'embedding.onnx'),
+        // 1. AppData / Support directory
         p.join(supportDir.path, 'models', 'embedding.onnx'),
+        // 2. Relative to executable (packaged release or debug runner)
+        p.join(exeDir, 'data', 'flutter_assets', 'assets', 'models', 'embedding.onnx'),
+        p.join(exeDir, 'assets', 'models', 'embedding.onnx'),
+        p.join(exeDir, 'models', 'embedding.onnx'),
+        p.join(exeDir, '..', '..', '..', '..', 'assets', 'models', 'embedding.onnx'),
+        // 3. Current working directory & workspace roots
+        p.join(currentDir, 'assets', 'models', 'embedding.onnx'),
+        p.join(currentDir, 'models', 'embedding.onnx'),
+        p.join(currentDir, 'bestshot', 'assets', 'models', 'embedding.onnx'),
+        p.join(currentDir, 'bestshot', 'models', 'embedding.onnx'),
       ];
+
       for (final cp in candidatePaths) {
-        if (await File(cp).exists()) {
-          if (mounted) {
-            setState(() {
-              _embeddingModelAvailable = true;
-              _embeddingModelPath = cp;
-            });
-          }
-          debugPrint('[Embedding] Model detected at: $cp');
-          return;
+        final normalized = p.normalize(cp);
+        if (await File(normalized).exists()) {
+          debugPrint('[Embedding] Model file detected at: $normalized');
+          return normalized;
         }
       }
+
+      // 4. Try loading from Flutter rootBundle and extracting to supportDir
+      try {
+        final byteData = await rootBundle.load('assets/models/embedding.onnx');
+        final targetFile = File(p.join(supportDir.path, 'models', 'embedding.onnx'));
+        await targetFile.parent.create(recursive: true);
+        await targetFile.writeAsBytes(
+          byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes),
+          flush: true,
+        );
+        if (await targetFile.exists()) {
+          debugPrint('[Embedding] Extracted model from rootBundle to: ${targetFile.path}');
+          return targetFile.path;
+        }
+      } catch (assetErr) {
+        debugPrint('[Embedding] rootBundle extraction check: $assetErr');
+      }
+    } catch (e) {
+      debugPrint('[Embedding] Error checking model availability: $e');
+    }
+    return null;
+  }
+
+  Future<void> _checkEmbeddingModel() async {
+    final modelPath = await findEmbeddingModelPath();
+    if (modelPath != null) {
+      if (mounted) {
+        setState(() {
+          _embeddingModelAvailable = true;
+          _embeddingModelPath = modelPath;
+        });
+      }
+      debugPrint('[Embedding] Model active at: $modelPath');
+    } else {
       debugPrint('[Embedding] embedding.onnx not found. Using ORB + pHash + Color hybrid grouping.');
       if (mounted) {
         setState(() {
@@ -106,8 +148,6 @@ class _ImportScreenState extends State<ImportScreen> {
           _embeddingModelPath = null;
         });
       }
-    } catch (e) {
-      debugPrint('[Embedding] Error checking model availability: $e');
     }
   }
 
@@ -310,18 +350,7 @@ class _ImportScreenState extends State<ImportScreen> {
       // Embedding feature extraction (ONNX Runtime, Windows / Android)
       String? foundModelPath = _embeddingModelPath;
       if (foundModelPath == null || !File(foundModelPath).existsSync()) {
-        final supportDir = await getApplicationSupportDirectory();
-        final candidatePaths = [
-          p.join(Directory.current.path, 'assets', 'models', 'embedding.onnx'),
-          p.join(Directory.current.path, 'models', 'embedding.onnx'),
-          p.join(supportDir.path, 'models', 'embedding.onnx'),
-        ];
-        for (final cp in candidatePaths) {
-          if (await File(cp).exists()) {
-            foundModelPath = cp;
-            break;
-          }
-        }
+        foundModelPath = await findEmbeddingModelPath();
       }
 
       if (foundModelPath != null && !_cancelled) {

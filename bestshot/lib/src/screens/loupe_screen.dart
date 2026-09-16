@@ -60,7 +60,6 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
   Color _focusMaskColor = const Color(0xFF00D084); // Pro Mode green accent
   double _focusMaskOpacity = 0.25; // Pro Mode 0.25 opacity
 
-  bool _showFocusPoint = true;
   bool _showHistogram = true;
   final Map<String, int> _imageWidths = {};
   final Map<String, int> _imageHeights = {};
@@ -342,6 +341,12 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
       return KeyEventResult.handled;
     }
 
+    // D キー: デバッグ表示トグル
+    if (key == LogicalKeyboardKey.keyD) {
+      setState(() => _showDebugOverlay = !_showDebugOverlay);
+      return KeyEventResult.handled;
+    }
+
     // Z キー: ピント位置へのズーム / リセット
     if (key == LogicalKeyboardKey.keyZ) {
       _zoomActivePaneToFocusPoint();
@@ -418,15 +423,6 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
                         : Colors.amberAccent),
               ),
             ),
-            // ピント位置マーク
-            IconButton(
-              tooltip: _showFocusPoint ? 'ピント位置マークを隠す' : 'ピント位置マークを表示',
-              onPressed: () => setState(() => _showFocusPoint = !_showFocusPoint),
-              icon: Icon(
-                _showFocusPoint ? Icons.filter_center_focus : Icons.center_focus_weak,
-                color: _showFocusPoint ? const Color(0xFF00E676) : null,
-              ),
-            ),
             // ヒストグラム表示トグル
             IconButton(
               tooltip: _showHistogram ? 'ヒストグラムを隠す [H]' : 'ヒストグラムを表示 [H]',
@@ -491,18 +487,18 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
                   ),
                 ],
               ),
-            if (!isCompactAppBar && kDebugMode)
-              IconButton(
-                tooltip: 'デバッグ表示を切り替え',
-                onPressed: () =>
-                    setState(() => _showDebugOverlay = !_showDebugOverlay),
-                icon: Icon(
-                  _showDebugOverlay
-                      ? Icons.bug_report
-                      : Icons.bug_report_outlined,
-                  color: _showDebugOverlay ? Colors.redAccent : null,
-                ),
+            // デバッグ表示トグル（プレビュー画面）
+            IconButton(
+              tooltip: 'デバッグ表示を切り替え [D]',
+              onPressed: () =>
+                  setState(() => _showDebugOverlay = !_showDebugOverlay),
+              icon: Icon(
+                _showDebugOverlay
+                    ? Icons.bug_report
+                    : Icons.bug_report_outlined,
+                color: _showDebugOverlay ? Colors.redAccent : null,
               ),
+            ),
             const SizedBox(width: 8),
           ],
         ),
@@ -999,7 +995,6 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
       showFocusMask: _showFocusMask,
       maskColor: _focusMaskColor,
       maskOpacity: _focusMaskOpacity,
-      showFocusPoint: _showFocusPoint,
       showHistogram: _showHistogram,
       title: _getFileName(item),
       score: widget.scores[index],
@@ -1035,7 +1030,6 @@ class _ZoomPane extends StatefulWidget {
     required this.showFocusMask,
     required this.maskColor,
     required this.maskOpacity,
-    required this.showFocusPoint,
     required this.showHistogram,
     required this.title,
     required this.score,
@@ -1057,7 +1051,6 @@ class _ZoomPane extends StatefulWidget {
   final bool showFocusMask;
   final Color maskColor;
   final double maskOpacity;
-  final bool showFocusPoint;
   final bool showHistogram;
   final String title;
   final double score;
@@ -1254,91 +1247,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
   }
 
   /// ピント位置マーク（カメラのAFフレーム / 瞳AFレティクル）
-  Widget _buildFocusMarker(double w, double h) {
-    if (!widget.showFocusPoint) return const SizedBox.shrink();
 
-    Offset? pt;
-    bool isEyeAf = false;
-    final item = widget.item;
-    final p = item.portrait;
-    if (p.hasFace &&
-        p.faceW > 0 &&
-        p.faceH > 0 &&
-        _imageWidth != null &&
-        _imageHeight != null) {
-      final cx = (p.faceX + p.faceW * 0.5) / _imageWidth!;
-      final cy = (p.faceY + p.faceH * 0.35) / _imageHeight!;
-      pt = Offset(cx, cy);
-      isEyeAf = true;
-    } else {
-      pt = item.focusPoint;
-    }
-    if (pt == null) {
-      return const Positioned(left: 0, top: 0, child: SizedBox.shrink());
-    }
-
-    final posX = pt.dx * w;
-    final posY = pt.dy * h;
-    const boxSize = 44.0;
-    final maxLeft = (w - boxSize) < 0.0 ? 0.0 : (w - boxSize);
-    final maxTop = (h - boxSize) < 0.0 ? 0.0 : (h - boxSize);
-
-    return Positioned(
-      left: (posX - boxSize / 2).clamp(0.0, maxLeft),
-      top: (posY - boxSize / 2).clamp(0.0, maxTop),
-      width: boxSize,
-      height: boxSize,
-      child: GestureDetector(
-        onTap: widget.onZoomToPoint,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(
-              color: isEyeAf ? const Color(0xFF00E676) : const Color(0xFF00E5FF),
-              width: 2.0,
-            ),
-            borderRadius: BorderRadius.circular(4),
-            color: (isEyeAf ? const Color(0xFF00E676) : const Color(0xFF00E5FF))
-                .withValues(alpha: 0.12),
-          ),
-          child: Stack(
-            alignment: Alignment.center,
-            clipBehavior: Clip.none,
-            children: [
-              // 中心十字ドット
-              Container(
-                width: 4,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: isEyeAf ? const Color(0xFF00E676) : const Color(0xFF00E5FF),
-                  shape: BoxShape.circle,
-                ),
-              ),
-              // 上部ラベル
-              Positioned(
-                top: -15,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: (isEyeAf ? const Color(0xFF00E676) : const Color(0xFF00E5FF))
-                        .withValues(alpha: 0.95),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                  child: Text(
-                    isEyeAf ? '瞳 AF' : 'FOCUS',
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 8,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 
   Widget _buildPaneHeader(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -2016,8 +1925,6 @@ class _ZoomPaneState extends State<_ZoomPane> {
                                       return Stack(
                                         fit: StackFit.passthrough,
                                         children: [
-                                          if (widget.showFocusPoint)
-                                            _buildFocusMarker(w, h),
                                           if (widget.showDebugOverlay) ...[
                                             if (widget.item.debugGridSharps != null &&
                                                 widget.item.debugGridSharps!.length == 16)

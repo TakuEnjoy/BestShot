@@ -241,24 +241,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     return score;
   }
 
-  String _getFocusPointDescription(PhotoEntry e) {
-    final fp = e.focusPoint;
-    if (fp == null) return '中央';
-    final x = fp.dx;
-    final y = fp.dy;
-    String horiz = '中央';
-    if (x < 0.38) horiz = '左';
-    if (x > 0.62) horiz = '右';
 
-    String vert = '';
-    if (y < 0.38) vert = '上';
-    if (y > 0.62) vert = '下';
-
-    if (horiz == '中央' && vert.isEmpty) return '中央';
-    if (horiz == '中央') return vert;
-    if (vert.isEmpty) return horiz;
-    return '$vertやや$horiz';
-  }
 
   String _formatFileSizeRaw(PhotoEntry e) {
     if (_fileSizeCache.containsKey(e.key)) {
@@ -864,7 +847,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             final exposureScore = (activeEntry.exposureScore * 100.0).round().clamp(0, 100);
             final noiseScore = _getNoiseScore(activeEntry);
             final compositionScore = _getCompositionScore(activeEntry);
-            final focusPos = _getFocusPointDescription(activeEntry);
             final filename = p.basename(activeEntry.filePath ?? 'DSC_${activeEntry.key.substring(0, 4)}.JPG');
             final fileSize = _getFileSize(activeEntry);
 
@@ -967,13 +949,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                         ),
                         const SizedBox(height: 12),
 
-                        // 2. ピント位置バー
+                        // 2. ピント（鮮鋭度）バー
                         RepaintBoundary(
                           child: _buildMetricBar(
                             icon: Icons.center_focus_strong,
                             label: 'ピント',
                             score: sharpnessScore,
-                            extraText: '($focusPos)',
                             barColor: BestShotTheme.accentGreen,
                           ),
                         ),
@@ -1117,7 +1098,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     required IconData icon,
     required String label,
     required int score,
-    required String extraText,
+    String? extraText,
     required Color barColor,
   }) {
     return Row(
@@ -1144,7 +1125,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         ),
         const SizedBox(width: 10),
         Text(
-          '$score% $extraText',
+          extraText != null && extraText.isNotEmpty ? '$score% $extraText' : '$score%',
           style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
         ),
       ],

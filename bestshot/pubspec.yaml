@@ -79,6 +79,8 @@ flutter:
   assets:
     - assets/cascades/haarcascade_frontalface_default.xml
     - assets/cascades/haarcascade_eye.xml
+    - assets/models/
+    - assets/models/embedding.onnx
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
