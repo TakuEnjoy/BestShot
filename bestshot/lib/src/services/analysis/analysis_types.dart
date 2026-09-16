@@ -11,7 +11,7 @@ class AnalyzeInput {
 }
 
 class AnalyzeOutput {
-  AnalyzeOutput({
+  const AnalyzeOutput({
     required this.key,
     required this.pHashHex,
     required this.sharpness,
@@ -23,16 +23,16 @@ class AnalyzeOutput {
     required this.histogram,
     this.hueHistogram,
     this.embeddings,
-    required this.hasFace,
-    required this.faceX,
-    required this.faceY,
-    required this.faceW,
-    required this.faceH,
-    required this.faceSharpness,
-    required this.eyeOpenAvg,
-    required this.eyesClosed,
-    required this.bothEyesDetected,
-    required this.eyeSharpness,
+    this.hasFace = false,
+    this.faceX = 0,
+    this.faceY = 0,
+    this.faceW = 0,
+    this.faceH = 0,
+    this.faceSharpness = 0,
+    this.eyeOpenAvg,
+    this.eyesClosed = false,
+    this.bothEyesDetected = false,
+    this.eyeSharpness = -1,
     this.debugGridSharps,
   });
 
@@ -61,7 +61,7 @@ class AnalyzeOutput {
   final double faceSharpness;
 
   /// Average of both eyes open probabilities when available (0..1). -1 if unknown.
-  final double eyeOpenAvg;
+  final double? eyeOpenAvg;
 
   /// True when judged as "eyes closed" in portrait mode.
   final bool eyesClosed;

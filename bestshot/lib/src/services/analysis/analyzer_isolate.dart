@@ -1204,7 +1204,7 @@ class AnalyzerIsolate {
           allBothEyesDetected = false;
         }
 
-        if (faceEyeAvg >= 0) {
+        if (faceEyeAvg != null) {
           if (faceEyeAvg < minEyeOpen) {
             minEyeOpen = faceEyeAvg;
           }

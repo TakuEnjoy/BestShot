@@ -336,7 +336,7 @@ class _ImportScreenState extends State<ImportScreen> {
             });
           }
           try {
-            int _lastEmbeddingUpdate = 0;
+            int lastEmbeddingUpdate = 0;
             for (var idx = 0; idx < entries.length; idx++) {
               if (_cancelled) break;
               final entry = entries[idx];
@@ -351,8 +351,8 @@ class _ImportScreenState extends State<ImportScreen> {
                 entries[idx] = entry.copyWith(embeddings: () => res.embeddings);
               }
               final now = DateTime.now().millisecondsSinceEpoch;
-              if (now - _lastEmbeddingUpdate > 100 || idx == entries.length - 1) {
-                _lastEmbeddingUpdate = now;
+              if (now - lastEmbeddingUpdate > 100 || idx == entries.length - 1) {
+                lastEmbeddingUpdate = now;
                 if (!mounted) break;
                 setState(() {
                   _progress = (idx + 1) / entries.length;

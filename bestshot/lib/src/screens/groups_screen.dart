@@ -1676,7 +1676,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     Widget buildItem(int index) {
       final g = displayGroups[index];
-      final isKeyboardGroupFocused = _groups.indexOf(g) == _keyboardGroupIndex;
+      final globalIndex = _groups.indexOf(g);
+      final isKeyboardGroupFocused = globalIndex == _keyboardGroupIndex;
 
       return _ExpandableGroupCard(
         group: g,
