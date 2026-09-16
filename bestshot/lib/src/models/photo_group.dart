@@ -27,39 +27,36 @@ class PhotoGroup {
   final String _bestKey;
   String get bestKey => _bestKey;
 
-  String? _cachedTimeRange;
-  String get timeRange {
-    if (_cachedTimeRange != null) return _cachedTimeRange!;
-    if (items.isEmpty) return _cachedTimeRange = '';
+  late final String timeRange = _computeTimeRange();
+  String _computeTimeRange() {
+    if (items.isEmpty) return '';
     final times = items.map((e) => e.capturedAt).whereType<DateTime>().toList()..sort();
-    if (times.isEmpty) return _cachedTimeRange = '時刻不明';
+    if (times.isEmpty) return '時刻不明';
     final first = times.first;
     final last = times.last;
     final fStr = '${first.hour.toString().padLeft(2, '0')}:${first.minute.toString().padLeft(2, '0')}';
-    if (first == last) return _cachedTimeRange = fStr;
+    if (first == last) return fStr;
     final lStr = '${last.hour.toString().padLeft(2, '0')}:${last.minute.toString().padLeft(2, '0')}';
-    return _cachedTimeRange = '$fStr - $lStr';
+    return '$fStr - $lStr';
   }
 
-  String? _cachedBurstDuration;
-  String get burstDuration {
-    if (_cachedBurstDuration != null) return _cachedBurstDuration!;
-    if (!isBurst) return _cachedBurstDuration = '単写';
+  late final String burstDuration = _computeBurstDuration();
+  String _computeBurstDuration() {
+    if (!isBurst) return '単写';
     final times = items.map((e) => e.capturedAt).whereType<DateTime>().toList()..sort();
-    if (times.length < 2) return _cachedBurstDuration = '連写';
+    if (times.length < 2) return '連写';
     final diffMs = times.last.difference(times.first).inMilliseconds;
     final sec = (diffMs / 1000.0).toStringAsFixed(1);
-    return _cachedBurstDuration = '連写: $sec秒間';
+    return '連写: $sec秒間';
   }
 
-  int? _cachedGeometricMatchRate;
-  int? get geometricMatchRate {
-    if (_cachedGeometricMatchRate != null) return _cachedGeometricMatchRate;
+  late final int? geometricMatchRate = _computeGeometricMatchRate();
+  int? _computeGeometricMatchRate() {
     for (final item in items) {
       final exp = item.groupExplanation;
       if (exp != null && exp.inliers != null && exp.inliers! > 0) {
         final ratio = ((exp.orbInlierRatio ?? 0.3) * 100).round().clamp(60, 99);
-        return _cachedGeometricMatchRate = ratio;
+        return ratio;
       }
     }
     return null;

@@ -57,6 +57,20 @@ class _GroupsScreenState extends State<GroupsScreen> {
     _selectedForDeleteNotifier.value = next;
   }
 
+  void _updateGroupBestKey(String photoKey) {
+    setState(() {
+      for (var i = 0; i < _groups.length; i++) {
+        final g = _groups[i];
+        if (g.items.any((item) => item.key == photoKey)) {
+          _groups[i] = g.copyWith(bestKey: photoKey);
+          break;
+        }
+      }
+      _sortedPortraitItems = null;
+      _lastGroupsRef = null; // force filtered groups recalculation
+    });
+  }
+
   // 仕分け用の状態変数
   final Map<String, String> _selectedSortFolders = {};
   final List<String> _customFolders = [];
@@ -70,7 +84,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
   bool _filterBurstOnly = false;
   bool _filterReviewOnly = false;
   bool _isFilterDrawerOpen = false;
-  int _bottomNavIndex = 0;
   Timer? _filterDebounceTimer;
 
   List<PhotoGroup>? _cachedFilteredGroups;
@@ -412,54 +425,56 @@ class _GroupsScreenState extends State<GroupsScreen> {
   }
 
   void _scrollToActiveGroup(bool isPortrait) {
-    if (!_scrollController.hasClients) return;
-    final size = MediaQuery.of(context).size;
-    final isWide = size.width >= 750;
-    final isMobile = size.width < 600;
-    final crossAxisCount = size.width >= 1100 ? 3 : (size.width >= 750 ? 2 : 1);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final size = MediaQuery.of(context).size;
+      final isWide = size.width >= 750;
+      final isMobile = size.width < 600;
+      final crossAxisCount = size.width >= 1100 ? 3 : (size.width >= 750 ? 2 : 1);
 
-    if (isPortrait) {
-      double targetOffset;
-      if (isWide) {
-        final itemWidth = (size.width - 32 - (crossAxisCount - 1) * 16) / crossAxisCount;
-        final itemHeight = itemWidth / 0.82 + 16;
-        final rowIndex = _keyboardPortraitIndex ~/ crossAxisCount;
-        targetOffset = rowIndex * itemHeight;
-      } else if (isMobile) {
-        final itemWidth = (size.width - 24 - 12) / 2;
-        final itemHeight = itemWidth / 0.82 + 12;
-        final rowIndex = _keyboardPortraitIndex ~/ 2;
-        targetOffset = rowIndex * itemHeight;
+      if (isPortrait) {
+        double targetOffset;
+        if (isWide) {
+          final itemWidth = (size.width - 32 - (crossAxisCount - 1) * 16) / crossAxisCount;
+          final itemHeight = itemWidth / 0.82 + 16;
+          final rowIndex = _keyboardPortraitIndex ~/ crossAxisCount;
+          targetOffset = rowIndex * itemHeight;
+        } else if (isMobile) {
+          final itemWidth = (size.width - 24 - 12) / 2;
+          final itemHeight = itemWidth / 0.82 + 12;
+          final rowIndex = _keyboardPortraitIndex ~/ 2;
+          targetOffset = rowIndex * itemHeight;
+        } else {
+          targetOffset = _keyboardPortraitIndex * 130.0;
+        }
+        final currentOffset = _scrollController.offset;
+        final viewHeight = size.height;
+        if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 200) {
+          _scrollController.animateTo(
+            targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeInOut,
+          );
+        }
       } else {
-        targetOffset = _keyboardPortraitIndex * 130.0;
+        double targetOffset;
+        if (crossAxisCount > 1) {
+          final rowIndex = _keyboardGroupIndex ~/ crossAxisCount;
+          targetOffset = rowIndex * (370.0 + 8.0);
+        } else {
+          targetOffset = _keyboardGroupIndex * 220.0;
+        }
+        final currentOffset = _scrollController.offset;
+        final viewHeight = size.height;
+        if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 300) {
+          _scrollController.animateTo(
+            targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeInOut,
+          );
+        }
       }
-      final currentOffset = _scrollController.offset;
-      final viewHeight = size.height;
-      if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 250) {
-        _scrollController.animateTo(
-          targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeInOut,
-        );
-      }
-    } else {
-      double targetOffset;
-      if (crossAxisCount > 1) {
-        final rowIndex = _keyboardGroupIndex ~/ crossAxisCount;
-        targetOffset = rowIndex * (370.0 + 8.0);
-      } else {
-        targetOffset = _keyboardGroupIndex * 220.0;
-      }
-      final currentOffset = _scrollController.offset;
-      final viewHeight = size.height;
-      if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 300) {
-        _scrollController.animateTo(
-          targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeInOut,
-        );
-      }
-    }
+    });
   }
 
   KeyEventResult _handleKeyEvent(KeyEvent event) {
@@ -561,12 +576,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
       if (key == LogicalKeyboardKey.keyB) {
         if (_keyboardPhotoKey != null) {
-          setState(() {
-            final idx = _groups.indexOf(g);
-            if (idx != -1) {
-              _groups[idx] = g.copyWith(bestKey: _keyboardPhotoKey!);
-            }
-          });
+          _updateGroupBestKey(_keyboardPhotoKey!);
         }
         return KeyEventResult.handled;
       }
@@ -1055,15 +1065,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
             _toggleDelete(k, val);
           },
           onSetBest: (k) {
-            setState(() {
-              for (var i = 0; i < _groups.length; i++) {
-                final g = _groups[i];
-                if (g.items.any((item) => item.key == k)) {
-                  _groups[i] = g.copyWith(bestKey: k);
-                  break;
-                }
-              }
-            });
+            _updateGroupBestKey(k);
           },
         ),
       ),
@@ -1285,7 +1287,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         value: selectedForDelete,
                         onChanged: (v) {
                           HapticFeedback.selectionClick();
-                          _keyboardPortraitIndex = index;
+                          setState(() {
+                            _keyboardPortraitIndex = index;
+                          });
                           _toggleDelete(e.key, v);
                         },
                         shape: RoundedRectangleBorder(
@@ -1302,7 +1306,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         color: Colors.transparent,
                         child: InkWell(
                           onTap: () {
-                            _keyboardPortraitIndex = index;
+                            setState(() {
+                              _keyboardPortraitIndex = index;
+                            });
                             _openLoupe([e]);
                           },
                           borderRadius: BorderRadius.circular(20),
@@ -1482,7 +1488,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                           value: selectedForDelete,
                           onChanged: (v) {
                             HapticFeedback.selectionClick();
-                            _keyboardPortraitIndex = index;
+                            setState(() {
+                              _keyboardPortraitIndex = index;
+                            });
                             _toggleDelete(e.key, v);
                           },
                           shape: RoundedRectangleBorder(
@@ -1668,7 +1676,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     Widget buildItem(int index) {
       final g = displayGroups[index];
-      final isKeyboardGroupFocused = index == _keyboardGroupIndex;
+      final isKeyboardGroupFocused = _groups.indexOf(g) == _keyboardGroupIndex;
 
       return _ExpandableGroupCard(
         group: g,
@@ -1706,21 +1714,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
           _selectedForDeleteNotifier.value = next;
         },
         onSetBest: (k) {
-          setState(() {
-            for (var i = 0; i < _groups.length; i++) {
-              if (_groups[i].items.any((item) => item.key == k)) {
-                _groups[i] = _groups[i].copyWith(bestKey: k);
-                break;
-              }
-            }
-          });
+          _updateGroupBestKey(k);
         },
         isKeyboardGroupFocused: isKeyboardGroupFocused,
         keyboardPhotoKey: isKeyboardGroupFocused ? _keyboardPhotoKey : null,
         onPhotoTileFocused: (key) {
-          if (_keyboardGroupIndex != index || _keyboardPhotoKey != key) {
+          if (_keyboardGroupIndex != globalIndex || _keyboardPhotoKey != key) {
             setState(() {
-              _keyboardGroupIndex = index;
+              _keyboardGroupIndex = globalIndex;
               _keyboardPhotoKey = key;
             });
           }
@@ -1733,7 +1734,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
             _addNewFolder(context, key, false);
           } else {
             setState(() {
-              _keyboardGroupIndex = index;
+              _keyboardGroupIndex = globalIndex;
               _keyboardPhotoKey = key;
               if (folder == null) {
                 _selectedSortFolders.remove(key);
@@ -1753,6 +1754,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                 group: g,
                 selectedForDelete: _selectedForDelete,
                 selectedForDeleteNotifier: _selectedForDeleteNotifier,
+                onUpdateDeleteSelection: (keys) {
+                  _selectedForDeleteNotifier.value = keys;
+                },
                 onToggleDelete: (key, v) {
                   _toggleDelete(key, v);
                 },
@@ -1770,14 +1774,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   });
                 },
                 onSetBest: (k) {
-                  setState(() {
-                    for (var i = 0; i < _groups.length; i++) {
-                      if (_groups[i].items.any((item) => item.key == k)) {
-                        _groups[i] = _groups[i].copyWith(bestKey: k);
-                        break;
-                      }
-                    }
-                  });
+                  _updateGroupBestKey(k);
                 },
                 selectedSortFolders: _selectedSortFolders,
                 customFolders: _customFolders,
@@ -1869,25 +1866,33 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     ),
 
                     // フィルタードロワー (スライド幅280dp, 250ms, easeOut, オーバーレイOpacity 0.3)
-                    if (_isFilterDrawerOpen) ...[
-                      // オーバーレイ
-                      Positioned.fill(
-                        child: GestureDetector(
-                          onTap: () => setState(() => _isFilterDrawerOpen = false),
-                          child: Container(
-                            color: Colors.black.withValues(alpha: 0.3),
+                    // オーバーレイ
+                    Positioned.fill(
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 250),
+                        curve: Curves.easeOut,
+                        opacity: _isFilterDrawerOpen ? 0.3 : 0.0,
+                        child: IgnorePointer(
+                          ignoring: !_isFilterDrawerOpen,
+                          child: GestureDetector(
+                            onTap: () => setState(() => _isFilterDrawerOpen = false),
+                            child: Container(
+                              color: Colors.black,
+                            ),
                           ),
                         ),
                       ),
-                      // ドロワー本体
-                      Positioned(
-                        top: 0,
-                        bottom: 0,
-                        left: 0,
-                        width: 280,
-                        child: _buildFilterDrawer(),
-                      ),
-                    ],
+                    ),
+                    // ドロワー本体
+                    AnimatedPositioned(
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOut,
+                      top: 0,
+                      bottom: 0,
+                      left: _isFilterDrawerOpen ? 0 : -280,
+                      width: 280,
+                      child: _buildFilterDrawer(),
+                    ),
 
                     // バックグラウンドタスク進捗オーバーレイ
                     if (_backgroundTasks.isNotEmpty)
@@ -2264,14 +2269,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
           _buildNavItem(
             icon: Icons.grid_view_rounded,
             label: 'グループ',
-            isSelected: _bottomNavIndex == 0,
-            onTap: () => setState(() => _bottomNavIndex = 0),
+            isSelected: true,
+            onTap: () {},
           ),
           // 比較: タップでルーペ、長押しでフィルタードロワー展開 (Section 2.1 & 4.1)
           _buildNavItem(
             icon: Icons.compare_arrows_rounded,
             label: '比較',
-            isSelected: _bottomNavIndex == 1,
+            isSelected: false,
             onTap: () {
               final targets = _loupeSelection.isNotEmpty
                   ? _loupeSelection.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList()
@@ -2286,15 +2291,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
             },
           ),
           _buildNavItem(
-            icon: Icons.tune_rounded,
-            label: '設定',
-            isSelected: _bottomNavIndex == 2,
+            icon: Icons.keyboard_rounded,
+            label: 'ショートカット',
+            isSelected: false,
             onTap: () => _showKeyboardShortcutsDialog(context),
           ),
           _buildNavItem(
             icon: Icons.folder_shared_outlined,
             label: '保存',
-            isSelected: _bottomNavIndex == 3,
+            isSelected: false,
             onTap: _exportBestShots,
           ),
         ],

@@ -17,19 +17,21 @@ class GroupDetailScreen extends StatefulWidget {
     required this.selectedForDelete,
     this.selectedForDeleteNotifier,
     required this.onToggleDelete,
+    this.onUpdateDeleteSelection,
     required this.loupeSelection,
     required this.onToggleLoupe,
-    required this.onSetBest,
     required this.selectedSortFolders,
     required this.customFolders,
-    required this.onSortFolderChanged,
     required this.processingKeys,
+    required this.onSortFolderChanged,
+    required this.onSetBest,
   });
 
   final PhotoGroup group;
   final Set<String> selectedForDelete;
   final ValueNotifier<Set<String>>? selectedForDeleteNotifier;
   final void Function(String key, bool selected) onToggleDelete;
+  final void Function(Set<String> keys)? onUpdateDeleteSelection;
   final List<String> loupeSelection;
   final void Function(String key) onToggleLoupe;
   final ValueChanged<String> onSetBest;
@@ -149,6 +151,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       } else {
         _items = List.of(widget.group.items);
       }
+      if (_items.isNotEmpty) {
+        _activeKeyNotifier.value = _items.first.key;
+      }
     });
   }
 
@@ -162,13 +167,22 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     for (final e in nonBestItems) {
       if (allMarked) {
         next.remove(e.key);
-        widget.onToggleDelete(e.key, false);
       } else {
         next.add(e.key);
-        widget.onToggleDelete(e.key, true);
       }
     }
     _deleteSelectionNotifier.value = next;
+    if (widget.onUpdateDeleteSelection != null) {
+      widget.onUpdateDeleteSelection!(next);
+    } else {
+      for (final e in _items) {
+        if (allMarked) {
+          widget.onToggleDelete(e.key, false);
+        } else {
+          widget.onToggleDelete(e.key, true);
+        }
+      }
+    }
   }
 
   void _clearAllDelete() {
@@ -177,10 +191,18 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     for (final e in _items) {
       if (next.contains(e.key)) {
         next.remove(e.key);
-        widget.onToggleDelete(e.key, false);
       }
     }
     _deleteSelectionNotifier.value = next;
+    if (widget.onUpdateDeleteSelection != null) {
+      widget.onUpdateDeleteSelection!(next);
+    } else {
+      for (final e in _items) {
+        if (current.contains(e.key)) {
+          widget.onToggleDelete(e.key, false);
+        }
+      }
+    }
   }
 
   int _calculateQualityScoreRaw(PhotoEntry e) {
@@ -205,10 +227,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     final fp = e.focusPoint;
     if (fp == null) return 85;
     // Rule of thirds lines: 0.333, 0.667
-    final dxDist = ((fp.dx - 0.333).abs()).clamp(0.0, 1.0);
+    final dxDist1 = ((fp.dx - 0.333).abs()).clamp(0.0, 1.0);
     final dxDist2 = ((fp.dx - 0.667).abs()).clamp(0.0, 1.0);
-    final bestX = dxDist < dxDist2 ? dxDist : dxDist2;
-    final score = (95 - (bestX * 40)).round().clamp(70, 98);
+    final bestX = dxDist1 < dxDist2 ? dxDist1 : dxDist2;
+
+    final dyDist1 = ((fp.dy - 0.333).abs()).clamp(0.0, 1.0);
+    final dyDist2 = ((fp.dy - 0.667).abs()).clamp(0.0, 1.0);
+    final bestY = dyDist1 < dyDist2 ? dyDist1 : dyDist2;
+
+    // Nearest line (X or Y)
+    final bestDist = bestX < bestY ? bestX : bestY;
+    final score = (95 - (bestDist * 50)).round().clamp(70, 98);
     return score;
   }
 
@@ -382,13 +411,18 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               for (final item in _items) {
                 if (item.key != widget.group.bestKey) {
                   next.add(item.key);
-                  widget.onToggleDelete(item.key, true);
                 } else {
                   next.remove(item.key);
-                  widget.onToggleDelete(item.key, false);
                 }
               }
               _deleteSelectionNotifier.value = next;
+              if (widget.onUpdateDeleteSelection != null) {
+                widget.onUpdateDeleteSelection!(next);
+              } else {
+                for (final item in _items) {
+                  widget.onToggleDelete(item.key, next.contains(item.key));
+                }
+              }
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Best 以外の写真を削除予定に設定しました')),
               );
@@ -590,7 +624,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
   Widget _buildGridThumbnail(PhotoEntry item) {
     final isBest = item.key == widget.group.bestKey;
-    final isLoupeSelected = widget.loupeSelection.contains(item.key);
+    final loupeIndex = widget.loupeSelection.indexOf(item.key);
+    final isLoupeSelected = loupeIndex != -1;
     final sortFolder = widget.selectedSortFolders[item.key];
     final hasFolder = sortFolder != null;
     final qualityScore = _getQualityScore(item);
@@ -628,11 +663,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                     (e) => e.key == widget.group.bestKey,
                     orElse: () => widget.group.items.first,
                   );
-                  final compareItems = best.key == item.key
-                      ? (widget.group.items.length > 1
-                          ? [best, widget.group.items.firstWhere((e) => e.key != best.key)]
-                          : [best])
-                      : [best, item];
+                  final compareItems = best.key == item.key ? [item] : [best, item];
                   precacheImage(MemoryImage(item.displayBytes), context);
                   Navigator.of(context).push(
                     FastRoute(
@@ -769,7 +800,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                               borderRadius: BorderRadius.circular(2),
                             ),
                             child: Text(
-                              'L${widget.loupeSelection.indexOf(item.key) + 1}',
+                              'L${loupeIndex + 1}',
                               style: const TextStyle(
                                 fontSize: 9,
                                 fontWeight: FontWeight.bold,

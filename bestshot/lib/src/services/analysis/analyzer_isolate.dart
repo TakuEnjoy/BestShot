@@ -354,7 +354,7 @@ class AnalyzerIsolate {
       faceW: 0,
       faceH: 0,
       faceSharpness: 0,
-      eyeOpenAvg: -1,
+      eyeOpenAvg: null,
       eyesClosed: false,
       bothEyesDetected: false,
       eyeSharpness: -1,
@@ -460,7 +460,7 @@ class AnalyzerIsolate {
       var faceW = 0;
       var faceH = 0;
       var faceSharpness = 0.0;
-      var eyeOpenAvg = -1.0;
+      double? eyeOpenAvg;
       var eyesClosed = false;
       var bothEyesDetected = false;
       var eyeSharpness = -1.0;
@@ -979,7 +979,7 @@ class AnalyzerIsolate {
         faceW: primaryFace.width,
         faceH: primaryFace.height,
         faceSharpness: avgFaceSharpness,
-        eyeOpenAvg: -1,
+        eyeOpenAvg: null,
         eyesClosed: anyEyesClosed,
         bothEyesDetected: allBothEyesDetected,
         eyeSharpness: avgEyeSharpness,
@@ -1185,7 +1185,7 @@ class AnalyzerIsolate {
         // Eye open probability (0.0 to 1.0)
         final le = face.leftEyeOpenProbability;
         final re = face.rightEyeOpenProbability;
-        var faceEyeAvg = -1.0;
+        double? faceEyeAvg;
         var faceEyesClosed = false;
 
         if (le != null && re != null) {
@@ -1260,7 +1260,7 @@ class AnalyzerIsolate {
       }
 
       final finalEyeOpenAvg = (minEyeOpen == 1.0 && !anyBothEyesDetected)
-          ? -1.0
+          ? null
           : minEyeOpen;
 
       final pBb = primaryFace.boundingBox;
@@ -1348,7 +1348,7 @@ class _PortraitResult {
       faceW = 0,
       faceH = 0,
       faceSharpness = 0,
-      eyeOpenAvg = -1,
+      eyeOpenAvg = null,
       eyesClosed = false,
       bothEyesDetected = false,
       eyeSharpness = -1;
@@ -1359,7 +1359,7 @@ class _PortraitResult {
   final int faceW;
   final int faceH;
   final double faceSharpness;
-  final double eyeOpenAvg;
+  final double? eyeOpenAvg;
   final bool eyesClosed;
   final bool bothEyesDetected;
   final double eyeSharpness;

@@ -47,7 +47,7 @@ class LoupeScreen extends StatefulWidget {
   State<LoupeScreen> createState() => _LoupeScreenState();
 }
 
-class _LoupeScreenState extends State<LoupeScreen> {
+class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
   bool _loading = true;
   Object? _error;
   final Map<String, Uint8List> _loadedBytes = {};
@@ -82,6 +82,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _isBests = List.of(widget.isBests);
     _localSelectedForDelete = Set<String>.from(widget.initialSelectedForDelete ?? const <String>{});
     _focusNode = FocusNode();
@@ -113,11 +114,18 @@ class _LoupeScreenState extends State<LoupeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _focusNode.dispose();
     for (final c in _controllers) {
       c.dispose();
     }
     super.dispose();
+  }
+
+  @override
+  void didHaveMemoryPressure() {
+    super.didHaveMemoryPressure();
+    LoupeScreen._sessionMaskCache.clear();
   }
 
   void _onInteractionUpdate(int sourceIndex) {
@@ -483,7 +491,7 @@ class _LoupeScreenState extends State<LoupeScreen> {
                   ),
                 ],
               ),
-            if (!isCompactAppBar)
+            if (!isCompactAppBar && kDebugMode)
               IconButton(
                 tooltip: 'デバッグ表示を切り替え',
                 onPressed: () =>
@@ -841,11 +849,27 @@ class _LoupeScreenState extends State<LoupeScreen> {
                               ),
                               onPressed: () {
                                 setState(() {
+                                  _activePaneIndex = (_activePaneIndex - 1 + widget.items.length) % widget.items.length;
+                                });
+                              },
+                              icon: const Icon(Icons.arrow_back_ios_new, size: 12, color: Color(0xFF8A8A8E)),
+                              label: const Text('前', style: TextStyle(fontSize: 11, color: Colors.white)),
+                            ),
+                            const SizedBox(width: 4),
+                            OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                minimumSize: const Size(0, 28),
+                                side: const BorderSide(color: Color(0xFF2C2C2E)),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                              ),
+                              onPressed: () {
+                                setState(() {
                                   _activePaneIndex = (_activePaneIndex + 1) % widget.items.length;
                                 });
                               },
-                              icon: const Icon(Icons.swap_horiz, size: 14, color: Color(0xFF8A8A8E)),
-                              label: const Text('入替', style: TextStyle(fontSize: 11, color: Colors.white)),
+                              icon: const Icon(Icons.arrow_forward_ios, size: 12, color: Color(0xFF8A8A8E)),
+                              label: const Text('次', style: TextStyle(fontSize: 11, color: Colors.white)),
                             ),
                             const SizedBox(width: 6),
                             OutlinedButton.icon(
@@ -1865,9 +1889,9 @@ class _ZoomPaneState extends State<_ZoomPane> {
     }
     if (ss == null) return false;
 
-    // 手ブレ限界速度: SS > 1/焦点距離 * 1.25
+    // 手ブレ限界速度: SS > 1/(焦点距離 * 1.25)
     final limit = 1.0 / fl;
-    return ss > limit * 1.25;
+    return ss > limit / 1.25;
   }
 
   /// ヒストグラムカード
@@ -2125,5 +2149,9 @@ class FocusMaskCache {
       _cache.remove(_cache.keys.first); // Remove oldest
     }
     _cache[key] = value;
+  }
+
+  void clear() {
+    _cache.clear();
   }
 }

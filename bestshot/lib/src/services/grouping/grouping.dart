@@ -525,9 +525,10 @@ class PhotoGrouper {
         }
       }
 
+      final uniquePrefix = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
       groups.add(
         PhotoGroup(
-          id: 'G${groupIdCounter++}',
+          id: 'G_${uniquePrefix}_${groupIdCounter++}',
           items: groupItems,
           bestKey: best.key,
           deleteCandidateKeys: deleteCandidates,
