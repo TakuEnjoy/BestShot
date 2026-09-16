@@ -1092,7 +1092,6 @@ class _ImportScreenState extends State<ImportScreen> {
                   ),
               ],
             ),
-            ),
           ),
           if (!isSmallMobile && isWindows)
             IconButton(
