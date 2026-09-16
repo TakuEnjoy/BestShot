@@ -61,9 +61,15 @@ class PhotoGrouper {
 
     final lightGroups = await Isolate.run(() => group(lightItems, config));
 
-    // Restore original entries with displayBytes
+    // Restore original entries with displayBytes while preserving groupExplanation and scoreExplanation
     return lightGroups.map((g) {
-      final restoredItems = g.items.map((e) => itemMap[e.key] ?? e).toList();
+      final restoredItems = g.items.map((e) {
+        final original = itemMap[e.key];
+        if (original != null && original.displayBytes.isNotEmpty) {
+          return e.copyWith(displayBytes: original.displayBytes);
+        }
+        return e;
+      }).toList();
       return g.copyWith(items: restoredItems);
     }).toList();
   }

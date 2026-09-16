@@ -1733,9 +1733,37 @@ class _ZoomPaneState extends State<_ZoomPane> {
               ],
             ),
           ] else ...[
-            Text(
-              '生鮮鋭度: ${widget.item.sharpness.toStringAsFixed(0)} | 露出: ${widget.item.exposureScore.toStringAsFixed(2)}',
-              style: const TextStyle(color: Colors.white70, fontSize: 8.5),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.amberAccent.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(2.5),
+                  ),
+                  child: Text(
+                    widget.item.portrait.hasFace ? 'ポートレート判定' : '一般シーン判定',
+                    style: const TextStyle(
+                      color: Colors.amberAccent,
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 3),
+            Wrap(
+              spacing: 4,
+              runSpacing: 2,
+              children: [
+                _buildDebugTag('生鮮鋭度', widget.item.sharpness.toStringAsFixed(0)),
+                _buildDebugTag('露出スコア', '${(widget.item.exposureScore * 100).toStringAsFixed(1)}%'),
+                if (widget.item.portrait.hasFace)
+                  _buildDebugTag('顔鮮鋭度', widget.item.portrait.faceSharpness.toStringAsFixed(0)),
+                if (widget.item.faceQualityScore > 0)
+                  _buildDebugTag('顔品質点', '${(widget.item.faceQualityScore * 100).toStringAsFixed(1)}%'),
+              ],
             ),
           ],
         ],

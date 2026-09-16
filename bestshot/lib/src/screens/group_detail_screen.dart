@@ -989,6 +989,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                             ),
                           ),
                         ),
+                        const SizedBox(height: 12),
+
+                        // 4.5. デバッグ・判定根拠詳細カード (スコア算出基準 & グループ化算出数値)
+                        _buildDebugExplanation(activeEntry),
                         const SizedBox(height: 16),
 
                         // 5. アクションボタン: [🔴 削除予定に追加/解除]  [⭐ Best推薦]
@@ -1162,6 +1166,182 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildDebugExplanation(PhotoEntry entry) {
+    final sExp = entry.scoreExplanation;
+    final gExp = entry.groupExplanation;
+
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: BestShotTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: BestShotTheme.dividerColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.analytics_outlined, size: 13, color: BestShotTheme.accentGold),
+              const SizedBox(width: 4),
+              const Text(
+                'AI判定根拠・算出詳細',
+                style: TextStyle(
+                  color: BestShotTheme.accentGold,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              if (sExp != null)
+                Text(
+                  '総合 ${(sExp.totalScore * 100).toStringAsFixed(1)}点',
+                  style: const TextStyle(
+                    color: BestShotTheme.accentGold,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+
+          // グループ化判定理由 & 算出数値
+          if (gExp != null) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: BestShotTheme.accentBlue.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                  child: Text(
+                    gExp.matchType,
+                    style: const TextStyle(
+                      color: BestShotTheme.accentBlue,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    gExp.description,
+                    style: const TextStyle(color: BestShotTheme.textPrimary, fontSize: 10),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            Wrap(
+              spacing: 4,
+              runSpacing: 3,
+              children: [
+                if (gExp.diffSeconds != null)
+                  _buildDebugTag('Δt', '${gExp.diffSeconds!.toStringAsFixed(1)}s'),
+                if (gExp.pHashDistance != null)
+                  _buildDebugTag('pHash距離', '${gExp.pHashDistance}'),
+                if (gExp.colorDistance != null)
+                  _buildDebugTag('色距離', gExp.colorDistance!.toStringAsFixed(3)),
+                if (gExp.orbMatches != null)
+                  _buildDebugTag('ORB一致', '${gExp.orbMatches}点'),
+                if (gExp.inliers != null)
+                  _buildDebugTag('幾何Inlier', '${gExp.inliers}点'),
+                if (gExp.orbInlierRatio != null)
+                  _buildDebugTag('Inlier率', '${(gExp.orbInlierRatio! * 100).toStringAsFixed(1)}%'),
+                if (gExp.embeddingSimilarity != null)
+                  _buildDebugTag('埋め込み類似度', '${(gExp.embeddingSimilarity! * 100).toStringAsFixed(1)}%'),
+                if (gExp.confidence > 0)
+                  _buildDebugTag('結合信頼度', '${(gExp.confidence * 100).toStringAsFixed(1)}%'),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Divider(color: BestShotTheme.dividerColor, height: 1),
+            const SizedBox(height: 6),
+          ],
+
+          // スコア算出基準
+          if (sExp != null) ...[
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: BestShotTheme.accentGold.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                  child: Text(
+                    sExp.ruleName,
+                    style: const TextStyle(
+                      color: BestShotTheme.accentGold,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 3),
+            Text(
+              sExp.formulaText,
+              style: const TextStyle(
+                color: BestShotTheme.textSecondary,
+                fontSize: 9,
+                fontFamily: 'monospace',
+              ),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 4,
+              runSpacing: 3,
+              children: [
+                _buildDebugTag('生鮮鋭度', sExp.rawSharpness.toStringAsFixed(0)),
+                _buildDebugTag('ISO補正後', sExp.effectiveSharpness.toStringAsFixed(0)),
+                _buildDebugTag('正規化鮮鋭度', '${(sExp.normalizedSharpness * 100).toStringAsFixed(1)}%'),
+                _buildDebugTag('露出点', '${(sExp.exposureScore * 100).toStringAsFixed(1)}%'),
+                if (sExp.faceQualityScore > 0)
+                  _buildDebugTag('顔品質点', '${(sExp.faceQualityScore * 100).toStringAsFixed(1)}%'),
+              ],
+            ),
+          ] else ...[
+            Wrap(
+              spacing: 4,
+              runSpacing: 3,
+              children: [
+                _buildDebugTag('生鮮鋭度', entry.sharpness.toStringAsFixed(0)),
+                _buildDebugTag('露出スコア', '${(entry.exposureScore * 100).toStringAsFixed(1)}%'),
+                if (entry.portrait.hasFace)
+                  _buildDebugTag('顔鮮鋭度', entry.portrait.faceSharpness.toStringAsFixed(0)),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDebugTag(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
+      decoration: BoxDecoration(
+        color: BestShotTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(2),
+        border: Border.all(color: BestShotTheme.dividerColor, width: 0.5),
+      ),
+      child: Text(
+        '$label: $value',
+        style: const TextStyle(
+          fontSize: 9,
+          color: BestShotTheme.textSecondary,
+        ),
+      ),
     );
   }
 }
