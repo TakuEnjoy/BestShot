@@ -248,14 +248,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.3.0"
-  image_compare:
-    dependency: "direct main"
-    description:
-      name: image_compare
-      sha256: "774e9ef1558ca328191fe9690e8e024159a3a2db6ea4ef6b65bea0faa3631b74"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.1.2"
   jni:
     dependency: transitive
     description:
@@ -573,14 +565,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.0"
-  universal_io:
-    dependency: transitive
-    description:
-      name: universal_io
-      sha256: f63cbc48103236abf48e345e07a03ce5757ea86285ed313a6a032596ed9301e2
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.3.1"
   vector_math:
     dependency: transitive
     description:

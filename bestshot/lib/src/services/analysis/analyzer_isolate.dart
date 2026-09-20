@@ -25,7 +25,7 @@ class AnalyzerIsolate {
   }) async {
     if (inputs.isEmpty) return [];
 
-    final isMobile = true;
+    final isMobile = Platform.isAndroid || Platform.isIOS;
     final processorCount = Platform.numberOfProcessors;
     final maxWorkers = isMobile ? 3 : 6;
     final calculatedWorkerCount = (processorCount ~/ 2).clamp(1, maxWorkers);
@@ -1207,18 +1207,6 @@ class AnalyzerIsolate {
     } finally {
       mat?.dispose();
     }
-  }
-
-  static Future<String> _ensureAssetFile({
-    required String assetPath,
-    required String outPath,
-  }) async {
-    final f = File(outPath);
-    if (await f.exists()) return outPath;
-    final data = await rootBundle.load(assetPath);
-    await f.parent.create(recursive: true);
-    await f.writeAsBytes(data.buffer.asUint8List(), flush: true);
-    return outPath;
   }
 }
 

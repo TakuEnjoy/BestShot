@@ -31,13 +31,13 @@ abstract class EmbeddingService {
 /// - Input Shape: [1, 3, 224, 224] (NCHW, RGB)
 /// - Normalization: ImageNet mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
 /// - Output: L2-normalized float32 vector
-class WindowsOnnxEmbeddingService implements EmbeddingService {
+class OnnxEmbeddingService implements EmbeddingService {
   OrtSession? _session;
   final String modelPath;
   String? _inputName;
   bool _initialized = false;
 
-  WindowsOnnxEmbeddingService({required this.modelPath});
+  OnnxEmbeddingService({required this.modelPath});
 
   @override
   bool get isAvailable => _initialized && _session != null;
@@ -138,7 +138,7 @@ class WindowsOnnxEmbeddingService implements EmbeddingService {
           height: 224,
         );
       } else {
-        // Android (Mobile) - 4 Lightweight crops
+        // Mobile (iOS / Android) - 4 Lightweight crops
         final cw = (w * 0.60).round();
         final ch = (h * 0.60).round();
         final cx = ((w - cw) / 2).round();
@@ -280,3 +280,6 @@ class WindowsOnnxEmbeddingService implements EmbeddingService {
     } catch (_) {}
   }
 }
+
+/// Backward compatibility alias
+typedef WindowsOnnxEmbeddingService = OnnxEmbeddingService;

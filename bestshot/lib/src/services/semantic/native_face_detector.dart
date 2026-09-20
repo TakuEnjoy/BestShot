@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class NativeFace {
@@ -44,7 +45,7 @@ class NativeFaceDetector {
       }
       return faces;
     } catch (e) {
-      print('Error detecting faces: $e');
+      debugPrint('Error detecting faces: $e');
       return [];
     }
   }

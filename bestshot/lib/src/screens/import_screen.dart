@@ -347,14 +347,14 @@ class _ImportScreenState extends State<ImportScreen> {
         );
       }
 
-      // Embedding feature extraction (ONNX Runtime, Windows / Android)
+      // Embedding feature extraction (ONNX Runtime)
       String? foundModelPath = _embeddingModelPath;
       if (foundModelPath == null || !File(foundModelPath).existsSync()) {
         foundModelPath = await findEmbeddingModelPath();
       }
 
       if (foundModelPath != null && !_cancelled) {
-        final embService = WindowsOnnxEmbeddingService(modelPath: foundModelPath);
+        final embService = OnnxEmbeddingService(modelPath: foundModelPath);
         final initialized = await embService.initialize();
         if (initialized) {
           if (mounted) {
@@ -374,7 +374,7 @@ class _ImportScreenState extends State<ImportScreen> {
                   : entry.displayBytes;
               final res = await embService.extractEmbeddings(
                 rawBytes,
-                isLightweight: Platform.isAndroid,
+                isLightweight: Platform.isAndroid || Platform.isIOS,
               );
               if (res != null) {
                 entries[idx] = entry.copyWith(embeddings: () => res.embeddings);
