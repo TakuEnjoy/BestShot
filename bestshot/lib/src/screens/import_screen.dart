@@ -1375,17 +1375,15 @@ class _ImportScreenState extends State<ImportScreen> {
                   onTap: _busy ? null : () => setState(() => _detectionMode = DetectionMode.standard),
                 ),
               ),
-              if (isAndroid) ...[
-                const SizedBox(width: 6),
-                Expanded(
-                  child: _modeSegmentItem(
-                    title: 'ポートレート',
-                    icon: Icons.face_rounded,
-                    selected: _detectionMode == DetectionMode.portrait,
-                    onTap: _busy ? null : () => setState(() => _detectionMode = DetectionMode.portrait),
-                  ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _modeSegmentItem(
+                  title: 'ポートレート',
+                  icon: Icons.face_rounded,
+                  selected: _detectionMode == DetectionMode.portrait,
+                  onTap: _busy ? null : () => setState(() => _detectionMode = DetectionMode.portrait),
                 ),
-              ],
+              ),
             ],
           ),
           const SizedBox(height: 16),

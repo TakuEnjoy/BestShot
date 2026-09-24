@@ -22,6 +22,7 @@ part 'groups/expandable_group_card.dart';
 part 'groups/delete_review_screen.dart';
 part 'groups/photo_tile.dart';
 part 'groups/badge.dart';
+part 'groups/portrait_card_tile.dart';
 
 class GroupsScreen extends StatefulWidget {
   const GroupsScreen({
@@ -200,8 +201,27 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (_keyboardGroupIndex >= _groups.length) {
       _keyboardGroupIndex = _groups.length - 1;
     }
-    // Note: _sortedPortraitItems is not available here easily without state,
-    // so _keyboardPortraitIndex clamp might need to happen elsewhere if needed.
+    final pItems = _getPortraitItems();
+    if (pItems.isNotEmpty && _keyboardPortraitIndex >= pItems.length) {
+      _keyboardPortraitIndex = pItems.length - 1;
+    }
+  }
+
+  PhotoGroup? _findGroupByPhotoKey(String photoKey) {
+    for (final g in _groups) {
+      for (final it in g.items) {
+        if (it.key == photoKey) return g;
+      }
+    }
+    return null;
+  }
+
+
+  int _getPortraitCrossAxisCount(double width) {
+    if (width >= 1400) return 5;
+    if (width >= 1100) return 4;
+    if (width >= 750) return 3;
+    return 2;
   }
 
   List<PhotoEntry> _getPortraitItems() {
@@ -220,6 +240,30 @@ class _GroupsScreenState extends State<GroupsScreen> {
     });
     _sortedPortraitItems = items;
     return items;
+  }
+
+  List<PhotoEntry> get _filteredPortraitItems {
+    final all = _getPortraitItems();
+    if (_filterQuery.isEmpty && !_filterBurstOnly && !_filterReviewOnly) {
+      return all;
+    }
+    return all.where((e) {
+      if (_filterBurstOnly) {
+        final group = _findGroupByPhotoKey(e.key);
+        if (group == null || !group.isBurst) return false;
+      }
+      if (_filterReviewOnly) {
+        final group = _findGroupByPhotoKey(e.key);
+        final needsReview = e.portrait.eyesClosed || (group != null && group.needsReview);
+        if (!needsReview) return false;
+      }
+      if (_filterQuery.isNotEmpty) {
+        final q = _filterQuery.toLowerCase();
+        final matchesName = (e.filePath ?? '').toLowerCase().contains(q) || e.key.toLowerCase().contains(q);
+        if (!matchesName) return false;
+      }
+      return true;
+    }).toList();
   }
 
   Future<void> _exportBestShots() async {
@@ -428,25 +472,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scrollController.hasClients) return;
       final size = MediaQuery.of(context).size;
-      final isWide = size.width >= 750;
-      final isMobile = size.width < 600;
       final crossAxisCount = size.width >= 1100 ? 3 : (size.width >= 750 ? 2 : 1);
 
       if (isPortrait) {
-        double targetOffset;
-        if (isWide) {
-          final itemWidth = (size.width - 32 - (crossAxisCount - 1) * 16) / crossAxisCount;
-          final itemHeight = itemWidth / 0.82 + 16;
-          final rowIndex = _keyboardPortraitIndex ~/ crossAxisCount;
-          targetOffset = rowIndex * itemHeight;
-        } else if (isMobile) {
-          final itemWidth = (size.width - 24 - 12) / 2;
-          final itemHeight = itemWidth / 0.82 + 12;
-          final rowIndex = _keyboardPortraitIndex ~/ 2;
-          targetOffset = rowIndex * itemHeight;
-        } else {
-          targetOffset = _keyboardPortraitIndex * 130.0;
-        }
+        final cols = _getPortraitCrossAxisCount(size.width);
+        final itemWidth = (size.width - 32 - (cols - 1) * 12) / cols;
+        final itemHeight = itemWidth / 0.80 + 12;
+        final rowIndex = _keyboardPortraitIndex ~/ cols;
+        final targetOffset = rowIndex * itemHeight;
         final currentOffset = _scrollController.offset;
         final viewHeight = size.height;
         if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 200) {
@@ -482,7 +515,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     final key = event.logicalKey;
     final isPortrait = widget.detectionMode == DetectionMode.portrait;
-    final portraitItems = _getPortraitItems();
+    final portraitItems = _filteredPortraitItems;
 
     // 編集用キーボードショートカットの場合は処理中のファイルを保護
     final bool isEditKey = key == LogicalKeyboardKey.keyB ||
@@ -512,8 +545,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (key == LogicalKeyboardKey.arrowDown) {
       setState(() {
         if (isPortrait) {
+          final cols = _getPortraitCrossAxisCount(MediaQuery.of(context).size.width);
           if (portraitItems.isNotEmpty && _keyboardPortraitIndex < portraitItems.length - 1) {
-            _keyboardPortraitIndex++;
+            _keyboardPortraitIndex = (_keyboardPortraitIndex + cols).clamp(0, portraitItems.length - 1);
             _scrollToActiveGroup(true);
           }
         } else {
@@ -533,8 +567,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (key == LogicalKeyboardKey.arrowUp) {
       setState(() {
         if (isPortrait) {
+          final cols = _getPortraitCrossAxisCount(MediaQuery.of(context).size.width);
           if (_keyboardPortraitIndex > 0) {
-            _keyboardPortraitIndex--;
+            _keyboardPortraitIndex = (_keyboardPortraitIndex - cols).clamp(0, portraitItems.length - 1);
             _scrollToActiveGroup(true);
           }
         } else {
@@ -551,12 +586,20 @@ class _GroupsScreenState extends State<GroupsScreen> {
       return KeyEventResult.handled;
     }
 
-    if (!isPortrait && _groups.isNotEmpty) {
-      final g = _groups[_keyboardGroupIndex];
-      final items = g.items;
-      final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
-
-      if (key == LogicalKeyboardKey.arrowRight) {
+    if (key == LogicalKeyboardKey.arrowRight) {
+      if (isPortrait) {
+        if (portraitItems.isNotEmpty && _keyboardPortraitIndex < portraitItems.length - 1) {
+          setState(() {
+            _keyboardPortraitIndex++;
+            _scrollToActiveGroup(true);
+          });
+        }
+        return KeyEventResult.handled;
+      }
+      if (_groups.isNotEmpty) {
+        final g = _groups[_keyboardGroupIndex];
+        final items = g.items;
+        final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
         if (currentIndex != -1 && currentIndex < items.length - 1) {
           setState(() {
             _keyboardPhotoKey = items[currentIndex + 1].key;
@@ -564,8 +607,22 @@ class _GroupsScreenState extends State<GroupsScreen> {
         }
         return KeyEventResult.handled;
       }
+    }
 
-      if (key == LogicalKeyboardKey.arrowLeft) {
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      if (isPortrait) {
+        if (portraitItems.isNotEmpty && _keyboardPortraitIndex > 0) {
+          setState(() {
+            _keyboardPortraitIndex--;
+            _scrollToActiveGroup(true);
+          });
+        }
+        return KeyEventResult.handled;
+      }
+      if (_groups.isNotEmpty) {
+        final g = _groups[_keyboardGroupIndex];
+        final items = g.items;
+        final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
         if (currentIndex > 0) {
           setState(() {
             _keyboardPhotoKey = items[currentIndex - 1].key;
@@ -573,8 +630,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
         }
         return KeyEventResult.handled;
       }
+    }
 
-      if (key == LogicalKeyboardKey.keyB) {
+    if (key == LogicalKeyboardKey.keyB) {
+      if (isPortrait) {
+        if (portraitItems.isNotEmpty && _keyboardPortraitIndex < portraitItems.length) {
+          final targetKey = portraitItems[_keyboardPortraitIndex].key;
+          _updateGroupBestKey(targetKey);
+        }
+        return KeyEventResult.handled;
+      }
+      if (_groups.isNotEmpty) {
         if (_keyboardPhotoKey != null) {
           _updateGroupBestKey(_keyboardPhotoKey!);
         }
@@ -956,91 +1022,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
-  Widget _buildSortFolderButtonForGrid(String key, ThemeData theme) {
-    final sortFolder = _selectedSortFolders[key];
-    final hasFolder = sortFolder != null;
-    return Material(
-      color: Colors.transparent,
-      child: PopupMenuButton<String?>(
-        tooltip: 'フォルダに仕分ける',
-        onSelected: (folder) {
-          if (folder == '__NEW_FOLDER__') {
-            _addNewFolder(context, key, true);
-          } else if (folder == null) {
-            setState(() {
-              _selectedSortFolders.remove(key);
-            });
-          } else {
-            setState(() {
-              _selectedSortFolders[key] = folder;
-            });
-          }
-        },
-        offset: const Offset(0, 30),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          decoration: BoxDecoration(
-            color: hasFolder ? getFolderColor(sortFolder, _customFolders) : Colors.black.withValues(alpha: 0.5),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white24),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                hasFolder ? Icons.folder : Icons.folder_open,
-                size: 16,
-                color: Colors.white,
-              ),
-              if (hasFolder) ...[
-                const SizedBox(width: 4),
-                Text(
-                  sortFolder,
-                  style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ],
-          ),
-        ),
-        itemBuilder: (context) {
-          return [
-            PopupMenuItem<String?>(
-              value: '__NEW_FOLDER__',
-              child: Row(
-                children: [
-                  Icon(Icons.create_new_folder, size: 16, color: theme.colorScheme.primary),
-                  const SizedBox(width: 8),
-                  const Text('新規フォルダを追加...'),
-                ],
-              ),
-            ),
-            PopupMenuItem<String?>(
-              value: null,
-              child: Row(
-                children: [
-                  Icon(Icons.folder_off, size: 16, color: theme.hintColor),
-                  const SizedBox(width: 8),
-                  const Text('仕分けを解除'),
-                ],
-              ),
-            ),
-            ..._customFolders.map((folder) {
-              return PopupMenuItem<String?>(
-                value: folder,
-                child: Row(
-                  children: [
-                    Icon(Icons.folder, size: 16, color: getFolderColor(folder, _customFolders)),
-                    const SizedBox(width: 8),
-                    Text(folder),
-                  ],
-                ),
-              );
-            }),
-          ];
-        },
-      ),
-    );
-  }
 
   void _openLoupe(List<PhotoEntry> items) {
     if (items.isEmpty) return;
@@ -1175,471 +1156,165 @@ class _GroupsScreenState extends State<GroupsScreen> {
     );
   }
 
-  Widget _buildPortraitBody(BuildContext context, List<PhotoEntry> portraitItems, bool isWide, double width, int crossAxisCount) {
-    Widget buildItem(int index) {
-      final e = portraitItems[index];
-      final t = e.capturedAt;
-      final timeStr = t == null
-          ? ''
-          : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
-      final eyeText = e.portrait.bothEyesDetected
-          ? '目閉じなし'
-          : (e.portrait.eyesClosed ? '目閉じ' : '');
+  Widget _buildPortraitBody(
+    BuildContext context,
+    List<PhotoEntry> portraitItems,
+    double width,
+  ) {
+    if (portraitItems.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.face_retouching_off, size: 48, color: BestShotTheme.textSecondary),
+            const SizedBox(height: 12),
+            const Text(
+              '該当するポートレート写真がありません',
+              style: TextStyle(fontSize: 14, color: BestShotTheme.textSecondary),
+            ),
+            if (_filterQuery.isNotEmpty || _filterBurstOnly || _filterReviewOnly) ...[
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _filterQuery = '';
+                    _filterBurstOnly = false;
+                    _filterReviewOnly = false;
+                  });
+                },
+                child: const Text('フィルターをリセット'),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
 
-      final loupeSelected = _loupeSelection.contains(e.key);
-      final selectedForDelete = _selectedForDelete.contains(e.key);
-      final isKeyboardFocused = index == _keyboardPortraitIndex;
-      final theme = Theme.of(context);
-      final sortFolder = _selectedSortFolders[e.key];
-      final hasFolder = sortFolder != null;
+    final cols = _getPortraitCrossAxisCount(width);
 
-      return GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          setState(() {
-            _keyboardPortraitIndex = index;
+    return ValueListenableBuilder<Set<String>>(
+      valueListenable: _selectedForDeleteNotifier,
+      builder: (context, selectedSet, _) {
+        return GridView.builder(
+          controller: _scrollController,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cols,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            childAspectRatio: 0.80,
+          ),
+          itemCount: portraitItems.length,
+          itemBuilder: (context, index) {
+            final e = portraitItems[index];
+            final t = e.capturedAt;
+            final timeStr = t == null
+                ? ''
+                : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
+
+            final loupeSelected = _loupeSelection.contains(e.key);
+            final selectedForDelete = selectedSet.contains(e.key);
+            final isKeyboardFocused = index == _keyboardPortraitIndex;
+            final sortFolder = _selectedSortFolders[e.key];
+            final hasFolder = sortFolder != null;
+            final isProcessing = _processingKeys.contains(e.key);
+
+            final group = _findGroupByPhotoKey(e.key);
+            final isBest = group != null && group.bestKey == e.key;
+
+            Color borderColor = BestShotTheme.dividerColor;
+            double borderWidth = 1.0;
             if (loupeSelected) {
-              _loupeSelection.remove(e.key);
-            } else {
-              if (_loupeSelection.length >= 4) {
-                _loupeSelection.removeAt(0);
-              }
-              _loupeSelection.add(e.key);
+              borderColor = BestShotTheme.accentBlue;
+              borderWidth = 2.5;
+            } else if (isKeyboardFocused) {
+              borderColor = BestShotTheme.accentBlue;
+              borderWidth = 2.0;
+            } else if (selectedForDelete) {
+              borderColor = BestShotTheme.accentRed;
+              borderWidth = 2.0;
+            } else if (hasFolder) {
+              borderColor = getFolderColor(sortFolder, _customFolders);
+              borderWidth = 2.0;
             }
-          });
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: selectedForDelete
-                ? theme.colorScheme.error.withValues(alpha: 0.08)
-                : theme.colorScheme.surface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isKeyboardFocused
-                  ? theme.colorScheme.primary
-                  : (selectedForDelete
-                      ? theme.colorScheme.error
-                      : (hasFolder
-                          ? getFolderColor(sortFolder, _customFolders)
-                          : (loupeSelected
-                              ? theme.colorScheme.primary.withValues(alpha: 0.5)
-                              : theme.dividerColor.withValues(alpha: 0.12)))),
-              width: isKeyboardFocused ? 2.5 : (selectedForDelete || hasFolder || loupeSelected ? 2 : 1),
-            ),
-            boxShadow: isKeyboardFocused
-                ? [
-                    BoxShadow(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.25),
-                      blurRadius: 8,
-                      spreadRadius: 1,
-                    )
-                  ]
-                : null,
-          ),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
-                child: Stack(
-                  children: [
-                    Opacity(
-                      opacity: selectedForDelete ? 0.45 : 1.0,
-                      child: ColorFiltered(
-                        colorFilter: ColorFilter.mode(
-                          selectedForDelete ? Colors.grey : Colors.transparent,
-                          BlendMode.saturation,
-                        ),
-                        child: Image.memory(
-                          e.displayBytes,
-                          width: 120,
-                          height: 120,
-                          cacheWidth: 320,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                        ),
-                      ),
-                    ),
-                    if (loupeSelected)
-                      Positioned(
-                        top: 8,
-                        left: 8,
-                        child: Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.primary,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Text(
-                            '${_loupeSelection.indexOf(e.key) + 1}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                    // Checkbox (Top Right)
-                    Positioned(
-                      right: 4,
-                      top: 4,
-                      child: Checkbox(
-                        value: selectedForDelete,
-                        onChanged: (v) {
-                          HapticFeedback.selectionClick();
-                          setState(() {
-                            _keyboardPortraitIndex = index;
-                          });
-                          _toggleDelete(e.key, v);
-                        },
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        side: const BorderSide(color: Colors.white, width: 1.5),
-                      ),
-                    ),
-                    // Loupe Button (Bottom Right)
-                    Positioned(
-                      right: 4,
-                      bottom: 4,
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () {
-                            setState(() {
-                              _keyboardPortraitIndex = index;
-                            });
-                            _openLoupe([e]);
-                          },
-                          borderRadius: BorderRadius.circular(20),
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: loupeSelected
-                                  ? theme.colorScheme.primary
-                                  : Colors.black.withValues(alpha: 0.5),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
-                              size: 16,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    // Folder Button (Bottom Left)
-                    Positioned(
-                      left: 4,
-                      bottom: 4,
-                      child: _buildSortFolderButtonForGrid(e.key, theme),
-                    ),
-                  ],
-                ),
+            return RepaintBoundary(
+              child: _PortraitCardTile(
+                entry: e,
+                index: index,
+                timeStr: timeStr,
+                isBest: isBest,
+                selectedForDelete: selectedForDelete,
+                loupeSelected: loupeSelected,
+                isKeyboardFocused: isKeyboardFocused,
+                sortFolder: sortFolder,
+                customFolders: _customFolders,
+                isProcessing: isProcessing,
+                borderColor: borderColor,
+                borderWidth: borderWidth,
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  setState(() {
+                    _keyboardPortraitIndex = index;
+                  });
+                  _toggleDelete(e.key);
+                },
+                onDoubleTap: () {
+                  HapticFeedback.selectionClick();
+                  _updateGroupBestKey(e.key);
+                },
+                onSetBest: () {
+                  HapticFeedback.selectionClick();
+                  _updateGroupBestKey(e.key);
+                },
+                onToggleDelete: (v) {
+                  HapticFeedback.selectionClick();
+                  setState(() {
+                    _keyboardPortraitIndex = index;
+                  });
+                  _toggleDelete(e.key, v);
+                },
+                onToggleLoupe: () {
+                  setState(() {
+                    _keyboardPortraitIndex = index;
+                    if (loupeSelected) {
+                      _loupeSelection.remove(e.key);
+                    } else {
+                      if (_loupeSelection.length >= 4) {
+                        _loupeSelection.removeAt(0);
+                      }
+                      _loupeSelection.add(e.key);
+                    }
+                  });
+                },
+                onOpenLoupe: () {
+                  _keyboardPortraitIndex = index;
+                  if (group != null) {
+                    _openLoupeForPhoto(group, e.key);
+                  } else {
+                    _openLoupe([e]);
+                  }
+                },
+                onSortFolderChanged: (folder) {
+                  if (folder == '__NEW_FOLDER__') {
+                    _addNewFolder(context, e.key, false);
+                  } else {
+                    setState(() {
+                      _keyboardPortraitIndex = index;
+                      if (folder == null) {
+                        _selectedSortFolders.remove(e.key);
+                      } else {
+                        _selectedSortFolders[e.key] = folder;
+                      }
+                    });
+                  }
+                },
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        timeStr.isEmpty ? '（時刻不明）' : timeStr,
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '鮮明度: ${e.sharpness.toStringAsFixed(0)}（顔ROI: ${e.portrait.faceSharpness.toStringAsFixed(0)}）',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      if (eyeText.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          eyeText,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: e.portrait.bothEyesDetected
-                                    ? const Color(0xFF16A34A)
-                                    : const Color(0xFFDC2626),
-                              ),
-                        ),
-                      ],
-                      if ((e.portrait.eyeOpenAvg ?? -1.0) >= 0) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          '目開き平均: ${(e.portrait.eyeOpenAvg ?? 0.0).toStringAsFixed(2)}',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-            ],
-          ),
-        ),
-      );
-    }
+            );
+          },
+        );
+      },
+    );
 
-    Widget buildGridItem(int index) {
-      final e = portraitItems[index];
-      final t = e.capturedAt;
-      final timeStr = t == null
-          ? ''
-          : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
-      final eyeText = e.portrait.bothEyesDetected
-          ? '目閉じなし'
-          : (e.portrait.eyesClosed ? '目閉じ' : '');
-
-      final loupeSelected = _loupeSelection.contains(e.key);
-      final selectedForDelete = _selectedForDelete.contains(e.key);
-      final isKeyboardFocused = index == _keyboardPortraitIndex;
-      final theme = Theme.of(context);
-      final sortFolder = _selectedSortFolders[e.key];
-      final hasFolder = sortFolder != null;
-
-      return GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          _keyboardPortraitIndex = index;
-          _toggleDelete(e.key);
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: selectedForDelete
-                ? theme.colorScheme.error.withValues(alpha: 0.08)
-                : theme.colorScheme.surface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isKeyboardFocused
-                  ? theme.colorScheme.primary
-                  : (selectedForDelete
-                      ? theme.colorScheme.error
-                      : (hasFolder
-                          ? getFolderColor(sortFolder, _customFolders)
-                          : (loupeSelected
-                              ? theme.colorScheme.primary.withValues(alpha: 0.5)
-                              : theme.dividerColor.withValues(alpha: 0.12)))),
-              width: isKeyboardFocused ? 2.5 : (selectedForDelete || hasFolder || loupeSelected ? 2 : 1),
-            ),
-            boxShadow: isKeyboardFocused
-                ? [
-                    BoxShadow(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.25),
-                      blurRadius: 8,
-                      spreadRadius: 1,
-                    )
-                  ]
-                : null,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Opacity(
-                        opacity: selectedForDelete ? 0.45 : 1.0,
-                        child: ColorFiltered(
-                          colorFilter: ColorFilter.mode(
-                            selectedForDelete ? Colors.grey : Colors.transparent,
-                            BlendMode.saturation,
-                          ),
-                          child: Image.memory(
-                            e.displayBytes,
-                            fit: BoxFit.cover,
-                            gaplessPlayback: true,
-                          ),
-                        ),
-                      ),
-                      if (loupeSelected)
-                        Positioned(
-                          top: 8,
-                          left: 8,
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primary,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Text(
-                              '${_loupeSelection.indexOf(e.key) + 1}',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                      // Checkbox (Top Right)
-                      Positioned(
-                        right: 4,
-                        top: 4,
-                        child: Checkbox(
-                          value: selectedForDelete,
-                          onChanged: (v) {
-                            HapticFeedback.selectionClick();
-                            setState(() {
-                              _keyboardPortraitIndex = index;
-                            });
-                            _toggleDelete(e.key, v);
-                          },
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          side: const BorderSide(color: Colors.white, width: 1.5),
-                        ),
-                      ),
-                      // Loupe Button (Bottom Right)
-                      Positioned(
-                        right: 4,
-                        bottom: 4,
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: () {
-                              setState(() {
-                                _keyboardPortraitIndex = index;
-                                if (loupeSelected) {
-                                  _loupeSelection.remove(e.key);
-                                } else {
-                                  if (_loupeSelection.length >= 4) {
-                                    _loupeSelection.removeAt(0);
-                                  }
-                                  _loupeSelection.add(e.key);
-                                }
-                              });
-                            },
-                            borderRadius: BorderRadius.circular(20),
-                            child: Container(
-                              padding: const EdgeInsets.all(6),
-                              decoration: BoxDecoration(
-                                color: loupeSelected
-                                    ? theme.colorScheme.primary
-                                    : Colors.black.withValues(alpha: 0.5),
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
-                                size: 16,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      // Folder Button (Bottom Left)
-                      Positioned(
-                        left: 4,
-                        bottom: 4,
-                        child: _buildSortFolderButtonForGrid(e.key, theme),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          timeStr.isEmpty ? '（時刻不明）' : timeStr,
-                          style: theme.textTheme.labelMedium?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                        ),
-                        Text(
-                          'S: ${e.sharpness.toStringAsFixed(0)}',
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: theme.colorScheme.primary,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '顔ROI: ${e.portrait.faceSharpness.toStringAsFixed(0)}',
-                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 10),
-                    ),
-                    if (eyeText.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        eyeText,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: e.portrait.bothEyesDetected
-                                  ? const Color(0xFF16A34A)
-                                  : const Color(0xFFDC2626),
-                            ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final isMobile = width < 600;
-
-    if (isWide) {
-      return GridView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: crossAxisCount,
-          mainAxisSpacing: 16,
-          crossAxisSpacing: 16,
-          childAspectRatio: 0.82,
-        ),
-        itemCount: portraitItems.length,
-        itemBuilder: (context, i) => buildGridItem(i),
-      );
-    } else if (isMobile) {
-      return GridView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.all(12),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 0.82,
-        ),
-        itemCount: portraitItems.length,
-        itemBuilder: (context, index) {
-          return buildGridItem(index);
-        },
-      );
-    } else {
-      return ListView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        itemCount: portraitItems.length,
-        itemBuilder: (context, index) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: buildItem(index),
-          );
-        },
-      );
-    }
   }
 
   Widget _buildGroupBody(BuildContext context, bool isWide, double width, int crossAxisCount) {
@@ -1834,7 +1509,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final crossAxisCount = size.width >= 1100 ? 3 : (size.width >= 750 ? 2 : 1);
 
     final isPortrait = widget.detectionMode == DetectionMode.portrait;
-    final portraitItems = _getPortraitItems();
+    final portraitItems = _filteredPortraitItems;
 
     final bool canSort = _selectedSortFolders.keys.any((k) => !_processingKeys.contains(k));
     final bool canDelete = _selectedForDelete.any((k) => !_processingKeys.contains(k));
@@ -1862,7 +1537,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   children: [
                     Positioned.fill(
                       child: isPortrait
-                          ? _buildPortraitBody(context, portraitItems, isWide, size.width, crossAxisCount)
+                          ? _buildPortraitBody(context, portraitItems, size.width)
                           : _buildGroupBody(context, isWide, size.width, crossAxisCount),
                     ),
 
@@ -1947,15 +1622,25 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
           // ⭐ N件推薦
           if (!isMobile) ...[
+            if (widget.detectionMode == DetectionMode.portrait) ...[
+              const _Badge(
+                label: '👤 ポートレート優先',
+                color: BestShotTheme.hoverColor,
+                textColor: BestShotTheme.accentBlue,
+              ),
+              const SizedBox(width: 8),
+            ],
             _Badge(
               label: '⭐ $_recommendedBestCount件推薦',
               color: const Color(0xFF332600),
               textColor: BestShotTheme.accentGold,
             ),
             const SizedBox(width: 12),
-            // 📊 全グループ M件
+            // 📊 全グループ M件 (ポートレート時は写真総数も)
             Text(
-              '📊 全グループ ${_groups.length}件',
+              widget.detectionMode == DetectionMode.portrait
+                  ? '📊 ${_groups.length}グループ / ${_entryByKey.length}枚'
+                  : '📊 全グループ ${_groups.length}件',
               style: const TextStyle(fontSize: 12, color: BestShotTheme.textSecondary),
             ),
           ],
@@ -2169,90 +1854,92 @@ class _GroupsScreenState extends State<GroupsScreen> {
   }
 
   Widget _buildFilterDrawer() {
-    return Container(
-      decoration: const BoxDecoration(
-        color: BestShotTheme.surfaceColor,
-        border: Border(right: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'フィルター設定',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: BestShotTheme.textPrimary,
+    return Material(
+      color: BestShotTheme.surfaceColor,
+      child: Container(
+        decoration: const BoxDecoration(
+          border: Border(right: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'フィルター設定',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: BestShotTheme.textPrimary,
+                  ),
                 ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 18, color: BestShotTheme.textSecondary),
-                onPressed: () => setState(() => _isFilterDrawerOpen = false),
-              ),
-            ],
-          ),
-          const Divider(color: BestShotTheme.dividerColor, height: 20),
-
-          // 検索入力
-          const Text('🔍 グループ検索', style: TextStyle(fontSize: 12, color: BestShotTheme.textSecondary)),
-          const SizedBox(height: 6),
-          TextField(
-            style: const TextStyle(fontSize: 13, color: BestShotTheme.textPrimary),
-            decoration: const InputDecoration(
-              hintText: 'グループID / ファイル名...',
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 18, color: BestShotTheme.textSecondary),
+                  onPressed: () => setState(() => _isFilterDrawerOpen = false),
+                ),
+              ],
             ),
-            onChanged: (v) {
-              _filterDebounceTimer?.cancel();
-              _filterDebounceTimer = Timer(const Duration(milliseconds: 200), () {
-                if (mounted) {
-                  setState(() => _filterQuery = v);
-                }
-              });
-            },
-          ),
-          const SizedBox(height: 16),
+            const Divider(color: BestShotTheme.dividerColor, height: 20),
 
-          // 撮影モードフィルター
-          const Text('📷 撮影モード', style: TextStyle(fontSize: 12, color: BestShotTheme.textSecondary)),
-          const SizedBox(height: 6),
-          CheckboxListTile(
-            title: const Text('連写グループのみ', style: TextStyle(fontSize: 13, color: BestShotTheme.textPrimary)),
-            value: _filterBurstOnly,
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            onChanged: (v) => setState(() => _filterBurstOnly = v ?? false),
-          ),
-          CheckboxListTile(
-            title: const Text('要確認グループのみ', style: TextStyle(fontSize: 13, color: BestShotTheme.textPrimary)),
-            value: _filterReviewOnly,
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            onChanged: (v) => setState(() => _filterReviewOnly = v ?? false),
-          ),
-          const Spacer(),
-
-          // リセットボタン
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: () {
-                setState(() {
-                  _filterQuery = '';
-                  _filterBurstOnly = false;
-                  _filterReviewOnly = false;
-                  _isFilterDrawerOpen = false;
+            // 検索入力
+            const Text('🔍 グループ検索', style: TextStyle(fontSize: 12, color: BestShotTheme.textSecondary)),
+            const SizedBox(height: 6),
+            TextField(
+              style: const TextStyle(fontSize: 13, color: BestShotTheme.textPrimary),
+              decoration: const InputDecoration(
+                hintText: 'グループID / ファイル名...',
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              ),
+              onChanged: (v) {
+                _filterDebounceTimer?.cancel();
+                _filterDebounceTimer = Timer(const Duration(milliseconds: 200), () {
+                  if (mounted) {
+                    setState(() => _filterQuery = v);
+                  }
                 });
               },
-              child: const Text('すべてのフィルターを解除'),
             ),
-          ),
-        ],
+            const SizedBox(height: 16),
+
+            // 撮影モードフィルター
+            const Text('📷 撮影モード', style: TextStyle(fontSize: 12, color: BestShotTheme.textSecondary)),
+            const SizedBox(height: 6),
+            CheckboxListTile(
+              title: const Text('連写グループのみ', style: TextStyle(fontSize: 13, color: BestShotTheme.textPrimary)),
+              value: _filterBurstOnly,
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              onChanged: (v) => setState(() => _filterBurstOnly = v ?? false),
+            ),
+            CheckboxListTile(
+              title: const Text('要確認グループのみ', style: TextStyle(fontSize: 13, color: BestShotTheme.textPrimary)),
+              value: _filterReviewOnly,
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              onChanged: (v) => setState(() => _filterReviewOnly = v ?? false),
+            ),
+            const Spacer(),
+
+            // リセットボタン
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () {
+                  setState(() {
+                    _filterQuery = '';
+                    _filterBurstOnly = false;
+                    _filterReviewOnly = false;
+                    _isFilterDrawerOpen = false;
+                  });
+                },
+                child: const Text('すべてのフィルターを解除'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
