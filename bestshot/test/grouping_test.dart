@@ -206,7 +206,7 @@ void main() {
       expect(teleEntry.scoreExplanation!.normalizedSharpness, closeTo(2500.0 / 3000.0, 0.01));
 
       expect(teleEntry.groupExplanation, isNotNull);
-      expect(teleEntry.groupExplanation!.matchType, equals('特徴点救済マージ'));
+      expect(teleEntry.groupExplanation!.matchType, equals('同シーン分類'));
       expect(teleEntry.groupExplanation!.orbMatches, equals(30));
     });
 

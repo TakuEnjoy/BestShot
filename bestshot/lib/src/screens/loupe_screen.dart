@@ -1,5 +1,6 @@
 import 'dart:collection';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import '../widgets/glass_container.dart';
 
 import '../models/photo_entry.dart';
 import '../services/analysis/focus_mask_service.dart';
+import '../utils/jpeg_utils.dart';
 
 enum LoupeHudMode {
   compact('コンパクト', Icons.subtitles_outlined),
@@ -234,10 +236,47 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
     if (e.filePath != null) {
       final f = File(e.filePath!);
       if (await f.exists()) {
+        final ext = p.extension(e.filePath!).toLowerCase();
+        const rawExts = <String>{
+          '.dng',
+          '.arw',
+          '.nef',
+          '.cr2',
+          '.cr3',
+          '.raf',
+          '.rw2',
+          '.orf',
+        };
+        if (rawExts.contains(ext)) {
+          try {
+            final fileSize = await f.length();
+            final readHeaderSize = math.min(fileSize, 8 * 1024 * 1024);
+            final raf = await f.open();
+            try {
+              final headerBytes = await raf.read(readHeaderSize);
+              final extracted = JpegUtils.extractEmbeddedJpeg(headerBytes);
+              if (extracted != null && extracted.isNotEmpty) {
+                return Uint8List.fromList(extracted);
+              }
+            } finally {
+              await raf.close();
+            }
+            if (fileSize > readHeaderSize) {
+              final fullBytes = await f.readAsBytes();
+              final extracted = JpegUtils.extractEmbeddedJpeg(fullBytes);
+              if (extracted != null && extracted.isNotEmpty) {
+                return Uint8List.fromList(extracted);
+              }
+            }
+          } catch (_) {}
+          if (e.displayBytes.isNotEmpty) {
+            return e.displayBytes;
+          }
+        }
         return await f.readAsBytes();
       }
     }
-    return e.displayBytes;
+    return e.displayBytes.isNotEmpty ? e.displayBytes : null;
   }
 
   void _cycleHudMode() {

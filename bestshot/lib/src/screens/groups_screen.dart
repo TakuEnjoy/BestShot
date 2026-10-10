@@ -201,6 +201,10 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (_keyboardGroupIndex >= _groups.length) {
       _keyboardGroupIndex = _groups.length - 1;
     }
+    final g = _groups[_keyboardGroupIndex];
+    if (_keyboardPhotoKey != null && !g.items.any((e) => e.key == _keyboardPhotoKey)) {
+      _keyboardPhotoKey = g.bestKey;
+    }
     final pItems = _getPortraitItems();
     if (pItems.isNotEmpty && _keyboardPortraitIndex >= pItems.length) {
       _keyboardPortraitIndex = pItems.length - 1;
@@ -419,19 +423,28 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
       if (mounted) {
         setState(() {
-          for (final entry in result.success) {
-            for (var i = 0; i < _groups.length; i++) {
-              final g = _groups[i];
-              if (g.items.any((item) => item.key == entry.key)) {
-                final newItems = g.items.where((item) => item.key != entry.key).toList();
-                _groups[i] = g.copyWith(items: newItems);
+          final removedKeys = result.success.map((e) => e.key).toSet();
+          if (removedKeys.isNotEmpty) {
+            final updatedGroups = <PhotoGroup>[];
+            for (final g in _groups) {
+              final remainingItems = g.items.where((item) => !removedKeys.contains(item.key)).toList();
+              if (remainingItems.isNotEmpty) {
+                final newBestKey = remainingItems.any((item) => item.key == g.bestKey)
+                    ? g.bestKey
+                    : remainingItems.first.key;
+                final remainingDeleteCandidates = g.deleteCandidateKeys.where((k) => !removedKeys.contains(k)).toSet();
+                updatedGroups.add(g.copyWith(
+                  items: remainingItems,
+                  bestKey: newBestKey,
+                  deleteCandidateKeys: remainingDeleteCandidates,
+                ));
               }
             }
+            _groups = updatedGroups;
+            _syncEntryByKey();
+            _sortedPortraitItems = null;
+            _clampKeyboardIndices();
           }
-          _groups.removeWhere((g) => g.items.isEmpty);
-          _syncEntryByKey();
-          _sortedPortraitItems = null;
-          _clampKeyboardIndices();
         });
 
         if (result.isAllSuccess) {
@@ -891,19 +904,26 @@ class _GroupsScreenState extends State<GroupsScreen> {
       if (mounted) {
         setState(() {
           if (!isCopy && successKeys.isNotEmpty) {
-            for (final key in successKeys) {
-              for (var i = 0; i < _groups.length; i++) {
-                final g = _groups[i];
-                if (g.items.any((item) => item.key == key)) {
-                  final newItems = g.items.where((item) => item.key != key).toList();
-                  _groups[i] = g.copyWith(items: newItems);
-                }
+            final updatedGroups = <PhotoGroup>[];
+            for (final g in _groups) {
+              final remainingItems = g.items.where((item) => !successKeys.contains(item.key)).toList();
+              if (remainingItems.isNotEmpty) {
+                final newBestKey = remainingItems.any((item) => item.key == g.bestKey)
+                    ? g.bestKey
+                    : remainingItems.first.key;
+                final remainingDeleteCandidates = g.deleteCandidateKeys.where((k) => !successKeys.contains(k)).toSet();
+                updatedGroups.add(g.copyWith(
+                  items: remainingItems,
+                  bestKey: newBestKey,
+                  deleteCandidateKeys: remainingDeleteCandidates,
+                ));
               }
             }
-            _groups.removeWhere((g) => g.items.isEmpty);
+            _groups = updatedGroups;
             _syncEntryByKey();
             _sortedPortraitItems = null;
             _clampKeyboardIndices();
+            _selectedForDeleteNotifier.value = Set<String>.from(_selectedForDelete)..removeAll(successKeys);
           }
         });
 
@@ -1255,8 +1275,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   HapticFeedback.selectionClick();
                   setState(() {
                     _keyboardPortraitIndex = index;
+                    if (loupeSelected) {
+                      _loupeSelection.remove(e.key);
+                    } else {
+                      if (_loupeSelection.length >= 4) {
+                        _loupeSelection.removeAt(0);
+                      }
+                      _loupeSelection.add(e.key);
+                    }
                   });
-                  _toggleDelete(e.key);
                 },
                 onDoubleTap: () {
                   HapticFeedback.selectionClick();
@@ -1272,19 +1299,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     _keyboardPortraitIndex = index;
                   });
                   _toggleDelete(e.key, v);
-                },
-                onToggleLoupe: () {
-                  setState(() {
-                    _keyboardPortraitIndex = index;
-                    if (loupeSelected) {
-                      _loupeSelection.remove(e.key);
-                    } else {
-                      if (_loupeSelection.length >= 4) {
-                        _loupeSelection.removeAt(0);
-                      }
-                      _loupeSelection.add(e.key);
-                    }
-                  });
                 },
                 onOpenLoupe: () {
                   _keyboardPortraitIndex = index;

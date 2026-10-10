@@ -293,44 +293,44 @@ class _ExpandableGroupCard extends StatelessWidget {
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    for (final e in group.items) ...[
+                    for (var i = 0; i < group.items.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 8),
                       SizedBox(
                         width: 150,
                         child: _PhotoTile(
-                          itemKey: e.key,
+                          itemKey: group.items[i].key,
                           selectedForDeleteListenable: selectedForDeleteListenable,
-                          bytes: e.displayBytes,
-                          sharpness: e.sharpness,
-                          exposureScore: e.exposureScore,
-                          faceQualityScore: e.faceQualityScore,
-                          exifText: e.exifText,
-                          isBest: e.key == group.bestKey,
-                          selectedForDelete: selectedForDelete.contains(e.key),
-                          isProcessing: processingKeys.contains(e.key),
+                          bytes: group.items[i].displayBytes,
+                          sharpness: group.items[i].sharpness,
+                          exposureScore: group.items[i].exposureScore,
+                          faceQualityScore: group.items[i].faceQualityScore,
+                          exifText: group.items[i].exifText,
+                          isBest: group.items[i].key == group.bestKey,
+                          selectedForDelete: selectedForDelete.contains(group.items[i].key),
+                          isProcessing: processingKeys.contains(group.items[i].key),
                           onChanged: (v) {
-                            onPhotoTileFocused(e.key);
-                            onToggleDelete(e.key, v);
+                            onPhotoTileFocused(group.items[i].key);
+                            onToggleDelete(group.items[i].key, v);
                           },
-                          onSetBest: () => onSetBest(e.key),
+                          onSetBest: () => onSetBest(group.items[i].key),
                           onOpenLoupe: () {
-                            onPhotoTileFocused(e.key);
-                            onOpenLoupeForPhoto?.call(e.key);
+                            onPhotoTileFocused(group.items[i].key);
+                            onOpenLoupeForPhoto?.call(group.items[i].key);
                           },
-                          loupeSelected: loupeSelection.contains(e.key),
+                          loupeSelected: loupeSelection.contains(group.items[i].key),
                           onToggleLoupe: () {
-                            onPhotoTileFocused(e.key);
-                            onToggleLoupe(e.key);
+                            onPhotoTileFocused(group.items[i].key);
+                            onToggleLoupe(group.items[i].key);
                           },
-                          isKeyboardFocused: e.key == keyboardPhotoKey,
-                          sortFolder: selectedSortFolders[e.key],
+                          isKeyboardFocused: group.items[i].key == keyboardPhotoKey,
+                          sortFolder: selectedSortFolders[group.items[i].key],
                           customFolders: customFolders,
                           onSortFolderChanged: (folder) {
-                            onPhotoTileFocused(e.key);
-                            onSortFolderChanged(e.key, folder);
+                            onPhotoTileFocused(group.items[i].key);
+                            onSortFolderChanged(group.items[i].key, folder);
                           },
                         ),
                       ),
-                      if (e != group.items.last) const SizedBox(width: 8),
                     ],
                   ],
                   ),

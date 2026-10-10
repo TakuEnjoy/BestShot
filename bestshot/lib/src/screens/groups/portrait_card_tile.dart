@@ -18,7 +18,6 @@ class _PortraitCardTile extends StatefulWidget {
     required this.onDoubleTap,
     required this.onSetBest,
     required this.onToggleDelete,
-    required this.onToggleLoupe,
     required this.onOpenLoupe,
     required this.onSortFolderChanged,
   });
@@ -39,7 +38,6 @@ class _PortraitCardTile extends StatefulWidget {
   final VoidCallback onDoubleTap;
   final VoidCallback onSetBest;
   final ValueChanged<bool?> onToggleDelete;
-  final VoidCallback onToggleLoupe;
   final VoidCallback onOpenLoupe;
   final ValueChanged<String?> onSortFolderChanged;
 
@@ -249,7 +247,7 @@ class _PortraitCardTileState extends State<_PortraitCardTile> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    // 画像 (タップで削除トグル、ダブルタップでBest指定)
+                    // 画像 (タップで比較/選択トグル、ダブルタップでBest指定)
                     Positioned.fill(
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,

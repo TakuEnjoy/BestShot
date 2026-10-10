@@ -70,10 +70,15 @@ class PhotoGroup {
     bool? isBurst,
     bool? needsReview,
   }) {
+    final newItems = items != null ? items.toList() : this.items;
+    String newBestKey = bestKey ?? this.bestKey;
+    if (newItems.isNotEmpty && !newItems.any((e) => e.key == newBestKey)) {
+      newBestKey = newItems.first.key;
+    }
     return PhotoGroup(
       id: id ?? this.id,
-      items: items ?? this.items,
-      bestKey: bestKey ?? this.bestKey,
+      items: newItems,
+      bestKey: newBestKey,
       deleteCandidateKeys: deleteCandidateKeys ?? this.deleteCandidateKeys,
       isBurst: isBurst ?? this.isBurst,
       needsReview: needsReview ?? this.needsReview,

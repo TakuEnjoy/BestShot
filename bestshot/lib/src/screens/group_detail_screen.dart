@@ -49,6 +49,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   late final ValueNotifier<String> _activeKeyNotifier;
   late final ValueNotifier<Set<String>> _deleteSelectionNotifier;
   bool _sortByQuality = false;
+  late String _bestKey;
 
   // キャッシュ (Step 4: 重い初期化処理の非同期化・キャッシュ化)
   final Map<String, int> _qualityScores = {};
@@ -59,13 +60,21 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   // BottomSheet controller / state
   final DraggableScrollableController _sheetController = DraggableScrollableController();
 
+  void _setBest(String key) {
+    setState(() {
+      _bestKey = key;
+    });
+    widget.onSetBest(key);
+  }
+
   @override
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
     _items = List.of(widget.group.items);
-    final initialActiveKey = widget.group.bestKey.isNotEmpty
-        ? widget.group.bestKey
+    _bestKey = widget.group.bestKey;
+    final initialActiveKey = _bestKey.isNotEmpty
+        ? _bestKey
         : (_items.isNotEmpty ? _items.first.key : '');
     _activeKeyNotifier = ValueNotifier<String>(initialActiveKey);
     _deleteSelectionNotifier = widget.selectedForDeleteNotifier ??
@@ -106,6 +115,14 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         }
         _deleteSelectionNotifier.value = next;
         widget.onToggleDelete(activeKey, nextState);
+        return true;
+      }
+    }
+
+    if (key == LogicalKeyboardKey.keyB) {
+      if (activeKey.isNotEmpty) {
+        HapticFeedback.selectionClick();
+        _setBest(activeKey);
         return true;
       }
     }
@@ -159,7 +176,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
   void _selectAllForDelete() {
     final current = _deleteSelectionNotifier.value;
-    final nonBestItems = _items.where((e) => e.key != widget.group.bestKey).toList();
+    final nonBestItems = _items.where((e) => e.key != _bestKey).toList();
     if (nonBestItems.isEmpty) return;
 
     final allMarked = nonBestItems.every((e) => current.contains(e.key));
@@ -392,7 +409,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               HapticFeedback.selectionClick();
               final next = Set<String>.from(_deleteSelectionNotifier.value);
               for (final item in _items) {
-                if (item.key != widget.group.bestKey) {
+                if (item.key != _bestKey) {
                   next.add(item.key);
                 } else {
                   next.remove(item.key);
@@ -437,7 +454,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                   builder: (context) => LoupeScreen(
                     items: targets,
                     scores: targets.map((e) => e.sharpness).toList(),
-                    isBests: targets.map((e) => e.key == widget.group.bestKey).toList(),
+                    isBests: targets.map((e) => e.key == _bestKey).toList(),
                     initialSelectedForDelete: _deleteSelectionNotifier.value,
                     onToggleDelete: (k, v) {
                       widget.onToggleDelete(k, v);
@@ -451,8 +468,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                       _deleteSelectionNotifier.value = next;
                     },
                     onSetBest: (k) {
-                      widget.onSetBest(k);
-                      setState(() {});
+                      _setBest(k);
                     },
                   ),
                 ),
@@ -606,7 +622,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 
   Widget _buildGridThumbnail(PhotoEntry item) {
-    final isBest = item.key == widget.group.bestKey;
+    final isBest = item.key == _bestKey;
     final loupeIndex = widget.loupeSelection.indexOf(item.key);
     final isLoupeSelected = loupeIndex != -1;
     final sortFolder = widget.selectedSortFolders[item.key];
@@ -643,17 +659,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 },
                 onDoubleTap: () {
                   final best = widget.group.items.firstWhere(
-                    (e) => e.key == widget.group.bestKey,
+                    (e) => e.key == _bestKey,
                     orElse: () => widget.group.items.first,
                   );
                   final compareItems = best.key == item.key ? [item] : [best, item];
                   precacheImage(MemoryImage(item.displayBytes), context);
                   Navigator.of(context).push(
                     FastRoute(
-                      builder: (context) => LoupeScreen(
+                       builder: (context) => LoupeScreen(
                         items: compareItems,
                         scores: compareItems.map((e) => e.sharpness).toList(),
-                        isBests: compareItems.map((e) => e.key == widget.group.bestKey).toList(),
+                        isBests: compareItems.map((e) => e.key == _bestKey).toList(),
                         initialSelectedForDelete: _deleteSelectionNotifier.value,
                         onToggleDelete: (k, val) {
                           final current = _deleteSelectionNotifier.value;
@@ -667,7 +683,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                           widget.onToggleDelete(k, val);
                         },
                         onSetBest: (k) {
-                          widget.onSetBest(k);
+                          _setBest(k);
                         },
                       ),
                     ),
@@ -841,7 +857,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           valueListenable: _deleteSelectionNotifier,
           builder: (context, deleteSet, _) {
             final isSelectedForDelete = deleteSet.contains(activeEntry.key);
-            final isBest = activeEntry.key == widget.group.bestKey;
+            final isBest = activeEntry.key == _bestKey;
             final qualityScore = _getQualityScore(activeEntry);
             final sharpnessScore = ((activeEntry.sharpness / 6.0).clamp(0.0, 100.0)).round();
             final exposureScore = (activeEntry.exposureScore * 100.0).round().clamp(0, 100);
@@ -1061,8 +1077,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                 ),
                                 onPressed: () {
                                   HapticFeedback.selectionClick();
-                                  widget.onSetBest(activeEntry.key);
-                                  setState(() {});
+                                  _setBest(activeEntry.key);
                                 },
                                 icon: Icon(
                                   isBest ? Icons.star : Icons.star_border,

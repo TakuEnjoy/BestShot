@@ -1,13 +1,15 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 import '../../models/photo_entry.dart';
+import '../analysis/analysis_types.dart';
 import 'orb_matcher.dart';
 
 enum PairCategory {
-  sameBurst,                 // 短時間連写 (0-2秒, 局所特徴・pHash近接)
-  sameSceneVariant,          // 同一シーンの寄り・引き・ズーム・構図差・撮り直し (RANSAC幾何またはクロップ埋め込み主証拠)
+  sameSubject, // Portrait-only subject group; not evidence of the same scene.
+  sameBurst, // 短時間連写 (0-2秒, 局所特徴・pHash近接)
+  sameSceneVariant, // 同一シーンの寄り・引き・ズーム・構図差・撮り直し (RANSAC幾何またはクロップ埋め込み主証拠)
   sameSubjectDifferentEvent, // 同じ被写体だが別イベント (検索用関連付けのみ。削除グループには絶対結合しない)
-  different,                 // 明らかに別写真
+  different, // 明らかに別写真
 }
 
 class PairSimilarityResult {
@@ -32,7 +34,7 @@ class PairSimilarityResult {
   final bool isSameScene;
   final double confidence;
   final bool needsReview;
-  
+
   final double? diffSeconds;
   final int? pHashDistance;
   final double? colorDistance;
@@ -43,6 +45,8 @@ class PairSimilarityResult {
   final String? cropPair;
   final bool semanticMatch;
   final String explanation;
+
+  bool get canGroup => isSameScene || category == PairCategory.sameSubject;
 }
 
 class PairSimilarityEvaluator {
@@ -51,6 +55,7 @@ class PairSimilarityEvaluator {
     PhotoEntry a,
     PhotoEntry b, {
     int burstWindowSeconds = 15,
+    DetectionMode mode = DetectionMode.standard,
   }) {
     final ta = a.capturedAt;
     final tb = b.capturedAt;
@@ -61,7 +66,7 @@ class PairSimilarityEvaluator {
 
     final pHashDist = _calcPHashDistance(a, b);
     final colorDist = _calcColorDistance(a, b);
-    
+
     // ORB with RANSAC & geometric plausibility checks
     final (inliers, inlierRatio, goodMatches) = OrbMatcher.computeInliers(
       rowsA: a.orbRows,
@@ -80,24 +85,72 @@ class PairSimilarityEvaluator {
     // Semantic object matching (face/object labels)
     final isSemMatch = _semanticSimilar(a, b);
 
-    // Orientation check
-    double maxAx = 0, maxAy = 0;
-    for (int i = 0; i < a.orbRows; i++) {
-      if (a.orbKeypoints[i * 2] > maxAx) maxAx = a.orbKeypoints[i * 2];
-      if (a.orbKeypoints[i * 2 + 1] > maxAy) maxAy = a.orbKeypoints[i * 2 + 1];
+    // Keypoint extents do not describe image orientation. Sparse or invalid
+    // keypoints must not reject otherwise valid crop/zoom matches.
+
+    final portraitMode = mode == DetectionMode.portrait;
+    final strongGeometry = inliers >= 18 && inlierRatio >= 0.30;
+    final supportedEmbedding = _hasEmbeddingSupport(a, b, 0.86);
+    final portraitEvidence =
+        embSim != null &&
+        embSim >= 0.88 &&
+        (strongGeometry ||
+            (supportedEmbedding &&
+                ((pHashDist != null && pHashDist <= 22) || embSim >= 0.94)));
+
+    PairSimilarityResult decision(
+      PairCategory category,
+      bool merge,
+      double confidence,
+      bool review,
+      String explanation,
+    ) {
+      return PairSimilarityResult(
+        category: category,
+        isSameScene: merge,
+        confidence: confidence,
+        needsReview: review,
+        diffSeconds: diffSeconds,
+        pHashDistance: pHashDist,
+        colorDistance: colorDist,
+        orbGoodMatches: goodMatches,
+        orbInliers: inliers,
+        orbInlierRatio: inlierRatio,
+        embeddingSimilarity: embSim,
+        cropPair: bestCropPair,
+        semanticMatch: isSemMatch,
+        explanation: explanation,
+      );
     }
-    double maxBx = 0, maxBy = 0;
-    for (int i = 0; i < b.orbRows; i++) {
-      if (b.orbKeypoints[i * 2] > maxBx) maxBx = b.orbKeypoints[i * 2];
-      if (b.orbKeypoints[i * 2 + 1] > maxBy) maxBy = b.orbKeypoints[i * 2 + 1];
+
+    // Subject grouping may cross sessions. Generic embeddings are not face
+    // identity: keep these matches reviewable and never preselect deletion.
+    if (portraitMode && portraitEvidence) {
+      return decision(
+        PairCategory.sameSubject,
+        false,
+        embSim.clamp(0.70, 0.95),
+        true,
+        'ポートレート・被写体特徴一致（要確認）',
+      );
     }
-    final isPortraitA = maxAy > maxAx;
-    final isPortraitB = maxBy > maxBx;
-    final isOrientationFlipped = isPortraitA != isPortraitB;
+    if (portraitMode &&
+        strongGeometry &&
+        (diffSeconds == null || diffSeconds <= 3600) &&
+        (colorDist == null || colorDist <= 0.40)) {
+      return decision(
+        PairCategory.sameSubject,
+        false,
+        0.90,
+        true,
+        'ポートレート・局所特徴一致（要確認）',
+      );
+    }
 
     final focalA = _parseFocalLengthValue(a.exif?.focalLength);
     final focalB = _parseFocalLengthValue(b.exif?.focalLength);
-    final isOpticalZoom = (diffSeconds != null &&
+    final isOpticalZoom =
+        (diffSeconds != null &&
         diffSeconds <= 15.0 &&
         focalA != null &&
         focalB != null &&
@@ -106,11 +159,14 @@ class PairSimilarityEvaluator {
         ((focalA > focalB ? focalA / focalB : focalB / focalA) >= 1.10));
 
     // -------------------------------------------------------------
-    // GUARD 1: Session separation guard (diffSeconds > 5 minutes)
+    // Normal mode permits at most ten minutes; portrait geometry permits an
+    // hour, and supported subject embeddings above may cross sessions.
     // -------------------------------------------------------------
-    if (diffSeconds != null && diffSeconds > 300.0) {
+    if (diffSeconds != null && diffSeconds > (portraitMode ? 3600.0 : 600.0)) {
       return PairSimilarityResult(
-        category: PairCategory.sameSubjectDifferentEvent,
+        category: portraitEvidence || (embSim != null && embSim >= 0.88)
+            ? PairCategory.sameSubjectDifferentEvent
+            : PairCategory.different,
         isSameScene: false,
         confidence: 0.95,
         needsReview: false,
@@ -128,11 +184,12 @@ class PairSimilarityEvaluator {
     }
 
     // -------------------------------------------------------------
-    // GUARD 2: Composition change guard within session (same orientation only)
+    // Composition guard cannot override strong geometric evidence.
     // -------------------------------------------------------------
     if (diffSeconds != null &&
-        diffSeconds > 15.0 &&
-        !isOrientationFlipped &&
+        diffSeconds > 30.0 &&
+        !portraitMode &&
+        !strongGeometry &&
         pHashDist != null &&
         pHashDist >= 26 &&
         !isOpticalZoom) {
@@ -160,7 +217,7 @@ class PairSimilarityEvaluator {
     final hasExifA = ta != null;
     final hasExifB = tb != null;
     if (hasExifA != hasExifB) {
-      if (inliers < 15 || inlierRatio < 0.35) {
+      if (!strongGeometry && !(portraitMode && portraitEvidence)) {
         return PairSimilarityResult(
           category: PairCategory.different,
           isSameScene: false,
@@ -182,7 +239,18 @@ class PairSimilarityEvaluator {
 
     // -------------------------------------------------------------
     // Ultra-low color distance match for non-EXIF (e.g. 141.jpg and 142.jpg)
-    if (diffSeconds == null && colorDist != null && colorDist <= 0.08 && pHashDist != null && pHashDist <= 28) {
+    if (diffSeconds == null &&
+        colorDist != null &&
+        colorDist <= 0.08 &&
+        pHashDist != null &&
+        (pHashDist <= 10 ||
+            (pHashDist <= 14 &&
+                colorDist <= 0.03 &&
+                inliers >= 4 &&
+                inlierRatio >= 0.30) ||
+            (pHashDist <= 24 &&
+                colorDist <= 0.03 &&
+                (_calcLumaDistance(a, b) ?? 1.0) <= 0.025))) {
       final conf = inliers >= 12
           ? (0.88 + (inliers / 100.0)).clamp(0.88, 0.98)
           : 0.88;
@@ -193,7 +261,7 @@ class PairSimilarityEvaluator {
         category: PairCategory.sameSceneVariant,
         isSameScene: true,
         confidence: conf,
-        needsReview: false,
+        needsReview: pHashDist > 10 && !strongGeometry,
         diffSeconds: null,
         pHashDistance: pHashDist,
         colorDistance: colorDist,
@@ -205,30 +273,6 @@ class PairSimilarityEvaluator {
         semanticMatch: isSemMatch,
         explanation: exp,
       );
-    }
-
-    // -------------------------------------------------------------
-    // GUARD 4: Aspect Ratio / Orientation guard for non-EXIF images
-    // -------------------------------------------------------------
-    if (diffSeconds == null && isOrientationFlipped) {
-      if (inliers < 15 || inlierRatio < 0.35) {
-        return PairSimilarityResult(
-          category: PairCategory.different,
-          isSameScene: false,
-          confidence: 0.90,
-          needsReview: false,
-          diffSeconds: null,
-          pHashDistance: pHashDist,
-          colorDistance: colorDist,
-          orbGoodMatches: goodMatches,
-          orbInliers: inliers,
-          orbInlierRatio: inlierRatio,
-          embeddingSimilarity: embSim,
-          cropPair: bestCropPair,
-          semanticMatch: isSemMatch,
-          explanation: '縦横比・向きの不一致',
-        );
-      }
     }
 
     // -------------------------------------------------------------
@@ -251,7 +295,8 @@ class PairSimilarityEvaluator {
           embeddingSimilarity: embSim,
           cropPair: bestCropPair,
           semanticMatch: isSemMatch,
-          explanation: '高速連写 (${diffSeconds.toStringAsFixed(2)}s差, pHash: $pHashDist)',
+          explanation:
+              '高速連写 (${diffSeconds.toStringAsFixed(2)}s差, pHash: $pHashDist)',
         );
       }
     }
@@ -260,7 +305,8 @@ class PairSimilarityEvaluator {
     if (diffSeconds != null && diffSeconds <= burstWindowSeconds) {
       // If pHash is close OR inliers are strong
       if (pHashDist != null && pHashDist <= 10) {
-        final needsReview = pHashDist >= 8 && (colorDist != null && colorDist > 0.35);
+        final needsReview =
+            pHashDist >= 8 && (colorDist != null && colorDist > 0.35);
         return PairSimilarityResult(
           category: PairCategory.sameBurst,
           isSameScene: true,
@@ -301,14 +347,25 @@ class PairSimilarityEvaluator {
 
       // Rapid burst with consistent camera settings & moderate features (e.g. telephoto / moving subject)
       if (diffSeconds <= 2.0) {
-        final isSameFocal = (focalA != null && focalB != null && (focalA - focalB).abs() < 2.0);
-        final isTelephoto = (focalA != null && focalA >= 100.0) && (focalB != null && focalB >= 100.0);
-        final isSameCamera = a.exif?.cameraModel != null && a.exif?.cameraModel == b.exif?.cameraModel;
-        final isSameAperture = a.exif?.fNumber != null && a.exif?.fNumber == b.exif?.fNumber;
+        final isSameFocal =
+            (focalA != null && focalB != null && (focalA - focalB).abs() < 2.0);
+        final isTelephoto =
+            (focalA != null && focalA >= 100.0) &&
+            (focalB != null && focalB >= 100.0);
+        final isSameCamera =
+            a.exif?.cameraModel != null &&
+            a.exif?.cameraModel == b.exif?.cameraModel;
+        final isSameAperture =
+            a.exif?.fNumber != null && a.exif?.fNumber == b.exif?.fNumber;
         final isSameIso = a.exif?.iso != null && a.exif?.iso == b.exif?.iso;
 
-        if ((isSameFocal || isTelephoto) && isSameCamera && isSameAperture && isSameIso) {
-          if (inliers >= 5 && inlierRatio >= 0.40 && (pHashDist != null && pHashDist <= 24)) {
+        if ((isSameFocal || isTelephoto) &&
+            isSameCamera &&
+            isSameAperture &&
+            isSameIso) {
+          if (inliers >= 5 &&
+              inlierRatio >= 0.40 &&
+              (pHashDist != null && pHashDist <= 24)) {
             return PairSimilarityResult(
               category: PairCategory.sameBurst,
               isSameScene: true,
@@ -323,7 +380,8 @@ class PairSimilarityEvaluator {
               embeddingSimilarity: embSim,
               cropPair: bestCropPair,
               semanticMatch: isSemMatch,
-              explanation: '連写・幾何一致 (${focalA.round()}mm, Inliers: $inliers点, ${diffSeconds.toStringAsFixed(1)}s差)',
+              explanation:
+                  '連写・幾何一致 (${focalA.round()}mm, Inliers: $inliers点, ${diffSeconds.toStringAsFixed(1)}s差)',
             );
           }
         }
@@ -355,7 +413,10 @@ class PairSimilarityEvaluator {
 
     // Same session retake sequence within 120s (e.g. 41.JPG and 42.JPG)
     if (diffSeconds != null && diffSeconds <= 120.0) {
-      if (inliers >= 4 && inlierRatio >= 0.12 && (colorDist == null || colorDist <= 0.35)) {
+      if (inliers >= 8 &&
+          inlierRatio >= 0.20 &&
+          colorDist != null &&
+          colorDist <= 0.35) {
         return PairSimilarityResult(
           category: PairCategory.sameSceneVariant,
           isSameScene: true,
@@ -378,10 +439,17 @@ class PairSimilarityEvaluator {
     // Non-EXIF geometric alignment
     if (diffSeconds == null) {
       // 1. High color similarity + moderate inliers (e.g. X2 vs X3, 121 vs 122)
-      final isColorMatch = (colorDist != null && colorDist <= 0.25 && inliers >= 6 && inlierRatio >= 0.20);
+      final isColorMatch =
+          (colorDist != null &&
+          colorDist <= 0.25 &&
+          inliers >= 6 &&
+          inlierRatio >= 0.20);
 
       // 2. Strong geometric consistency (e.g. 101 vs 102, 71 vs 72, X1 vs X2, 81 vs 82)
-      final isStrongGeometry = (inliers >= 15 && inlierRatio >= 0.20 && (colorDist == null || colorDist <= 0.55));
+      final isStrongGeometry =
+          (inliers >= 15 &&
+          inlierRatio >= 0.20 &&
+          (colorDist == null || colorDist <= 0.55));
 
       // 3. Zoom / crop without EXIF (e.g. 111 vs 112)
       // Must have consistent brightness (|meanV_A - meanV_B| <= 35), higher ratio, same orientation
@@ -401,10 +469,12 @@ class PairSimilarityEvaluator {
         }
         meanVB = sum;
       }
-      final diffMeanV = (meanVA != null && meanVB != null) ? (meanVA - meanVB).abs() : null;
-      final isZoomCrop = (inliers >= 8 &&
+      final diffMeanV = (meanVA != null && meanVB != null)
+          ? (meanVA - meanVB).abs()
+          : null;
+      final isZoomCrop =
+          (inliers >= 8 &&
           inlierRatio >= 0.30 &&
-          !isOrientationFlipped &&
           diffMeanV != null &&
           diffMeanV <= 35.0 &&
           (pHashDist == null || pHashDist <= 32));
@@ -430,12 +500,22 @@ class PairSimilarityEvaluator {
     }
 
     // Condition A: Strong RANSAC Inliers with valid Homography
-    if (inliers >= 12 && inlierRatio >= 0.15) {
-      final isDifferentDay = (diffSeconds != null && diffSeconds > 3600 * 6);
-      final nonExifColorOk = (diffSeconds != null || inliers >= 15 || colorDist == null || colorDist <= 0.40);
+    if (inliers >= 12 &&
+        inlierRatio >= 0.15 &&
+        (diffSeconds == null ||
+            diffSeconds <= 300 ||
+            (strongGeometry && colorDist != null && colorDist <= 0.25))) {
+      final isDifferentDay =
+          (diffSeconds != null && diffSeconds > (portraitMode ? 3600 : 600));
+      final nonExifColorOk =
+          (diffSeconds != null ||
+          inliers >= 15 ||
+          colorDist == null ||
+          colorDist <= 0.40);
       if (!isDifferentDay && nonExifColorOk) {
         final confidence = (0.75 + (inliers / 100.0)).clamp(0.75, 0.96);
-        final needsReview = inliers < 18 || (diffSeconds != null && diffSeconds > 300);
+        final needsReview =
+            inliers < 18 || (diffSeconds != null && diffSeconds > 300);
         return PairSimilarityResult(
           category: PairCategory.sameSceneVariant,
           isSameScene: true,
@@ -450,17 +530,25 @@ class PairSimilarityEvaluator {
           embeddingSimilarity: embSim,
           cropPair: bestCropPair,
           semanticMatch: isSemMatch,
-          explanation: '寄り引き/ズーム幾何一致 (Inliers: $inliers点, 率: ${(inlierRatio * 100).toStringAsFixed(1)}%)',
+          explanation:
+              '寄り引き/ズーム幾何一致 (Inliers: $inliers点, 率: ${(inlierRatio * 100).toStringAsFixed(1)}%)',
         );
       }
     }
 
     // Condition B: High Crop Embedding Similarity (Zoom / Framing difference)
-    if (embSim != null && embSim >= 0.82) {
+    if (embSim != null &&
+        embSim >= 0.86 &&
+        supportedEmbedding &&
+        ((inliers >= 8 && inlierRatio >= 0.20) ||
+            (pHashDist != null &&
+                pHashDist <= 14 &&
+                colorDist != null &&
+                colorDist <= 0.25))) {
       // Must be within same session/event (< 15 mins)
-      final withinSession = (diffSeconds == null || diffSeconds <= 900);
+      final withinSession = (diffSeconds == null || diffSeconds <= 600);
       if (withinSession) {
-        final needsReview = embSim < 0.88;
+        final needsReview = true;
         return PairSimilarityResult(
           category: PairCategory.sameSceneVariant,
           isSameScene: true,
@@ -475,14 +563,18 @@ class PairSimilarityEvaluator {
           embeddingSimilarity: embSim,
           cropPair: bestCropPair,
           semanticMatch: isSemMatch,
-          explanation: 'クロップ埋め込み一致 ($bestCropPair, 類似度: ${(embSim * 100).toStringAsFixed(1)}%)',
+          explanation:
+              'クロップ埋め込み一致 ($bestCropPair, 類似度: ${(embSim * 100).toStringAsFixed(1)}%)',
         );
       }
     }
 
     // Condition C: Moderate Inliers + Moderate pHash within 3 minutes
     if (diffSeconds != null && diffSeconds <= 180) {
-      if (inliers >= 8 && inlierRatio >= 0.12 && pHashDist != null && pHashDist <= 18) {
+      if (inliers >= 8 &&
+          inlierRatio >= 0.12 &&
+          pHashDist != null &&
+          pHashDist <= 18) {
         return PairSimilarityResult(
           category: PairCategory.sameSceneVariant,
           isSameScene: true,
@@ -509,12 +601,20 @@ class PairSimilarityEvaluator {
         final maxFocal = math.max(focalA, focalB);
         final zoomRatio = maxFocal / minFocal;
 
-        final isSameCamera = a.exif?.cameraModel != null && a.exif?.cameraModel == b.exif?.cameraModel;
-        final isSameAperture = a.exif?.fNumber != null && a.exif?.fNumber == b.exif?.fNumber;
+        final isSameCamera =
+            a.exif?.cameraModel != null &&
+            a.exif?.cameraModel == b.exif?.cameraModel;
+        final isSameAperture =
+            a.exif?.fNumber != null && a.exif?.fNumber == b.exif?.fNumber;
         final isSameIso = a.exif?.iso != null && a.exif?.iso == b.exif?.iso;
-        final isShutterClose = _isShutterCompatible(a.exif?.shutter, b.exif?.shutter, maxRatio: 1.35);
+        final isShutterClose = _isShutterCompatible(
+          a.exif?.shutter,
+          b.exif?.shutter,
+          maxRatio: 1.35,
+        );
 
-        if (zoomRatio >= 1.25 && zoomRatio <= 3.0 &&
+        if (zoomRatio >= 1.25 &&
+            zoomRatio <= 3.0 &&
             isSameCamera &&
             isSameAperture &&
             isSameIso &&
@@ -535,7 +635,8 @@ class PairSimilarityEvaluator {
             embeddingSimilarity: embSim,
             cropPair: bestCropPair,
             semanticMatch: isSemMatch,
-            explanation: '寄りと引き・光学ズーム (${minFocal.round()}mm→${maxFocal.round()}mm, ${diffSeconds.toStringAsFixed(1)}s差)',
+            explanation:
+                '寄りと引き・光学ズーム (${minFocal.round()}mm→${maxFocal.round()}mm, ${diffSeconds.toStringAsFixed(1)}s差)',
           );
         }
       }
@@ -546,7 +647,8 @@ class PairSimilarityEvaluator {
     // -------------------------------------------------------------
     // Same person/object detected or high embedding similarity, BUT different event
     final isDifferentEvent = (diffSeconds != null && diffSeconds > 600);
-    if (isDifferentEvent && (isSemMatch || (embSim != null && embSim >= 0.72))) {
+    if (isDifferentEvent &&
+        (isSemMatch || (embSim != null && embSim >= 0.72))) {
       return PairSimilarityResult(
         category: PairCategory.sameSubjectDifferentEvent,
         isSameScene: false, // CRITICAL: Never auto-merge for deletion!
@@ -561,7 +663,8 @@ class PairSimilarityEvaluator {
         embeddingSimilarity: embSim,
         cropPair: bestCropPair,
         semanticMatch: isSemMatch,
-        explanation: '同じ被写体・別イベント (${(diffSeconds / 60).round()}分差, 削除グループ結合除外)',
+        explanation:
+            '同じ被写体・別イベント (${(diffSeconds / 60).round()}分差, 削除グループ結合除外)',
       );
     }
 
@@ -608,10 +711,13 @@ class PairSimilarityEvaluator {
 
   /// Calculates the best embedding similarity across all crop combinations.
   /// Returns (maxSimilarity, 'cropA-cropB'). If embeddings are null, returns (null, null).
-  static (double?, String?) _calcBestEmbeddingSimilarity(PhotoEntry a, PhotoEntry b) {
+  static (double?, String?) _calcBestEmbeddingSimilarity(
+    PhotoEntry a,
+    PhotoEntry b,
+  ) {
     if (a.embeddings == null || b.embeddings == null) return (null, null);
     if (a.embeddings!.isEmpty || b.embeddings!.isEmpty) return (null, null);
-    
+
     double maxSim = -1.0;
     String? bestPair;
 
@@ -628,7 +734,7 @@ class PairSimilarityEvaluator {
     if (maxSim < 0.0) return (null, null);
     return (maxSim, bestPair);
   }
-  
+
   static double _cosineSimilarity(Float32List a, Float32List b) {
     if (a.isEmpty || a.length != b.length) return 0.0;
     double dot = 0.0;
@@ -639,20 +745,27 @@ class PairSimilarityEvaluator {
       normA += a[i] * a[i];
       normB += b[i] * b[i];
     }
-    if (normA <= 0 || normB <= 0) return 0.0;
+    if (!dot.isFinite ||
+        !normA.isFinite ||
+        !normB.isFinite ||
+        normA <= 0 ||
+        normB <= 0) {
+      return 0.0;
+    }
     return dot / (math.sqrt(normA) * math.sqrt(normB));
   }
 
   static int? _calcPHashDistance(PhotoEntry a, PhotoEntry b) {
     final ha = a.pHashHex;
     final hb = b.pHashHex;
-    if (ha.isEmpty || hb.isEmpty) return null;
+    final validHash = RegExp(r'^[0-9a-fA-F]{1,16}$');
+    if (!validHash.hasMatch(ha) || !validHash.hasMatch(hb)) return null;
     if (ha == '0000000000000000' || hb == '0000000000000000') return null;
-    
+
     final aBig = BigInt.tryParse(ha.padLeft(16, '0'), radix: 16);
     final bBig = BigInt.tryParse(hb.padLeft(16, '0'), radix: 16);
     if (aBig == null || bBig == null) return null;
-    
+
     var x = aBig ^ bBig;
     var count = 0;
     while (x != BigInt.zero) {
@@ -684,15 +797,23 @@ class PairSimilarityEvaluator {
 
     return (dH * 0.6) + (dS * 0.2) + (dV * 0.2);
   }
-  
+
+  static double? _calcLumaDistance(PhotoEntry a, PhotoEntry b) {
+    if (a.histogram.length != 256 || b.histogram.length != 256) return null;
+    final sumA = a.histogram.fold<int>(0, (sum, value) => sum + value);
+    final sumB = b.histogram.fold<int>(0, (sum, value) => sum + value);
+    if (sumA == 0 || sumB == 0) return null;
+    var distance = 0.0;
+    for (var i = 0; i < 256; i++) {
+      distance += (a.histogram[i] / sumA - b.histogram[i] / sumB).abs();
+    }
+    return distance / 2;
+  }
+
   static bool _semanticSimilar(PhotoEntry a, PhotoEntry b) {
     final ao = a.semanticObjects;
     final bo = b.semanticObjects;
     if (ao.isEmpty || bo.isEmpty) {
-      // Check face presence
-      if (a.portrait.hasFace && b.portrait.hasFace) {
-        return true;
-      }
       return false;
     }
 
@@ -708,6 +829,31 @@ class PairSimilarityEvaluator {
       }
     }
     return false;
+  }
+
+  // Require evidence from distinct crops in both photos, not one matching
+  // background corner repeated against every crop of the other image.
+  static bool _hasEmbeddingSupport(
+    PhotoEntry a,
+    PhotoEntry b,
+    double threshold,
+  ) {
+    final matchedA = <String>{};
+    final matchedB = <String>{};
+    for (final ea
+        in a.embeddings?.entries ?? <MapEntry<String, Float32List>>[]) {
+      for (final eb
+          in b.embeddings?.entries ?? <MapEntry<String, Float32List>>[]) {
+        if (_cosineSimilarity(ea.value, eb.value) >= threshold) {
+          matchedA.add(ea.key);
+          matchedB.add(eb.key);
+        }
+      }
+    }
+    return matchedA.length >= 2 &&
+        matchedB.length >= 2 &&
+        matchedA.contains('center') &&
+        matchedB.contains('center');
   }
 
   static double _iou(SemanticObject a, SemanticObject b) {
@@ -733,7 +879,11 @@ class PairSimilarityEvaluator {
     return inter / union;
   }
 
-  static bool _isShutterCompatible(String? sA, String? sB, {double maxRatio = 1.35}) {
+  static bool _isShutterCompatible(
+    String? sA,
+    String? sB, {
+    double maxRatio = 1.35,
+  }) {
     if (sA == null || sB == null) return false;
     final valA = _parseShutterSeconds(sA);
     final valB = _parseShutterSeconds(sB);
@@ -766,4 +916,3 @@ class PairSimilarityEvaluator {
     return null;
   }
 }
-
