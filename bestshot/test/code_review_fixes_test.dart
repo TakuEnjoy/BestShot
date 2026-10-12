@@ -132,8 +132,8 @@ void main() {
       // Initially e1 has the Best badge
       expect(find.text('Best'), findsOneWidget);
 
-      // Navigate to e2 via right arrow key
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      // Recommended order places the sharper e2 before the manually chosen e1.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pumpAndSettle();
 
       // Press key B to promote e2 to Best

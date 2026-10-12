@@ -7,6 +7,7 @@ import '../services/analysis/analyzer_isolate.dart';
 import '../services/analysis/analysis_types.dart';
 import '../services/grouping/grouping.dart';
 import '../services/importing/import_service.dart';
+import '../services/review_session_store.dart';
 import '../services/semantic/mlkit_semantic_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
@@ -26,6 +27,21 @@ class ImportScreen extends StatefulWidget {
 }
 
 class _ImportScreenState extends State<ImportScreen> {
+  Future<void> _resumeReview() async {
+    if (_busy) return;
+    setState(() { _busy = true; _status = '保存した選別作業を読み込み中…'; });
+    try {
+      final session = await ReviewSessionStore.open();
+      if (!mounted || session == null) return;
+      await Navigator.of(context).push(FastRoute(builder: (_) => GroupsScreen(
+        groups: session.groups, detectionMode: session.mode, reviewSession: session)));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('選別作業を読み込めませんでした: $e')));
+    } finally {
+      if (mounted) setState(() { _busy = false; _status = ''; });
+    }
+  }
+
   bool _busy = false;
   bool _cancelled = false;
   bool _isError = false;
@@ -1263,6 +1279,8 @@ class _ImportScreenState extends State<ImportScreen> {
               ],
             ),
           ),
+          IconButton(tooltip: '選別作業を再開', onPressed: _busy ? null : _resumeReview,
+            icon: const Icon(Icons.folder_open)),
           if (!isSmallMobile && isWindows)
             IconButton(
               tooltip: 'キーボードショートカット [Ctrl+O]',

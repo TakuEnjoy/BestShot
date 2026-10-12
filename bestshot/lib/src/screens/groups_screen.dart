@@ -9,6 +9,9 @@ import 'package:path/path.dart' as p;
 
 import '../models/photo_entry.dart';
 import '../models/photo_group.dart';
+import '../models/review_session.dart';
+import '../services/review_session_store.dart';
+import 'review_tools_screen.dart';
 import '../services/analysis/analysis_types.dart';
 import '../services/deleting/delete_service.dart';
 import '../services/sorting/sort_service.dart';
@@ -29,10 +32,12 @@ class GroupsScreen extends StatefulWidget {
     super.key,
     required this.groups,
     required this.detectionMode,
+    this.reviewSession,
   });
 
   final List<PhotoGroup> groups;
   final DetectionMode detectionMode;
+  final ReviewSession? reviewSession;
 
   @override
   State<GroupsScreen> createState() => _GroupsScreenState();
@@ -45,8 +50,75 @@ class _GroupsScreenState extends State<GroupsScreen> {
   Set<String> get _selectedForDelete => _selectedForDeleteNotifier.value;
   final List<String> _loupeSelection = [];
   late List<PhotoGroup> _groups;
+  late ReviewSession _review;
+  bool _savingReview = false;
+
+  void _sanitizeDeleteSelection() {
+    final safe = _selectedForDelete.where(_review.canDelete).toSet();
+    if (safe.length != _selectedForDelete.length) _selectedForDeleteNotifier.value = safe;
+  }
+
+  void _captureReview() {
+    _review.groups = _groups;
+    _review.folders..clear()..addAll(_selectedSortFolders);
+    _review.customFolders..clear()..addAll(_customFolders);
+    _review.deleteKeys..clear()..addAll(_selectedForDelete.where(_review.canDelete));
+    _review.comparisonKeys..clear()..addAll(_loupeSelection);
+    final photos = _filteredPortraitItems;
+    _review.activeKey = widget.detectionMode == DetectionMode.portrait && photos.isNotEmpty
+        ? photos[_keyboardPortraitIndex.clamp(0, photos.length - 1)].key : _keyboardPhotoKey;
+  }
+
+  Future<void> _saveReview() async {
+    if (_processingKeys.isNotEmpty || _savingReview) return;
+    _captureReview();
+    setState(() => _savingReview = true);
+    try {
+      final saved = await ReviewSessionStore.save(_review);
+      if (mounted && saved) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('選別作業を保存しました。写真本体は元の場所に保持してください。')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('保存できませんでした: $e')));
+    } finally { if (mounted) setState(() => _savingReview = false); }
+  }
+
+  Future<void> _editReview() async {
+    if (_processingKeys.isNotEmpty) return;
+    _captureReview();
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ReviewToolsScreen(session: _review)));
+    if (!mounted) return;
+    setState(() {
+      _groups = _review.sortedGroups(_review.groups);
+      _selectedForDeleteNotifier.value = Set.of(_review.deleteKeys.where(_review.canDelete));
+      _syncEntryByKey(); _lastGroupsRef = null; _sortedPortraitItems = null;
+      _applyOrder(activeKey: _review.activeKey);
+      _clampKeyboardIndices();
+    });
+  }
+
+  void _applyOrder({GroupOrder? groupOrder, PhotoOrder? photoOrder, String? activeKey}) {
+    final photos = _filteredPortraitItems;
+    final active = activeKey ?? (widget.detectionMode == DetectionMode.portrait && photos.isNotEmpty
+        ? photos[_keyboardPortraitIndex.clamp(0, photos.length - 1)].key : _keyboardPhotoKey);
+    if (groupOrder != null) _review.groupOrder = groupOrder;
+    if (photoOrder != null) _review.photoOrder = photoOrder;
+    _review.groups = _groups;
+    _groups = _review.sortedGroups(_groups);
+    _review.groups = _groups;
+    _lastGroupsRef = null; _sortedPortraitItems = null;
+    if (active != null) {
+      _keyboardPhotoKey = active;
+      final groupIndex = _groups.indexWhere((g) => g.items.any((e) => e.key == active));
+      if (groupIndex >= 0) _keyboardGroupIndex = groupIndex;
+      final photoIndex = _filteredPortraitItems.indexWhere((e) => e.key == active);
+      if (photoIndex >= 0) _keyboardPortraitIndex = photoIndex;
+    }
+  }
 
   void _toggleDelete(String key, [bool? select]) {
+    if (!_review.canDelete(key)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('保護・残す・保留の写真は削除候補にできません')));
+      return;
+    }
     final current = _selectedForDeleteNotifier.value;
     final next = Set<String>.from(current);
     final shouldSelect = select ?? !next.contains(key);
@@ -69,6 +141,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       }
       _sortedPortraitItems = null;
       _lastGroupsRef = null; // force filtered groups recalculation
+      _review.groups = _groups;
     });
   }
 
@@ -94,6 +167,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
   List<PhotoGroup>? _lastGroupsRef;
 
   List<PhotoGroup> get _filteredGroups {
+    return _review.sortedGroups(_baseFilteredGroups.where((g) =>
+      (!_review.unreviewedOnly || !_review.reviewedGroupIds.contains(g.id)) &&
+      (_review.decisionFilter == null || g.items.any((e) => (_review.decisions[e.key] ?? PhotoDecision.undecided) == _review.decisionFilter))));
+  }
+
+  List<PhotoGroup> get _baseFilteredGroups {
     if (_cachedFilteredGroups != null &&
         identical(_lastGroupsRef, _groups) &&
         _lastFilterQuery == _filterQuery &&
@@ -114,7 +193,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       if (_filterBurstOnly && !g.isBurst) return false;
       if (_filterReviewOnly && !g.needsReview) return false;
       if (q.isNotEmpty) {
-        final matchesId = g.id.toLowerCase().contains(q);
+        final matchesId = g.id.toLowerCase().contains(q) || _review.name(g).toLowerCase().contains(q);
         final matchesItem = g.items.any((e) => (e.filePath ?? '').toLowerCase().contains(q));
         if (!matchesId && !matchesItem) return false;
       }
@@ -143,6 +222,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
     });
 
     _groups = List.of(widget.groups);
+    _review = widget.reviewSession ?? ReviewSession(groups: _groups, mode: widget.detectionMode);
+    _groups = _review.sortedGroups(_review.groups);
+    _review.groups = _groups;
+    _selectedSortFolders.addAll(_review.folders);
+    _customFolders.addAll(_review.customFolders);
+    _loupeSelection.addAll(_review.comparisonKeys);
 
     _entryByKey = {
       for (final g in _groups)
@@ -150,25 +235,36 @@ class _GroupsScreenState extends State<GroupsScreen> {
     };
     // Initially do not pre-select items for delete; let the user select manually
     _selectedForDeleteNotifier = ValueNotifier<Set<String>>(<String>{});
+    _selectedForDeleteNotifier.addListener(_sanitizeDeleteSelection);
+    _selectedForDeleteNotifier.value = Set.of(_review.deleteKeys.where(_review.canDelete));
 
     // Initialize keyboard photo focus to the first bestKey
     if (_groups.isNotEmpty) {
       _keyboardPhotoKey = _groups.first.bestKey;
+      if (_review.activeKey != null && _entryByKey.containsKey(_review.activeKey)) {
+        _keyboardPhotoKey = _review.activeKey;
+        _keyboardGroupIndex = _groups.indexWhere((g) => g.items.any((e) => e.key == _keyboardPhotoKey));
+        final portraitIndex = _filteredPortraitItems.indexWhere((e) => e.key == _review.activeKey);
+        if (portraitIndex >= 0) _keyboardPortraitIndex = portraitIndex;
+      }
     }
   }
 
   @override
   void didUpdateWidget(GroupsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.groups != widget.groups) {
+    if (oldWidget.groups != widget.groups || oldWidget.reviewSession != widget.reviewSession || oldWidget.detectionMode != widget.detectionMode) {
       _groups = List.of(widget.groups);
-      _entryByKey.clear();
-      for (final g in _groups) {
-        for (final e in g.items) {
-          _entryByKey[e.key] = e;
-        }
-      }
+      _review = widget.reviewSession ?? ReviewSession(groups: _groups, mode: widget.detectionMode);
+      _groups = _review.sortedGroups(_review.groups);
+      _selectedSortFolders..clear()..addAll(_review.folders);
+      _customFolders..clear()..addAll(_review.customFolders);
+      _loupeSelection..clear()..addAll(_review.comparisonKeys);
+      _syncEntryByKey();
+      _selectedForDeleteNotifier.value = Set.of(_review.deleteKeys.where((key) => _entryByKey.containsKey(key) && _review.canDelete(key)));
+      _lastGroupsRef = null;
       _sortedPortraitItems = null;
+      _applyOrder(activeKey: _review.activeKey);
       _clampKeyboardIndices();
     }
   }
@@ -180,6 +276,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
         _entryByKey[e.key] = e;
       }
     }
+    _review.groups = _groups;
+    _review.decisions.removeWhere((key, _) => !_entryByKey.containsKey(key));
+    _review.protectedKeys.removeWhere((key) => !_entryByKey.containsKey(key));
+    _review.reviewedGroupIds.removeWhere((id) => !_groups.any((g) => g.id == id));
+    _selectedSortFolders.removeWhere((key, _) => !_entryByKey.containsKey(key));
+    _loupeSelection.removeWhere((key) => !_entryByKey.containsKey(key));
   }
 
   @override
@@ -247,7 +349,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
   }
 
   List<PhotoEntry> get _filteredPortraitItems {
-    final all = _getPortraitItems();
+    final all = _review.sortedPhotos(_getPortraitItems()).where((e) =>
+      (!_review.unreviewedOnly || !_review.reviewedGroupIds.contains(_findGroupByPhotoKey(e.key)?.id)) &&
+      (_review.decisionFilter == null || (_review.decisions[e.key] ?? PhotoDecision.undecided) == _review.decisionFilter)).toList();
     if (_filterQuery.isEmpty && !_filterBurstOnly && !_filterReviewOnly) {
       return all;
     }
@@ -351,7 +455,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
   Future<void> _reviewAndDelete() async {
     // 処理中のファイルを除外した削除候補を抽出
     final targets = _selectedForDelete
-        .where((k) => !_processingKeys.contains(k))
+        .where((k) => !_processingKeys.contains(k) && _review.canDelete(k))
         .toList();
 
     if (targets.isEmpty) return;
@@ -371,7 +475,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (result == true) {
       // 念のため、実行直前に再度処理中のキーが混入していないかダブルチェック
       final finalTargets = targets
-          .where((k) => !_processingKeys.contains(k))
+          .where((k) => !_processingKeys.contains(k) && _selectedForDelete.contains(k) && _review.canDelete(k))
           .toList();
 
       if (finalTargets.isEmpty) {
@@ -409,6 +513,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     List<String> targets,
   ) async {
     final entries = targets
+        .where(_review.canDelete)
         .map((k) => _entryByKey[k])
         .whereType<PhotoEntry>()
         .toList();
@@ -503,12 +608,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
           );
         }
       } else {
+        final visibleIndex = _filteredGroups.indexWhere((g) => g.items.any((e) => e.key == _keyboardPhotoKey));
+        if (visibleIndex < 0) return;
         double targetOffset;
         if (crossAxisCount > 1) {
-          final rowIndex = _keyboardGroupIndex ~/ crossAxisCount;
+          final rowIndex = visibleIndex ~/ crossAxisCount;
           targetOffset = rowIndex * (370.0 + 8.0);
         } else {
-          targetOffset = _keyboardGroupIndex * 220.0;
+          targetOffset = visibleIndex * 220.0;
         }
         final currentOffset = _scrollController.offset;
         final viewHeight = size.height;
@@ -529,6 +636,18 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final key = event.logicalKey;
     final isPortrait = widget.detectionMode == DetectionMode.portrait;
     final portraitItems = _filteredPortraitItems;
+
+    final visibleGroups = _filteredGroups;
+    if (isPortrait ? portraitItems.isEmpty : visibleGroups.isEmpty) return KeyEventResult.ignored;
+    var visibleIndex = visibleGroups.indexWhere((g) => g.items.any((e) => e.key == _keyboardPhotoKey));
+    if (!isPortrait && visibleIndex < 0) {
+      visibleIndex = 0;
+      _keyboardPhotoKey = visibleGroups.first.bestKey;
+      _keyboardGroupIndex = _groups.indexOf(visibleGroups.first);
+    }
+
+    _keyboardPortraitIndex = portraitItems.isEmpty ? 0 : _keyboardPortraitIndex.clamp(0, portraitItems.length - 1);
+    _keyboardGroupIndex = _groups.isEmpty ? 0 : _keyboardGroupIndex.clamp(0, _groups.length - 1);
 
     // 編集用キーボードショートカットの場合は処理中のファイルを保護
     final bool isEditKey = key == LogicalKeyboardKey.keyB ||
@@ -564,9 +683,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
             _scrollToActiveGroup(true);
           }
         } else {
-          if (_groups.isNotEmpty && _keyboardGroupIndex < _groups.length - 1) {
-            _keyboardGroupIndex++;
-            final g = _groups[_keyboardGroupIndex];
+          if (visibleIndex < visibleGroups.length - 1) {
+            final g = visibleGroups[visibleIndex + 1];
+            _keyboardGroupIndex = _groups.indexOf(g);
             if (g.items.isNotEmpty) {
               _keyboardPhotoKey = g.bestKey;
             }
@@ -586,9 +705,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
             _scrollToActiveGroup(true);
           }
         } else {
-          if (_keyboardGroupIndex > 0) {
-            _keyboardGroupIndex--;
-            final g = _groups[_keyboardGroupIndex];
+          if (visibleIndex > 0) {
+            final g = visibleGroups[visibleIndex - 1];
+            _keyboardGroupIndex = _groups.indexOf(g);
             if (g.items.isNotEmpty) {
               _keyboardPhotoKey = g.bestKey;
             }
@@ -611,7 +730,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       }
       if (_groups.isNotEmpty) {
         final g = _groups[_keyboardGroupIndex];
-        final items = g.items;
+        final items = _review.sortedPhotos(g.items);
         final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
         if (currentIndex != -1 && currentIndex < items.length - 1) {
           setState(() {
@@ -634,7 +753,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       }
       if (_groups.isNotEmpty) {
         final g = _groups[_keyboardGroupIndex];
-        final items = g.items;
+        final items = _review.sortedPhotos(g.items);
         final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
         if (currentIndex > 0) {
           setState(() {
@@ -830,13 +949,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     // 念のため、実行直前に再度処理中のキーが混入していないかダブルチェック
     final finalTargets = targets
-        .where((e) => !_processingKeys.contains(e.key))
+        .where((e) => !_processingKeys.contains(e.key) && (isCopy || _review.canMove(e.key)))
         .toList();
 
     if (finalTargets.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('選択された写真はすでに処理中です。')),
+          const SnackBar(content: Text('対象写真は処理中、または移動から保護されています。')),
         );
       }
       return;
@@ -1259,6 +1378,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
             }
             return RepaintBoundary(
               child: _PortraitCardTile(
+                reviewLabel: _review.label(e.key),
                 entry: e,
                 index: index,
                 timeStr: timeStr,
@@ -1369,18 +1489,20 @@ class _GroupsScreenState extends State<GroupsScreen> {
       final isKeyboardGroupFocused = globalIndex == _keyboardGroupIndex;
 
       return _ExpandableGroupCard(
-        group: g,
+        group: g.copyWith(items: _review.sortedPhotos(g.items)),
+        displayName: '${_review.name(g)}${_review.reviewedGroupIds.contains(g.id) ? "・確認済み" : ""}',
+        reviewSession: _review,
         selectedForDelete: _selectedForDelete,
         selectedForDeleteListenable: _selectedForDeleteNotifier,
         onToggleDelete: (key, v) {
-          _keyboardGroupIndex = index;
+          _keyboardGroupIndex = globalIndex;
           _keyboardPhotoKey = key;
           _toggleDelete(key, v);
         },
         loupeSelection: _loupeSelection,
         onToggleLoupe: (key) {
           setState(() {
-            _keyboardGroupIndex = index;
+            _keyboardGroupIndex = globalIndex;
             _keyboardPhotoKey = key;
             if (_loupeSelection.contains(key)) {
               _loupeSelection.remove(key);
@@ -1434,14 +1556,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
             });
           }
         },
-        onOpenDetail: () {
+        onOpenDetail: () async {
           for (final photo in g.items.take(6)) {
             precacheImage(MemoryImage(photo.displayBytes), context);
           }
-          Navigator.of(context).push(
+          await Navigator.of(context).push(
             FastRoute(
               builder: (context) => GroupDetailScreen(
                 group: g,
+                reviewSession: _review,
                 selectedForDelete: _selectedForDelete,
                 selectedForDeleteNotifier: _selectedForDeleteNotifier,
                 onUpdateDeleteSelection: (keys) {
@@ -1481,6 +1604,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
               ),
             ),
           );
+          if (mounted) setState(() => _applyOrder());
         },
         onOpenLoupeForPhoto: (key) => _openLoupeForPhoto(g, key),
       );
@@ -1748,6 +1872,27 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      TextButton.icon(onPressed: _processingKeys.isEmpty ? _editReview : null,
+                        icon: const Icon(Icons.edit_note), label: const Text('選別・グループ編集')),
+                      IconButton(tooltip: '作業を保存', onPressed: _processingKeys.isEmpty && !_savingReview ? _saveReview : null,
+                        icon: Icon(_savingReview ? Icons.hourglass_empty : Icons.save)),
+                      PopupMenuButton<GroupOrder>(tooltip: 'グループの並べ替え',
+                        onSelected: (value) => setState(() => _applyOrder(groupOrder: value)),
+                        itemBuilder: (_) => [for (final order in GroupOrder.values) PopupMenuItem(value: order, child: Text(groupOrderLabels[order.index]))],
+                        child: Padding(padding: const EdgeInsets.all(8), child: Text('グループ: ${groupOrderLabels[_review.groupOrder.index]}'))),
+                      PopupMenuButton<PhotoOrder>(tooltip: '写真の並べ替え',
+                        onSelected: (value) => setState(() => _applyOrder(photoOrder: value)),
+                        itemBuilder: (_) => [for (final order in PhotoOrder.values)
+                          if (widget.detectionMode == DetectionMode.portrait || (order != PhotoOrder.faceQuality && order != PhotoOrder.subject))
+                            PopupMenuItem(value: order, child: Text(photoOrderLabels[order.index]))],
+                        child: Padding(padding: const EdgeInsets.all(8), child: Text('写真: ${photoOrderLabels[_review.photoOrder.index]}'))),
+                      FilterChip(label: const Text('未確認のみ'), selected: _review.unreviewedOnly,
+                        onSelected: (value) => setState(() => _review.unreviewedOnly = value)),
+                      PopupMenuButton<String>(tooltip: '選別状態で絞り込み',
+                        onSelected: (value) => setState(() => _review.decisionFilter = value == 'all' ? null : PhotoDecision.values.byName(value)),
+                        itemBuilder: (_) => [const PopupMenuItem(value: 'all', child: Text('選別状態: すべて')),
+                          for (final value in PhotoDecision.values) PopupMenuItem(value: value.name, child: Text(decisionLabels[value.index]))],
+                        child: Padding(padding: const EdgeInsets.all(8), child: Text(_review.decisionFilter == null ? '選別状態: すべて' : decisionLabels[_review.decisionFilter!.index]))),
                       // [ 🔍 フィルター ] ボタン
                       OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(

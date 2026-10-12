@@ -3,6 +3,8 @@ part of '../groups_screen.dart';
 class _ExpandableGroupCard extends StatelessWidget {
   const _ExpandableGroupCard({
     required this.group,
+    this.displayName,
+    this.reviewSession,
     required this.selectedForDelete,
     required this.onToggleDelete,
     required this.loupeSelection,
@@ -22,6 +24,8 @@ class _ExpandableGroupCard extends StatelessWidget {
   });
 
   final PhotoGroup group;
+  final String? displayName;
+  final ReviewSession? reviewSession;
   final Set<String> selectedForDelete;
   final ValueListenable<Set<String>>? selectedForDeleteListenable;
   final void Function(String key, bool selected) onToggleDelete;
@@ -158,7 +162,7 @@ class _ExpandableGroupCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(2),
                   ),
                   child: Text(
-                    '#${group.id}',
+                        displayName ?? '#${group.id}',
                     style: TextStyle(
                       color: isKeyboardGroupFocused
                           ? BestShotTheme.backgroundPrimary
@@ -298,6 +302,7 @@ class _ExpandableGroupCard extends StatelessWidget {
                       SizedBox(
                         width: 150,
                         child: _PhotoTile(
+                          reviewLabel: reviewSession?.label(group.items[i].key) ?? '',
                           itemKey: group.items[i].key,
                           selectedForDeleteListenable: selectedForDeleteListenable,
                           bytes: group.items[i].displayBytes,

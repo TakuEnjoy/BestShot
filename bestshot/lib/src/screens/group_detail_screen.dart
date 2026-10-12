@@ -6,6 +6,8 @@ import 'package:path/path.dart' as p;
 import '../core/navigation/fast_route.dart';
 import '../models/photo_entry.dart';
 import '../models/photo_group.dart';
+import '../models/review_session.dart';
+import '../services/analysis/analysis_types.dart';
 import '../theme/bestshot_theme.dart';
 import 'groups_screen.dart' show getFolderColor;
 import 'loupe_screen.dart';
@@ -14,6 +16,7 @@ class GroupDetailScreen extends StatefulWidget {
   const GroupDetailScreen({
     super.key,
     required this.group,
+    this.reviewSession,
     required this.selectedForDelete,
     this.selectedForDeleteNotifier,
     required this.onToggleDelete,
@@ -28,6 +31,7 @@ class GroupDetailScreen extends StatefulWidget {
   });
 
   final PhotoGroup group;
+  final ReviewSession? reviewSession;
   final Set<String> selectedForDelete;
   final ValueNotifier<Set<String>>? selectedForDeleteNotifier;
   final void Function(String key, bool selected) onToggleDelete;
@@ -48,7 +52,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   late List<PhotoEntry> _items;
   late final ValueNotifier<String> _activeKeyNotifier;
   late final ValueNotifier<Set<String>> _deleteSelectionNotifier;
-  bool _sortByQuality = false;
+  late final ReviewSession _review;
   late String _bestKey;
 
   // キャッシュ (Step 4: 重い初期化処理の非同期化・キャッシュ化)
@@ -71,7 +75,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
-    _items = List.of(widget.group.items);
+    _review = widget.reviewSession ?? ReviewSession(groups: [widget.group], mode: DetectionMode.standard);
+    _items = _review.sortedPhotos(widget.group.items);
     _bestKey = widget.group.bestKey;
     final initialActiveKey = _bestKey.isNotEmpty
         ? _bestKey
@@ -79,6 +84,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     _activeKeyNotifier = ValueNotifier<String>(initialActiveKey);
     _deleteSelectionNotifier = widget.selectedForDeleteNotifier ??
         ValueNotifier<Set<String>>(Set.of(widget.selectedForDelete));
+    _deleteSelectionNotifier.addListener(_sanitizeDeleteSelection);
+    _sanitizeDeleteSelection();
 
     _precomputeScores();
   }
@@ -87,6 +94,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _activeKeyNotifier.dispose();
+    _deleteSelectionNotifier.removeListener(_sanitizeDeleteSelection);
     if (widget.selectedForDeleteNotifier == null) {
       _deleteSelectionNotifier.dispose();
     }
@@ -105,6 +113,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         key == LogicalKeyboardKey.keyD ||
         key == LogicalKeyboardKey.keyX) {
       if (activeKey.isNotEmpty) {
+        if (!_review.canDelete(activeKey)) return true;
         final current = _deleteSelectionNotifier.value;
         final next = Set<String>.from(current);
         final nextState = !current.contains(activeKey);
@@ -155,28 +164,28 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     }
   }
 
+  void _sanitizeDeleteSelection() {
+    final safe = _deleteSelectionNotifier.value.where(_review.canDelete).toSet();
+    if (safe.length != _deleteSelectionNotifier.value.length) {
+      _deleteSelectionNotifier.value = safe;
+    }
+  }
+
   int _getQualityScore(PhotoEntry e) => _qualityScores[e.key] ?? _calculateQualityScoreRaw(e);
   int _getNoiseScore(PhotoEntry e) => _noiseScores[e.key] ?? _calculateNoiseScoreRaw(e);
   int _getCompositionScore(PhotoEntry e) => _compositionScores[e.key] ?? _calculateCompositionScoreRaw(e);
   String _getFileSize(PhotoEntry e) => _fileSizeCache[e.key] ?? _formatFileSizeRaw(e);
 
-  void _toggleSortQuality() {
+  void _sortPhotos(PhotoOrder order) {
     setState(() {
-      _sortByQuality = !_sortByQuality;
-      if (_sortByQuality) {
-        _items.sort((a, b) => b.sharpness.compareTo(a.sharpness));
-      } else {
-        _items = List.of(widget.group.items);
-      }
-      if (_items.isNotEmpty) {
-        _activeKeyNotifier.value = _items.first.key;
-      }
+      _review.photoOrder = order;
+      _items = _review.sortedPhotos(_items);
     });
   }
 
   void _selectAllForDelete() {
     final current = _deleteSelectionNotifier.value;
-    final nonBestItems = _items.where((e) => e.key != _bestKey).toList();
+    final nonBestItems = _items.where((e) => e.key != _bestKey && _review.canDelete(e.key)).toList();
     if (nonBestItems.isEmpty) return;
 
     final allMarked = nonBestItems.every((e) => current.contains(e.key));
@@ -192,7 +201,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     if (widget.onUpdateDeleteSelection != null) {
       widget.onUpdateDeleteSelection!(next);
     } else {
-      for (final e in _items) {
+      for (final e in nonBestItems) {
         if (allMarked) {
           widget.onToggleDelete(e.key, false);
         } else {
@@ -381,7 +390,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           Expanded(
             child: Text.rich(
               TextSpan(
-                text: 'グループ #${widget.group.id} ',
+                text: 'グループ ${_review.name(widget.group)} ',
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -409,7 +418,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               HapticFeedback.selectionClick();
               final next = Set<String>.from(_deleteSelectionNotifier.value);
               for (final item in _items) {
-                if (item.key != _bestKey) {
+                if (item.key != _bestKey && _review.canDelete(item.key)) {
                   next.add(item.key);
                 } else {
                   next.remove(item.key);
@@ -580,31 +589,14 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             },
           ),
 
-          // 品質ソート
-          OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              minimumSize: const Size(0, 30),
-              side: BorderSide(
-                color: _sortByQuality ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
-              ),
-              backgroundColor: _sortByQuality
-                  ? BestShotTheme.accentBlue.withValues(alpha: 0.15)
-                  : Colors.transparent,
-            ),
-            onPressed: _toggleSortQuality,
-            icon: Icon(
-              Icons.bar_chart,
-              size: 14,
-              color: _sortByQuality ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
-            ),
-            label: Text(
-              '品質ソート',
-              style: TextStyle(
-                fontSize: 12,
-                color: _sortByQuality ? BestShotTheme.accentBlue : BestShotTheme.textPrimary,
-              ),
-            ),
+          PopupMenuButton<PhotoOrder>(
+            tooltip: '写真の並べ替え',
+            initialValue: _review.photoOrder,
+            onSelected: _sortPhotos,
+            itemBuilder: (_) => [for (final order in PhotoOrder.values)
+              if (_review.mode == DetectionMode.portrait || (order != PhotoOrder.subject && order != PhotoOrder.faceQuality))
+                PopupMenuItem(value: order, child: Text(photoOrderLabels[order.index]))],
+            child: Padding(padding: const EdgeInsets.all(8), child: Text('↕ ${photoOrderLabels[_review.photoOrder.index]}')),
           ),
 
           // テンキー仕分けヒント (Windows)

@@ -2,6 +2,7 @@ part of '../groups_screen.dart';
 
 class _PortraitCardTile extends StatefulWidget {
   const _PortraitCardTile({
+    this.reviewLabel = '',
     required this.entry,
     required this.index,
     required this.timeStr,
@@ -23,6 +24,7 @@ class _PortraitCardTile extends StatefulWidget {
   });
 
   final PhotoEntry entry;
+  final String reviewLabel;
   final int index;
   final String timeStr;
   final bool isBest;
@@ -261,6 +263,10 @@ class _PortraitCardTileState extends State<_PortraitCardTile> {
                         ),
                       ),
                     ),
+                    if (widget.reviewLabel.isNotEmpty)
+                      Positioned(left: 4, top: 32, child: IgnorePointer(child: Container(
+                        color: Colors.black87, padding: const EdgeInsets.all(3),
+                        child: Text(widget.reviewLabel, style: const TextStyle(color: Colors.white, fontSize: 10))))),
 
                     // 削除指定時のダーク半透明オーバーレイ (GPU負荷ゼロ化)
                     if (widget.selectedForDelete)

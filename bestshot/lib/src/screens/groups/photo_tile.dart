@@ -2,6 +2,7 @@ part of '../groups_screen.dart';
 
 class _PhotoTile extends StatefulWidget {
   const _PhotoTile({
+    this.reviewLabel = '',
     required this.bytes,
     required this.sharpness,
     required this.exposureScore,
@@ -24,6 +25,7 @@ class _PhotoTile extends StatefulWidget {
   });
 
   final Uint8List bytes;
+  final String reviewLabel;
   final double sharpness;
   final double exposureScore;
   final double faceQualityScore;
@@ -208,6 +210,10 @@ class _PhotoTileState extends State<_PhotoTile> {
                   ),
                 ),
 
+                if (widget.reviewLabel.isNotEmpty)
+                  Positioned(left: 4, top: 32, child: IgnorePointer(child: Container(
+                    color: Colors.black87, padding: const EdgeInsets.all(3),
+                    child: Text(widget.reviewLabel, style: const TextStyle(color: Colors.white, fontSize: 10))))),
                 // 削除マーク時のダーク半透明オーバーレイ (IgnorePointerでタップを阻害しない)
                 if (isDelete)
                   Positioned.fill(
