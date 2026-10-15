@@ -1,85 +1,35 @@
 name: bestshot
-description: "A new Flutter project."
-# The following line prevents the package from being accidentally published to
-# pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
-
-# The following defines the version and build number for your application.
-# A version number is three numbers separated by dots, like 1.2.43
-# followed by an optional build number separated by a +.
-# Both the version and the builder number may be overridden in flutter
-# build by specifying --build-name and --build-number, respectively.
-# In Android, build-name is used as versionName while build-number used as versionCode.
-# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
-# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
-# Read more about iOS versioning at
-# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
-# In Windows, build-name is used as the major, minor, and patch parts
-# of the product and file versions while build-number is used as the build suffix.
+description: "BestShot — iPhone・iPad向け写真選別ワークステーション"
+publish_to: 'none'
 version: 3.2.0+3
 
 environment:
   sdk: ^3.11.1
 
-# Dependencies specify other packages that your package needs in order to work.
-# To automatically upgrade your package dependencies to the latest versions
-# consider running `flutter pub upgrade --major-versions`. Alternatively,
-# dependencies can be manually updated by changing the version numbers below to
-# the latest version available on pub.dev. To see which dependencies have newer
-# versions available, run `flutter pub outdated`.
 dependencies:
   flutter:
     sdk: flutter
-
   photo_manager: ^3.12.0
   image: ^3.3.0
   opencv_dart: 2.2.1+4
-  file_picker: ^13.1.0
   exif: ^3.3.0
   path_provider: ^2.1.5
   path: ^1.9.1
-  ffi: ^2.2.0
   onnxruntime: ^1.4.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  # msix: any
-
-  # The "flutter_lints" package below contains a set of recommended lints to
-  # encourage good coding practices. The lint set provided by the package is
-  # activated in the `analysis_options.yaml` file located at the root of your
-  # package. See that file for information about deactivating specific lint
-  # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
 dependency_overrides:
-#  native_toolchain_cmake:
-#    path: third_party/native_toolchain_cmake
   dartcv4: 2.2.1+4
   opencv_dart: 2.2.1+4
 
-# For information on the generic Dart part of this file, see the
-# following page: https://dart.dev/tools/pub/pubspec
-
-# The following section is specific to Flutter packages.
 flutter:
-
-  # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
-  # the material Icons class.
   uses-material-design: true
-
-  # To add assets to your application, add an assets section, like this:
   assets:
     - assets/models/
-    - assets/models/embedding.onnx
-
-  # An image asset can refer to one or more resolution-specific "variants", see
-  # https://flutter.dev/to/resolution-aware-images
-
-  # For details regarding adding assets from package dependencies, see
-  # https://flutter.dev/to/asset-from-package
 
 hooks:
   user_defines:
@@ -87,48 +37,7 @@ hooks:
       include_modules:
         - imgcodecs
         - imgproc
-        - objdetect
         - features2d
-      android:
-        android_home: "C:\\android-sdk"
-        ndk_version: "28.2.13676358"
-
-  # To add custom fonts to your application, add a fonts section here,
-  # in this "flutter" section. Each entry in this list should have a
-  # "family" key with the font family name, and a "fonts" key with a
-  # list giving the asset and other descriptors for the font. For
-  # example:
-  # fonts:
-  #   - family: Schyler
-  #     fonts:
-  #       - asset: fonts/Schyler-Regular.ttf
-  #       - asset: fonts/Schyler-Italic.ttf
-  #         style: italic
-  #   - family: Trajan Pro
-  #     fonts:
-  #       - asset: fonts/TrajanPro.ttf
-  #       - asset: fonts/TrajanPro_Bold.ttf
-  #         weight: 700
-  #
-  # For details regarding fonts from package dependencies,
-  # see https://flutter.dev/to/font-from-package
-
-msix_config:
-  display_name: BestShot
-  publisher_display_name: TakuEnjoy
-  title: BestShot
-  description: A helper app to select the best photos from burst shots.
-  # ----------------------------------------------------
-  # 【デジタル署名設定】
-  # 独自の自己署名証明書（.pfx）で署名する場合は、以下のコメントを外してパスとパスワードを指定します。
-  # ※ .pfx ファイルは Git にコミットしないようご注意ください（.gitignore で除外済み）。
-  # certificate_path: bestshot.pfx
-  # certificate_password: your_password_here
-  # ----------------------------------------------------
-  # パスのズレは SIGNING_SETUP.md に記載されたディレクトリジャンクション（シンボリックリンク）で解決するため、
-  # クリーンビルド時のクラッシュを防ぐために build_dir は指定しない（デフォルトのままにする）ことを推奨します。
-  # build_dir: build/windows/x64/runner/Release
-  build_windows: false
-  signtool_options: "/a /fd sha256"
-  publisher: "CN=TakuEnjoy"
-
+      # Native unit tests run on the development Mac; this is not an app target.
+      macos:
+        generator: "Unix Makefiles"

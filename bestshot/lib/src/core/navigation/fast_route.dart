@@ -5,22 +5,17 @@ import 'package:flutter/material.dart';
 class FastRoute<T> extends PageRouteBuilder<T> {
   final WidgetBuilder builder;
 
-  FastRoute({
-    required this.builder,
-    super.settings,
-  }) : super(
-          transitionDuration: const Duration(milliseconds: 200),
-          reverseTransitionDuration: const Duration(milliseconds: 150),
-          pageBuilder: (context, animation, secondaryAnimation) =>
-              builder(context),
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(
-              opacity: CurvedAnimation(
-                parent: animation,
-                curve: Curves.easeOut,
-              ),
-              child: child,
-            );
-          },
-        );
+  FastRoute({required this.builder, super.settings})
+    : super(
+        transitionDuration: const Duration(milliseconds: 200),
+        reverseTransitionDuration: const Duration(milliseconds: 150),
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            builder(context),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+            child: child,
+          );
+        },
+      );
 }

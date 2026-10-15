@@ -7,6 +7,7 @@ import 'package:bestshot/src/services/importing/import_service.dart';
 import 'package:bestshot/src/services/analysis/analyzer_isolate.dart';
 import 'package:bestshot/src/services/analysis/analysis_types.dart';
 import 'package:bestshot/src/services/grouping/grouping.dart';
+import 'package:bestshot/src/services/grouping/pair_evaluator.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -40,9 +41,12 @@ void main() {
       img.fill(imageB1, green);
       img.fillRect(imageB1, 40, 40, 160, 160, yellow);
 
-      fileA1 = File(p.join(tempDir.path, 'burst_sceneA_01.jpg'))..writeAsBytesSync(img.encodeJpg(imageA1));
-      fileA2 = File(p.join(tempDir.path, 'burst_sceneA_02.jpg'))..writeAsBytesSync(img.encodeJpg(imageA2));
-      fileB1 = File(p.join(tempDir.path, 'sceneB_01.jpg'))..writeAsBytesSync(img.encodeJpg(imageB1));
+      fileA1 = File(p.join(tempDir.path, 'burst_sceneA_01.jpg'))
+        ..writeAsBytesSync(img.encodeJpg(imageA1));
+      fileA2 = File(p.join(tempDir.path, 'burst_sceneA_02.jpg'))
+        ..writeAsBytesSync(img.encodeJpg(imageA2));
+      fileB1 = File(p.join(tempDir.path, 'sceneB_01.jpg'))
+        ..writeAsBytesSync(img.encodeJpg(imageB1));
     });
 
     tearDown(() {
@@ -51,67 +55,77 @@ void main() {
       }
     });
 
-    test('Full import -> analyze -> groupAsync pipeline on synthetic files', () async {
-      final files = [fileA1, fileA2, fileB1];
+    test(
+      'Full import -> analyze -> groupAsync pipeline on synthetic files',
+      () async {
+        final files = [fileA1, fileA2, fileB1];
 
-      // 1. Import
-      final imported = await ImportService.importSelectedFiles(
-        files,
-        thumbnailMaxEdge: 256,
-      );
-      expect(imported.length, equals(3));
-
-      // 2. Analyze with AnalyzerIsolate
-      final analyzed = await AnalyzerIsolate.analyzeAll(
-        imported.map((e) => e.toAnalyzeInput()).toList(),
-        mode: DetectionMode.standard,
-      );
-      expect(analyzed.length, equals(3));
-
-      final byKey = {for (final a in analyzed) a.key: a};
-      final entries = <PhotoEntry>[];
-      for (final i in imported) {
-        final a = byKey[i.key];
-        if (a == null) continue;
-        entries.add(
-          PhotoEntry(
-            key: p.basename(i.filePath ?? i.key),
-            origin: i.origin,
-            displayBytes: i.displayBytes,
-            filePath: i.filePath,
-            pHashHex: a.pHashHex,
-            sharpness: a.sharpness,
-            exposureScore: a.exposureScore,
-            orbRows: a.orbRows,
-            orbCols: a.orbCols,
-            orbBytes: a.orbBytes,
-            orbKeypoints: a.orbKeypoints,
-            histogram: a.histogram,
-            hueHistogram: a.hueHistogram,
-            exif: i.exifSummary,
-          ),
+        // 1. Import
+        final imported = await ImportService.importSelectedFiles(
+          files,
+          thumbnailMaxEdge: 256,
         );
-      }
+        expect(imported.length, equals(3));
 
-      // 3. Asynchronous Grouping
-      final groups = await PhotoGrouper.groupAsync(
-        entries,
-        const GroupingConfig(burstWindowSeconds: 15),
-      );
+        // 2. Analyze with AnalyzerIsolate
+        final analyzed = await AnalyzerIsolate.analyzeAll(
+          imported.map((e) => e.toAnalyzeInput()).toList(),
+          mode: DetectionMode.standard,
+        );
+        expect(analyzed.length, equals(3));
 
-      expect(groups.length, equals(2));
+        final byKey = {for (final a in analyzed) a.key: a};
+        final entries = <PhotoEntry>[];
+        for (final i in imported) {
+          final a = byKey[i.key];
+          if (a == null) continue;
+          entries.add(
+            PhotoEntry(
+              key: p.basename(i.filePath ?? i.key),
+              origin: i.origin,
+              displayBytes: i.displayBytes,
+              filePath: i.filePath,
+              pHashHex: a.pHashHex,
+              sharpness: a.sharpness,
+              exposureScore: a.exposureScore,
+              orbRows: a.orbRows,
+              orbCols: a.orbCols,
+              orbBytes: a.orbBytes,
+              orbKeypoints: a.orbKeypoints,
+              histogram: a.histogram,
+              hueHistogram: a.hueHistogram,
+              exif: i.exifSummary,
+            ),
+          );
+        }
 
-      final groupA = groups.firstWhere(
-        (g) => g.items.any((e) => e.key == 'burst_sceneA_01.jpg'),
-      );
-      final namesA = groupA.items.map((e) => e.key).toList()..sort();
-      expect(namesA, equals(['burst_sceneA_01.jpg', 'burst_sceneA_02.jpg']));
+        // 3. Asynchronous Grouping
+        final groups = await PhotoGrouper.groupAsync(
+          entries,
+          const GroupingConfig(burstWindowSeconds: 15),
+        );
 
-      final groupB = groups.firstWhere(
-        (g) => g.items.any((e) => e.key == 'sceneB_01.jpg'),
-      );
-      expect(groupB.items.length, equals(1));
-      expect(groupB.items.first.key, equals('sceneB_01.jpg'));
-    });
+        final pair = PairSimilarityEvaluator.evaluate(entries[0], entries[1]);
+        expect(
+          groups.length,
+          equals(2),
+          reason:
+              'A1/A2: pHash=${pair.pHashDistance}, color=${pair.colorDistance}, '
+              'inliers=${pair.orbInliers}, ${pair.explanation}',
+        );
+
+        final groupA = groups.firstWhere(
+          (g) => g.items.any((e) => e.key == 'burst_sceneA_01.jpg'),
+        );
+        final namesA = groupA.items.map((e) => e.key).toList()..sort();
+        expect(namesA, equals(['burst_sceneA_01.jpg', 'burst_sceneA_02.jpg']));
+
+        final groupB = groups.firstWhere(
+          (g) => g.items.any((e) => e.key == 'sceneB_01.jpg'),
+        );
+        expect(groupB.items.length, equals(1));
+        expect(groupB.items.first.key, equals('sceneB_01.jpg'));
+      },
+    );
   });
 }

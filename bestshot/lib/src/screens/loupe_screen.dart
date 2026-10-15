@@ -1,7 +1,9 @@
 import 'dart:collection';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:photo_manager/photo_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../widgets/global_background.dart';
@@ -9,6 +11,7 @@ import '../widgets/glass_container.dart';
 
 import '../models/photo_entry.dart';
 import '../services/analysis/focus_mask_service.dart';
+import '../utils/jpeg_utils.dart';
 
 enum LoupeHudMode {
   compact('コンパクト', Icons.subtitles_outlined),
@@ -83,7 +86,9 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _isBests = List.of(widget.isBests);
-    _localSelectedForDelete = Set<String>.from(widget.initialSelectedForDelete ?? const <String>{});
+    _localSelectedForDelete = Set<String>.from(
+      widget.initialSelectedForDelete ?? const <String>{},
+    );
     _focusNode = FocusNode();
     for (var i = 0; i < widget.items.length; i++) {
       _controllers.add(TransformationController());
@@ -107,7 +112,9 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
     }
     if (widget.initialSelectedForDelete != null &&
         widget.initialSelectedForDelete != oldWidget.initialSelectedForDelete) {
-      _localSelectedForDelete = Set<String>.from(widget.initialSelectedForDelete!);
+      _localSelectedForDelete = Set<String>.from(
+        widget.initialSelectedForDelete!,
+      );
     }
   }
 
@@ -153,14 +160,16 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
 
   Future<void> _loadAll() async {
     try {
-      await Future.wait(widget.items.map((item) async {
-        final bytes = await _loadFull(item);
-        if (bytes != null && mounted) {
-          setState(() {
-            _loadedBytes[item.key] = bytes;
-          });
-        }
-      }));
+      await Future.wait(
+        widget.items.map((item) async {
+          final bytes = await _loadFull(item);
+          if (bytes != null && mounted) {
+            setState(() {
+              _loadedBytes[item.key] = bytes;
+            });
+          }
+        }),
+      );
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -174,35 +183,37 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
     if (_focusMaskBusy) return;
     setState(() => _focusMaskBusy = true);
     try {
-      await Future.wait(widget.items.map((item) async {
-        final key = item.key;
-        if (_focusMaskPngByKey[key] != null) return;
+      await Future.wait(
+        widget.items.map((item) async {
+          final key = item.key;
+          if (_focusMaskPngByKey[key] != null) return;
 
-        // Check if the mask is already cached in memory for this session
-        if (LoupeScreen._sessionMaskCache.containsKey(key)) {
-          _focusMaskPngByKey[key] = LoupeScreen._sessionMaskCache[key];
-          return;
-        }
-
-        var b = _loadedBytes[key];
-        if (b == null) {
-          // If _loadAll hasn't finished yet, try loading full bytes directly
-          b = await _loadFull(item);
-          if (b != null && mounted) {
-            _loadedBytes[key] = b;
+          // Check if the mask is already cached in memory for this session
+          if (LoupeScreen._sessionMaskCache.containsKey(key)) {
+            _focusMaskPngByKey[key] = LoupeScreen._sessionMaskCache[key];
+            return;
           }
-        }
-        if (b == null) {
-          // Do not poison cache with null if bytes could not be loaded yet
-          return;
-        }
-        final png = await compute(focusMaskPngFromBytes, b);
-        if (png != null) {
-          _focusMaskPngByKey[key] = png;
-          // Store the computed mask in the session cache
-          LoupeScreen._sessionMaskCache[key] = png;
-        }
-      }));
+
+          var b = _loadedBytes[key];
+          if (b == null) {
+            // If _loadAll hasn't finished yet, try loading full bytes directly
+            b = await _loadFull(item);
+            if (b != null && mounted) {
+              _loadedBytes[key] = b;
+            }
+          }
+          if (b == null) {
+            // Do not poison cache with null if bytes could not be loaded yet
+            return;
+          }
+          final png = await compute(focusMaskPngFromBytes, b);
+          if (png != null) {
+            _focusMaskPngByKey[key] = png;
+            // Store the computed mask in the session cache
+            LoupeScreen._sessionMaskCache[key] = png;
+          }
+        }),
+      );
     } finally {
       if (mounted) setState(() => _focusMaskBusy = false);
     }
@@ -231,13 +242,59 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
   }
 
   Future<Uint8List?> _loadFull(PhotoEntry e) async {
+    if (e.origin == PhotoOrigin.deviceAsset && e.assetId != null) {
+      try {
+        final asset = await AssetEntity.fromId(e.assetId!);
+        final file = await asset?.file;
+        if (file != null) return await file.readAsBytes();
+      } catch (_) {
+        // Offline iCloud assets can still be compared using the import preview.
+      }
+    }
     if (e.filePath != null) {
       final f = File(e.filePath!);
       if (await f.exists()) {
+        final ext = p.extension(e.filePath!).toLowerCase();
+        const rawExts = <String>{
+          '.dng',
+          '.arw',
+          '.nef',
+          '.cr2',
+          '.cr3',
+          '.raf',
+          '.rw2',
+          '.orf',
+        };
+        if (rawExts.contains(ext)) {
+          try {
+            final fileSize = await f.length();
+            final readHeaderSize = math.min(fileSize, 8 * 1024 * 1024);
+            final raf = await f.open();
+            try {
+              final headerBytes = await raf.read(readHeaderSize);
+              final extracted = JpegUtils.extractEmbeddedJpeg(headerBytes);
+              if (extracted != null && extracted.isNotEmpty) {
+                return Uint8List.fromList(extracted);
+              }
+            } finally {
+              await raf.close();
+            }
+            if (fileSize > readHeaderSize) {
+              final fullBytes = await f.readAsBytes();
+              final extracted = JpegUtils.extractEmbeddedJpeg(fullBytes);
+              if (extracted != null && extracted.isNotEmpty) {
+                return Uint8List.fromList(extracted);
+              }
+            }
+          } catch (_) {}
+          if (e.displayBytes.isNotEmpty) {
+            return e.displayBytes;
+          }
+        }
         return await f.readAsBytes();
       }
     }
-    return e.displayBytes;
+    return e.displayBytes.isNotEmpty ? e.displayBytes : null;
   }
 
   void _cycleHudMode() {
@@ -419,8 +476,8 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
                 color: _hudMode == LoupeHudMode.clean
                     ? Colors.white38
                     : (_hudMode == LoupeHudMode.compact
-                        ? Colors.cyanAccent
-                        : Colors.amberAccent),
+                          ? Colors.cyanAccent
+                          : Colors.amberAccent),
               ),
             ),
             // ヒストグラム表示トグル
@@ -481,10 +538,7 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
               Row(
                 children: [
                   const Text('連動拡大', style: TextStyle(fontSize: 12)),
-                  Switch(
-                    value: _syncEnabled,
-                    onChanged: (_) => _toggleSync(),
-                  ),
+                  Switch(value: _syncEnabled, onChanged: (_) => _toggleSync()),
                 ],
               ),
             // デバッグ表示トグル（プレビュー画面）
@@ -503,9 +557,7 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
           ],
         ),
         backgroundColor: Colors.transparent,
-        body: GlobalBackground(
-          child: _buildBody(),
-        ),
+        body: GlobalBackground(child: _buildBody()),
         bottomNavigationBar: _buildBottomBar(),
       ),
     );
@@ -517,8 +569,12 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
     final controller = _controllers[_activePaneIndex];
 
     Offset? pt;
-    final w = _imageWidths[item.key];
-    final h = _imageHeights[item.key];
+    final w = item.portrait.faceImageWidth > 0
+        ? item.portrait.faceImageWidth
+        : _imageWidths[item.key];
+    final h = item.portrait.faceImageHeight > 0
+        ? item.portrait.faceImageHeight
+        : _imageHeights[item.key];
     if (item.portrait.hasFace &&
         item.portrait.faceW > 0 &&
         item.portrait.faceH > 0 &&
@@ -546,9 +602,12 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
       double paneH = size.height;
 
       if (count == 2) {
-        final useHorizontal = !isPortrait ||
+        final useHorizontal =
+            !isPortrait ||
             size.width >= 600 ||
-            (size.height > 0 && (size.width / size.height) >= 0.75 && size.width >= 480);
+            (size.height > 0 &&
+                (size.width / size.height) >= 0.75 &&
+                size.width >= 480);
         if (useHorizontal) {
           paneW = size.width / 2;
         } else {
@@ -597,9 +656,12 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
       // 2枚比較時:
       // 横長画面(!isPortrait)、折りたたみ展開・大画面(size.width >= 600)、
       // または正方形に近い折りたたみアスペクト比(width / height >= 0.75 かつ width >= 480)の場合は左右2枚(Row)
-      final useHorizontalLayout = !isPortrait ||
+      final useHorizontalLayout =
+          !isPortrait ||
           size.width >= 600 ||
-          (size.height > 0 && (size.width / size.height) >= 0.75 && size.width >= 480);
+          (size.height > 0 &&
+              (size.width / size.height) >= 0.75 &&
+              size.width >= 480);
 
       if (useHorizontalLayout) {
         return Row(
@@ -693,7 +755,7 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
           mainAxisSize: MainAxisSize.min,
           children: [
             Row(
-               children: [
+              children: [
                 // Active photo indicator info
                 Expanded(
                   child: Column(
@@ -756,15 +818,21 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
-                          selectedForDelete ? Icons.delete_forever : Icons.delete_outline,
-                          color: selectedForDelete ? const Color(0xFFFF006E) : Colors.white70,
+                          selectedForDelete
+                              ? Icons.delete_forever
+                              : Icons.delete_outline,
+                          color: selectedForDelete
+                              ? const Color(0xFFFF006E)
+                              : Colors.white70,
                           size: 16,
                         ),
                         const SizedBox(width: 4),
                         Text(
                           isNarrow ? '削除' : '削除候補',
                           style: TextStyle(
-                            color: selectedForDelete ? const Color(0xFFFF006E) : Colors.white70,
+                            color: selectedForDelete
+                                ? const Color(0xFFFF006E)
+                                : Colors.white70,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),
@@ -795,7 +863,9 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
                           : const Color(0xFF2C2C2E),
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(
-                        color: isBest ? const Color(0xFFFFBE0B) : const Color(0xFF3A3A3C),
+                        color: isBest
+                            ? const Color(0xFFFFBE0B)
+                            : const Color(0xFF3A3A3C),
                         width: 1,
                       ),
                     ),
@@ -804,14 +874,18 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
                       children: [
                         Icon(
                           isBest ? Icons.star : Icons.star_border,
-                          color: isBest ? const Color(0xFFFFBE0B) : Colors.white70,
+                          color: isBest
+                              ? const Color(0xFFFFBE0B)
+                              : Colors.white70,
                           size: 16,
                         ),
                         const SizedBox(width: 4),
                         Text(
                           isBest ? 'Best' : 'Bestに設定',
                           style: TextStyle(
-                            color: isBest ? const Color(0xFFFFBE0B) : Colors.white70,
+                            color: isBest
+                                ? const Color(0xFFFFBE0B)
+                                : Colors.white70,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),
@@ -838,62 +912,133 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
                           children: [
                             OutlinedButton.icon(
                               style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
                                 minimumSize: const Size(0, 28),
-                                side: const BorderSide(color: Color(0xFF2C2C2E)),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                side: const BorderSide(
+                                  color: Color(0xFF2C2C2E),
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
                               ),
                               onPressed: () {
                                 setState(() {
-                                  _activePaneIndex = (_activePaneIndex - 1 + widget.items.length) % widget.items.length;
+                                  _activePaneIndex =
+                                      (_activePaneIndex -
+                                          1 +
+                                          widget.items.length) %
+                                      widget.items.length;
                                 });
                               },
-                              icon: const Icon(Icons.arrow_back_ios_new, size: 12, color: Color(0xFF8A8A8E)),
-                              label: const Text('前', style: TextStyle(fontSize: 11, color: Colors.white)),
+                              icon: const Icon(
+                                Icons.arrow_back_ios_new,
+                                size: 12,
+                                color: Color(0xFF8A8A8E),
+                              ),
+                              label: const Text(
+                                '前',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white,
+                                ),
+                              ),
                             ),
                             const SizedBox(width: 4),
                             OutlinedButton.icon(
                               style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
                                 minimumSize: const Size(0, 28),
-                                side: const BorderSide(color: Color(0xFF2C2C2E)),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                side: const BorderSide(
+                                  color: Color(0xFF2C2C2E),
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
                               ),
                               onPressed: () {
                                 setState(() {
-                                  _activePaneIndex = (_activePaneIndex + 1) % widget.items.length;
+                                  _activePaneIndex =
+                                      (_activePaneIndex + 1) %
+                                      widget.items.length;
                                 });
                               },
-                              icon: const Icon(Icons.arrow_forward_ios, size: 12, color: Color(0xFF8A8A8E)),
-                              label: const Text('次', style: TextStyle(fontSize: 11, color: Colors.white)),
+                              icon: const Icon(
+                                Icons.arrow_forward_ios,
+                                size: 12,
+                                color: Color(0xFF8A8A8E),
+                              ),
+                              label: const Text(
+                                '次',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white,
+                                ),
+                              ),
                             ),
                             const SizedBox(width: 6),
                             OutlinedButton.icon(
                               style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
                                 minimumSize: const Size(0, 28),
-                                side: const BorderSide(color: Color(0xFF2C2C2E)),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                side: const BorderSide(
+                                  color: Color(0xFF2C2C2E),
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
                               ),
                               onPressed: () {
                                 showDialog(
                                   context: context,
                                   builder: (_) => AlertDialog(
                                     backgroundColor: const Color(0xFF1C1C1E),
-                                    title: const Text('比較スコア一覧', style: TextStyle(color: Colors.white, fontSize: 15)),
+                                    title: const Text(
+                                      '比較スコア一覧',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 15,
+                                      ),
+                                    ),
                                     content: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        for (int i = 0; i < widget.items.length; i++)
+                                        for (
+                                          int i = 0;
+                                          i < widget.items.length;
+                                          i++
+                                        )
                                           ListTile(
                                             dense: true,
-                                            leading: Text('#${i + 1}', style: const TextStyle(color: Color(0xFF3A86FF), fontWeight: FontWeight.bold)),
-                                            title: Text(_getFileName(widget.items[i]), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                                            leading: Text(
+                                              '#${i + 1}',
+                                              style: const TextStyle(
+                                                color: Color(0xFF3A86FF),
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            title: Text(
+                                              _getFileName(widget.items[i]),
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 12,
+                                              ),
+                                            ),
                                             trailing: Text(
                                               '${widget.scores[i].toStringAsFixed(0)}点',
                                               style: TextStyle(
                                                 fontWeight: FontWeight.bold,
-                                                color: _isBests[i] ? const Color(0xFFFFBE0B) : Colors.white70,
+                                                color: _isBests[i]
+                                                    ? const Color(0xFFFFBE0B)
+                                                    : Colors.white70,
                                               ),
                                             ),
                                           ),
@@ -901,37 +1046,59 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
                                     ),
                                     actions: [
                                       TextButton(
-                                        onPressed: () => Navigator.of(context).pop(),
+                                        onPressed: () =>
+                                            Navigator.of(context).pop(),
                                         child: const Text('閉じる'),
                                       ),
                                     ],
                                   ),
                                 );
                               },
-                              icon: const Icon(Icons.bar_chart, size: 14, color: Color(0xFFFFBE0B)),
-                              label: const Text('比較スコア', style: TextStyle(fontSize: 11, color: Colors.white)),
+                              icon: const Icon(
+                                Icons.bar_chart,
+                                size: 14,
+                                color: Color(0xFFFFBE0B),
+                              ),
+                              label: const Text(
+                                '比較スコア',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white,
+                                ),
+                              ),
                             ),
                             const SizedBox(width: 6),
                             OutlinedButton.icon(
                               style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
                                 minimumSize: const Size(0, 28),
                                 side: BorderSide(
-                                  color: _showFocusMask ? const Color(0xFF00D084) : const Color(0xFF2C2C2E),
+                                  color: _showFocusMask
+                                      ? const Color(0xFF00D084)
+                                      : const Color(0xFF2C2C2E),
                                 ),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
                               ),
                               onPressed: _toggleFocusMask,
                               icon: Icon(
                                 _showFocusMask ? Icons.blur_on : Icons.blur_off,
                                 size: 14,
-                                color: _showFocusMask ? const Color(0xFF00D084) : const Color(0xFF8A8A8E),
+                                color: _showFocusMask
+                                    ? const Color(0xFF00D084)
+                                    : const Color(0xFF8A8A8E),
                               ),
                               label: Text(
                                 'マスク ${_showFocusMask ? "ON" : "OFF"}',
                                 style: TextStyle(
                                   fontSize: 11,
-                                  color: _showFocusMask ? const Color(0xFF00D084) : Colors.white,
+                                  color: _showFocusMask
+                                      ? const Color(0xFF00D084)
+                                      : Colors.white,
                                 ),
                               ),
                             ),
@@ -941,7 +1108,10 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
                         // 一括解除
                         TextButton.icon(
                           style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             minimumSize: const Size(0, 28),
                           ),
                           onPressed: () {
@@ -951,8 +1121,18 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
                             }
                             setState(() {});
                           },
-                          icon: const Icon(Icons.clear_all, size: 14, color: Color(0xFFFF006E)),
-                          label: const Text('一括解除', style: TextStyle(fontSize: 11, color: Color(0xFFFF006E))),
+                          icon: const Icon(
+                            Icons.clear_all,
+                            size: 14,
+                            color: Color(0xFFFF006E),
+                          ),
+                          label: const Text(
+                            '一括解除',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFFFF006E),
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -964,10 +1144,10 @@ class _LoupeScreenState extends State<LoupeScreen> with WidgetsBindingObserver {
         ),
       ),
     );
-
   }
 
   String _getFileName(PhotoEntry item) {
+    if (item.originalFilename != null) return item.originalFilename!;
     if (item.filePath != null) {
       return p.basename(item.filePath!);
     }
@@ -1085,15 +1265,17 @@ class _ZoomPaneState extends State<_ZoomPane> {
   }
 
   void _resolveImageSize() {
-    decodeImageFromList(widget.bytes).then((codec) {
-      if (mounted) {
-        setState(() {
-          _imageWidth = codec.width;
-          _imageHeight = codec.height;
-        });
-        widget.onImageSizeResolved(codec.width, codec.height);
-      }
-    }).catchError((_) {});
+    decodeImageFromList(widget.bytes)
+        .then((codec) {
+          if (mounted) {
+            setState(() {
+              _imageWidth = codec.width;
+              _imageHeight = codec.height;
+            });
+            widget.onImageSizeResolved(codec.width, codec.height);
+          }
+        })
+        .catchError((_) {});
   }
 
   List<Widget> _buildGridOverlay(double w, double h) {
@@ -1134,7 +1316,10 @@ class _ZoomPaneState extends State<_ZoomPane> {
               ),
               child: Center(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.6),
                     borderRadius: BorderRadius.circular(4),
@@ -1181,7 +1366,10 @@ class _ZoomPaneState extends State<_ZoomPane> {
                 left: 0,
                 top: -16,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 2,
+                  ),
                   color: Colors.cyanAccent.withValues(alpha: 0.85),
                   child: Text(
                     obj.label,
@@ -1201,8 +1389,12 @@ class _ZoomPaneState extends State<_ZoomPane> {
   }
 
   Widget _buildFaceOverlay(double w, double h) {
-    final imgW = _imageWidth;
-    final imgH = _imageHeight;
+    final imgW = widget.item.portrait.faceImageWidth > 0
+        ? widget.item.portrait.faceImageWidth
+        : _imageWidth;
+    final imgH = widget.item.portrait.faceImageHeight > 0
+        ? widget.item.portrait.faceImageHeight
+        : _imageHeight;
     if (imgW == null || imgH == null || imgW == 0 || imgH == 0) {
       return const SizedBox.shrink();
     }
@@ -1248,7 +1440,6 @@ class _ZoomPaneState extends State<_ZoomPane> {
 
   /// ピント位置マーク（カメラのAFフレーム / 瞳AFレティクル）
 
-
   Widget _buildPaneHeader(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final exif = widget.item.exif;
@@ -1285,11 +1476,13 @@ class _ZoomPaneState extends State<_ZoomPane> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: widget.isFocused
-                        ? colorScheme.onPrimaryContainer
-                        : Colors.white,
-                    fontWeight: widget.isFocused ? FontWeight.bold : FontWeight.w500,
-                  ),
+                color: widget.isFocused
+                    ? colorScheme.onPrimaryContainer
+                    : Colors.white,
+                fontWeight: widget.isFocused
+                    ? FontWeight.bold
+                    : FontWeight.w500,
+              ),
             ),
           ),
           // コンパクトモード時: 写真上ではなくヘッダーに露出値と鮮鋭度をドッキング表示
@@ -1355,7 +1548,9 @@ class _ZoomPaneState extends State<_ZoomPane> {
         right: 10,
         child: Align(
           alignment: Alignment.topLeft,
-          child: _buildDebugExplanationCard(maxWidth: constraints.maxWidth - 20),
+          child: _buildDebugExplanationCard(
+            maxWidth: constraints.maxWidth - 20,
+          ),
         ),
       );
     }
@@ -1376,7 +1571,9 @@ class _ZoomPaneState extends State<_ZoomPane> {
             if (showDebug)
               Flexible(
                 child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: paneWidth >= 500 ? 360 : 280),
+                  constraints: BoxConstraints(
+                    maxWidth: paneWidth >= 500 ? 360 : 280,
+                  ),
                   child: _buildDebugExplanationCard(
                     maxWidth: paneWidth >= 500 ? 360 : 280,
                   ),
@@ -1449,10 +1646,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: Colors.white24),
         boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.4),
-            blurRadius: 8,
-          ),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 8),
         ],
       ),
       child: Column(
@@ -1464,7 +1658,11 @@ class _ZoomPaneState extends State<_ZoomPane> {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.photo_camera, size: 12, color: Colors.cyanAccent),
+                const Icon(
+                  Icons.photo_camera,
+                  size: 12,
+                  color: Colors.cyanAccent,
+                ),
                 const SizedBox(width: 4),
                 Flexible(
                   child: Text(
@@ -1518,7 +1716,10 @@ class _ZoomPaneState extends State<_ZoomPane> {
               if (isShakeRisk) ...[
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 1.5,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.amber.withValues(alpha: 0.25),
                     border: Border.all(color: Colors.amber, width: 0.8),
@@ -1527,7 +1728,11 @@ class _ZoomPaneState extends State<_ZoomPane> {
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.warning_amber_rounded, size: 10, color: Colors.amber),
+                      Icon(
+                        Icons.warning_amber_rounded,
+                        size: 10,
+                        color: Colors.amber,
+                      ),
                       SizedBox(width: 2),
                       Text(
                         '手ブレ注意 (低SS)',
@@ -1567,9 +1772,14 @@ class _ZoomPaneState extends State<_ZoomPane> {
       constraints: BoxConstraints(maxWidth: maxWidth),
       padding: const EdgeInsets.all(7),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B132B).withValues(alpha: 0.92), // Deep Navy Card
+        color: const Color(
+          0xFF0B132B,
+        ).withValues(alpha: 0.92), // Deep Navy Card
         borderRadius: BorderRadius.circular(5),
-        border: Border.all(color: Colors.redAccent.withValues(alpha: 0.7), width: 1.0),
+        border: Border.all(
+          color: Colors.redAccent.withValues(alpha: 0.7),
+          width: 1.0,
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.5),
@@ -1585,7 +1795,11 @@ class _ZoomPaneState extends State<_ZoomPane> {
           // Header: タイトル & 総合点バッジ
           Row(
             children: [
-              const Icon(Icons.psychology_outlined, size: 13, color: Colors.redAccent),
+              const Icon(
+                Icons.psychology_outlined,
+                size: 13,
+                color: Colors.redAccent,
+              ),
               const SizedBox(width: 4),
               const Text(
                 'AI判定・スコア算出根拠',
@@ -1598,11 +1812,17 @@ class _ZoomPaneState extends State<_ZoomPane> {
               const Spacer(),
               if (sExp != null)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.redAccent.withValues(alpha: 0.25),
                     borderRadius: BorderRadius.circular(3),
-                    border: Border.all(color: Colors.redAccent.withValues(alpha: 0.6), width: 0.8),
+                    border: Border.all(
+                      color: Colors.redAccent.withValues(alpha: 0.6),
+                      width: 0.8,
+                    ),
                   ),
                   child: Text(
                     '総合 ${(sExp.totalScore * 100).toStringAsFixed(1)}点',
@@ -1625,7 +1845,10 @@ class _ZoomPaneState extends State<_ZoomPane> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.tealAccent.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(2.5),
@@ -1653,10 +1876,12 @@ class _ZoomPaneState extends State<_ZoomPane> {
               spacing: 4,
               runSpacing: 2,
               children: [
-                if (gExp.category != null)
-                  _buildDebugTag('区分', gExp.category!),
+                if (gExp.category != null) _buildDebugTag('区分', gExp.category!),
                 if (gExp.diffSeconds != null)
-                  _buildDebugTag('Δt', '${gExp.diffSeconds!.toStringAsFixed(1)}s'),
+                  _buildDebugTag(
+                    'Δt',
+                    '${gExp.diffSeconds!.toStringAsFixed(1)}s',
+                  ),
                 if (gExp.pHashDistance != null)
                   _buildDebugTag('pHash距離', '${gExp.pHashDistance}'),
                 if (gExp.colorDistance != null)
@@ -1666,17 +1891,24 @@ class _ZoomPaneState extends State<_ZoomPane> {
                 if (gExp.inliers != null)
                   _buildDebugTag('幾何Inlier', '${gExp.inliers}点'),
                 if (gExp.orbInlierRatio != null)
-                  _buildDebugTag('Inlier率', '${(gExp.orbInlierRatio! * 100).toStringAsFixed(1)}%'),
+                  _buildDebugTag(
+                    'Inlier率',
+                    '${(gExp.orbInlierRatio! * 100).toStringAsFixed(1)}%',
+                  ),
                 if (gExp.embeddingSimilarity != null)
-                  _buildDebugTag('埋め込み', '${(gExp.embeddingSimilarity! * 100).toStringAsFixed(1)}%'),
+                  _buildDebugTag(
+                    '埋め込み',
+                    '${(gExp.embeddingSimilarity! * 100).toStringAsFixed(1)}%',
+                  ),
                 if (gExp.cropPair != null)
                   _buildDebugTag('クロップ', gExp.cropPair!),
-                if (gExp.semanticMatch)
-                  _buildDebugTag('被写体', '一致'),
+                if (gExp.semanticMatch) _buildDebugTag('被写体', '一致'),
                 if (gExp.confidence > 0)
-                  _buildDebugTag('結合信頼度', '${(gExp.confidence * 100).toStringAsFixed(1)}%'),
-                if (gExp.needsReview)
-                  _buildDebugTag('⚠️', '要確認'),
+                  _buildDebugTag(
+                    '結合信頼度',
+                    '${(gExp.confidence * 100).toStringAsFixed(1)}%',
+                  ),
+                if (gExp.needsReview) _buildDebugTag('⚠️', '要確認'),
                 if (gExp.referenceKey != null)
                   _buildDebugTag(
                     '基準写真',
@@ -1694,7 +1926,10 @@ class _ZoomPaneState extends State<_ZoomPane> {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.amberAccent.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(2.5),
@@ -1725,18 +1960,33 @@ class _ZoomPaneState extends State<_ZoomPane> {
               runSpacing: 2,
               children: [
                 _buildDebugTag('生鮮鋭度', sExp.rawSharpness.toStringAsFixed(0)),
-                _buildDebugTag('ISO補正後', sExp.effectiveSharpness.toStringAsFixed(0)),
-                _buildDebugTag('正規化鮮鋭度', '${(sExp.normalizedSharpness * 100).toStringAsFixed(1)}%'),
-                _buildDebugTag('露出点', '${(sExp.exposureScore * 100).toStringAsFixed(1)}%'),
+                _buildDebugTag(
+                  'ISO補正後',
+                  sExp.effectiveSharpness.toStringAsFixed(0),
+                ),
+                _buildDebugTag(
+                  '正規化鮮鋭度',
+                  '${(sExp.normalizedSharpness * 100).toStringAsFixed(1)}%',
+                ),
+                _buildDebugTag(
+                  '露出点',
+                  '${(sExp.exposureScore * 100).toStringAsFixed(1)}%',
+                ),
                 if (sExp.faceQualityScore > 0)
-                  _buildDebugTag('顔品質点', '${(sExp.faceQualityScore * 100).toStringAsFixed(1)}%'),
+                  _buildDebugTag(
+                    '顔品質点',
+                    '${(sExp.faceQualityScore * 100).toStringAsFixed(1)}%',
+                  ),
               ],
             ),
           ] else ...[
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.amberAccent.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(2.5),
@@ -1757,12 +2007,24 @@ class _ZoomPaneState extends State<_ZoomPane> {
               spacing: 4,
               runSpacing: 2,
               children: [
-                _buildDebugTag('生鮮鋭度', widget.item.sharpness.toStringAsFixed(0)),
-                _buildDebugTag('露出スコア', '${(widget.item.exposureScore * 100).toStringAsFixed(1)}%'),
+                _buildDebugTag(
+                  '生鮮鋭度',
+                  widget.item.sharpness.toStringAsFixed(0),
+                ),
+                _buildDebugTag(
+                  '露出スコア',
+                  '${(widget.item.exposureScore * 100).toStringAsFixed(1)}%',
+                ),
                 if (widget.item.portrait.hasFace)
-                  _buildDebugTag('顔鮮鋭度', widget.item.portrait.faceSharpness.toStringAsFixed(0)),
+                  _buildDebugTag(
+                    '顔鮮鋭度',
+                    widget.item.portrait.faceSharpness.toStringAsFixed(0),
+                  ),
                 if (widget.item.faceQualityScore > 0)
-                  _buildDebugTag('顔品質点', '${(widget.item.faceQualityScore * 100).toStringAsFixed(1)}%'),
+                  _buildDebugTag(
+                    '顔品質点',
+                    '${(widget.item.faceQualityScore * 100).toStringAsFixed(1)}%',
+                  ),
               ],
             ),
           ],
@@ -1842,10 +2104,7 @@ class _ZoomPaneState extends State<_ZoomPane> {
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: Colors.white24),
         boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.35),
-            blurRadius: 6,
-          ),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 6),
         ],
       ),
       child: Column(
@@ -1900,91 +2159,108 @@ class _ZoomPaneState extends State<_ZoomPane> {
         margin: const EdgeInsets.all(6),
         child: GlassContainer(
           borderRadius: BorderRadius.circular(20),
-          borderColor: widget.isFocused ? colorScheme.primary : colorScheme.outlineVariant.withValues(alpha: 0.25),
+          borderColor: widget.isFocused
+              ? colorScheme.primary
+              : colorScheme.outlineVariant.withValues(alpha: 0.25),
           padding: EdgeInsets.zero,
           child: Column(
             children: [
               _buildPaneHeader(context),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, paneConstraints) {
-                  return Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Positioned.fill(
-                        child: InteractiveViewer(
-                          transformationController: widget.controller,
-                          minScale: 1,
-                          maxScale: 12,
-                          onInteractionUpdate: (_) => widget.onInteractionUpdate(),
-                          child: Center(
-                            child: Stack(
-                              alignment: Alignment.center,
-                              fit: StackFit.passthrough,
-                              children: [
-                                Image(
-                                  image: ResizeImage(
-                                    MemoryImage(widget.bytes),
-                                    width: 3840,
-                                    height: 3840,
-                                    policy: ResizeImagePolicy.fit,
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, paneConstraints) {
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Positioned.fill(
+                          child: InteractiveViewer(
+                            transformationController: widget.controller,
+                            minScale: 1,
+                            maxScale: 12,
+                            onInteractionUpdate: (_) =>
+                                widget.onInteractionUpdate(),
+                            child: Center(
+                              child: Stack(
+                                alignment: Alignment.center,
+                                fit: StackFit.passthrough,
+                                children: [
+                                  Image(
+                                    image: ResizeImage(
+                                      MemoryImage(widget.bytes),
+                                      width: 3840,
+                                      height: 3840,
+                                      policy: ResizeImagePolicy.fit,
+                                    ),
+                                    filterQuality: FilterQuality.high,
                                   ),
-                                  filterQuality: FilterQuality.high,
-                                ),
-                                if (widget.showFocusMask && widget.maskPng != null)
-                                  Opacity(
-                                    opacity: widget.maskOpacity,
-                                    child: Image.memory(
-                                      widget.maskPng!,
-                                      filterQuality: FilterQuality.low,
-                                      color: widget.maskColor,
-                                      colorBlendMode: BlendMode.srcIn,
+                                  if (widget.showFocusMask &&
+                                      widget.maskPng != null)
+                                    Opacity(
+                                      opacity: widget.maskOpacity,
+                                      child: Image.memory(
+                                        widget.maskPng!,
+                                        filterQuality: FilterQuality.low,
+                                        color: widget.maskColor,
+                                        colorBlendMode: BlendMode.srcIn,
+                                      ),
+                                    ),
+                                  // ピント位置マークおよびオーバーレイ枠（画像サイズに追従）
+                                  Positioned.fill(
+                                    child: LayoutBuilder(
+                                      builder: (context, constraints) {
+                                        final w = constraints.maxWidth;
+                                        final h = constraints.maxHeight;
+                                        if (w <= 0 || h <= 0) {
+                                          return const SizedBox.shrink();
+                                        }
+                                        return Stack(
+                                          fit: StackFit.passthrough,
+                                          children: [
+                                            if (widget.showDebugOverlay) ...[
+                                              if (widget.item.debugGridSharps !=
+                                                      null &&
+                                                  widget
+                                                          .item
+                                                          .debugGridSharps!
+                                                          .length ==
+                                                      16)
+                                                ..._buildGridOverlay(w, h),
+                                              if (widget
+                                                  .item
+                                                  .semanticObjects
+                                                  .isNotEmpty)
+                                                ..._buildObjectsOverlay(w, h),
+                                              if (widget
+                                                      .item
+                                                      .portrait
+                                                      .hasFace &&
+                                                  widget.item.portrait.faceW >
+                                                      0 &&
+                                                  widget.item.portrait.faceH >
+                                                      0 &&
+                                                  _imageWidth != null &&
+                                                  _imageHeight != null)
+                                                _buildFaceOverlay(w, h),
+                                            ],
+                                          ],
+                                        );
+                                      },
                                     ),
                                   ),
-                                // ピント位置マークおよびオーバーレイ枠（画像サイズに追従）
-                                Positioned.fill(
-                                  child: LayoutBuilder(
-                                    builder: (context, constraints) {
-                                      final w = constraints.maxWidth;
-                                      final h = constraints.maxHeight;
-                                      if (w <= 0 || h <= 0) {
-                                        return const SizedBox.shrink();
-                                      }
-                                      return Stack(
-                                        fit: StackFit.passthrough,
-                                        children: [
-                                          if (widget.showDebugOverlay) ...[
-                                            if (widget.item.debugGridSharps != null &&
-                                                widget.item.debugGridSharps!.length == 16)
-                                              ..._buildGridOverlay(w, h),
-                                            if (widget.item.semanticObjects.isNotEmpty)
-                                              ..._buildObjectsOverlay(w, h),
-                                            if (widget.item.portrait.hasFace &&
-                                                widget.item.portrait.faceW > 0 &&
-                                                widget.item.portrait.faceH > 0 &&
-                                                _imageWidth != null &&
-                                                _imageHeight != null)
-                                              _buildFaceOverlay(w, h),
-                                          ],
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      // 重なり防止＆HUDモード連動オーバーレイ
-                      _buildOverlays(paneConstraints),
-                    ],
-                  );
-                },
+                        // 重なり防止＆HUDモード連動オーバーレイ
+                        _buildOverlays(paneConstraints),
+                      ],
+                    );
+                  },
+                ),
               ),
-            ),
-          ],
-        ),
+            ],
+          ),
         ),
       ),
     );

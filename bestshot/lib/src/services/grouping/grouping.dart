@@ -4,15 +4,18 @@ import 'dart:typed_data';
 import '../../models/photo_entry.dart';
 import '../../models/photo_group.dart';
 import 'pair_evaluator.dart';
+import '../analysis/analysis_types.dart';
+import 'temporal_candidate_index.dart';
 
 enum GroupingAlgorithm {
-  legacy,   // Baseline implementation
+  legacy, // Baseline implementation
   advanced, // Multi-candidate generation + PairEvaluator + Constrained Agglomerative Clustering
 }
 
 class GroupingConfig {
   const GroupingConfig({
     this.algorithm = GroupingAlgorithm.advanced,
+    this.mode = DetectionMode.standard,
     this.burstWindowSeconds = 15,
     this.relaxedTimeWindowMinutes = 1,
     this.semanticTimeWindowMinutes = 3,
@@ -29,6 +32,7 @@ class GroupingConfig {
   });
 
   final GroupingAlgorithm algorithm;
+  final DetectionMode mode;
   final int burstWindowSeconds;
   final int relaxedTimeWindowMinutes;
   final int semanticTimeWindowMinutes;
@@ -57,7 +61,9 @@ class PhotoGrouper {
     final itemMap = {for (final item in items) item.key: item};
 
     // Strip bulky displayBytes before sending across isolate boundary
-    final lightItems = items.map((e) => e.copyWith(displayBytes: Uint8List(0))).toList();
+    final lightItems = items
+        .map((e) => e.copyWith(displayBytes: Uint8List(0)))
+        .toList();
 
     final lightGroups = await Isolate.run(() => group(lightItems, config));
 
@@ -76,6 +82,14 @@ class PhotoGrouper {
 
   static List<PhotoGroup> group(List<PhotoEntry> items, GroupingConfig config) {
     if (items.isEmpty) return [];
+    if (items.map((item) => item.key).toSet().length != items.length) {
+      throw ArgumentError('Photo keys must be unique');
+    }
+    if (config.maxCandidatesPerPhoto < 1 ||
+        config.autoDeleteKeepTopN < 1 ||
+        config.burstWindowSeconds < 0) {
+      throw ArgumentError('Invalid grouping limits');
+    }
 
     if (config.algorithm == GroupingAlgorithm.legacy) {
       return _groupLegacy(items, config);
@@ -87,7 +101,10 @@ class PhotoGrouper {
   // =========================================================================
   // ADVANCED GROUPING: Multi-Candidate Generation + Constrained Clustering
   // =========================================================================
-  static List<PhotoGroup> _groupAdvanced(List<PhotoEntry> items, GroupingConfig config) {
+  static List<PhotoGroup> _groupAdvanced(
+    List<PhotoEntry> items,
+    GroupingConfig config,
+  ) {
     // 1. Sort items chronologically (with key as stable tie-breaker)
     final sorted = items.toList()
       ..sort((a, b) {
@@ -99,13 +116,43 @@ class PhotoGrouper {
       });
 
     final n = sorted.length;
+    final portraitMode = config.mode == DetectionMode.portrait;
+    final temporalIndex = TemporalCandidateIndex(sorted);
+
+    // Standard mode avoids expensive visual scans of unrelated sessions.
+    bool eligible(int i, int j) {
+      if (portraitMode) return true;
+      final ta = sorted[i].capturedAt;
+      final tb = sorted[j].capturedAt;
+      return ta == null ||
+          tb == null ||
+          ta.difference(tb).inMilliseconds.abs() <= 600000;
+    }
+
+    final edgeResults = <String, PairSimilarityResult>{};
+    PairSimilarityResult evaluatePair(int i, int j) {
+      final low = math.min(i, j);
+      final high = math.max(i, j);
+      final result =
+          edgeResults['$low-$high'] ??
+          PairSimilarityEvaluator.evaluate(
+            sorted[low],
+            sorted[high],
+            burstWindowSeconds: config.burstWindowSeconds,
+            mode: config.mode,
+          );
+      edgeResults['$low-$high'] = result;
+      edgeResults['$high-$low'] = result;
+      return result;
+    }
 
     // 2. Multi-channel Candidate Generation
     // Pre-parse 64-bit pHash for fast bitwise Hamming distance
     final pHashValues = List<int?>.filled(n, null);
     for (int i = 0; i < n; i++) {
       final h = sorted[i].pHashHex;
-      if (h.length >= 16 && h != '0000000000000000') {
+      if (RegExp(r'^[0-9a-fA-F]{1,16}$').hasMatch(h) &&
+          h != '0000000000000000') {
         pHashValues[i] = int.tryParse(h, radix: 16);
       }
     }
@@ -130,6 +177,9 @@ class PhotoGrouper {
     for (int i = 0; i < n; i++) {
       final a = sorted[i];
       final ta = a.capturedAt;
+      final visualCandidates = temporalIndex
+          .candidates(i, subjectMode: portraitMode)
+          .toList();
 
       // Scored candidate list for photo i: Map<candidateIndex, priorityScore>
       final candidateScores = <int, double>{};
@@ -139,12 +189,14 @@ class PhotoGrouper {
       final startJ = math.max(0, i - timeRange);
       final endJ = math.min(n - 1, i + timeRange);
       for (int j = startJ; j <= endJ; j++) {
-        if (i == j) continue;
+        if (i == j || !eligible(i, j)) continue;
         final tb = sorted[j].capturedAt;
         if (ta != null && tb != null) {
           final diffSec = (ta.difference(tb).inMilliseconds.abs() / 1000.0);
           if (diffSec <= 180.0) {
-            candidateScores[j] = (candidateScores[j] ?? 0.0) + math.max(0.0, 30.0 - (diffSec / 6.0));
+            candidateScores[j] =
+                (candidateScores[j] ?? 0.0) +
+                math.max(0.0, 30.0 - (diffSec / 6.0));
           }
         } else {
           // If no timestamp, adjacent index proximity
@@ -153,8 +205,7 @@ class PhotoGrouper {
       }
 
       // b) Fast pHash scan across entire session
-      for (int j = 0; j < n; j++) {
-        if (i == j) continue;
+      for (final j in visualCandidates) {
         final pDist = calcFastPHash(i, j);
         if (pDist != null && pDist <= 32) {
           final pScore = (34 - pDist) * 2.5;
@@ -166,45 +217,47 @@ class PhotoGrouper {
       for (final j in candidateScores.keys.toList()) {
         final cDist = _calcColorDistance(a, sorted[j]);
         if (cDist != null && cDist <= 0.35) {
-          candidateScores[j] = (candidateScores[j] ?? 0.0) + math.max(0.0, (0.40 - cDist) * 80.0);
+          candidateScores[j] =
+              (candidateScores[j] ?? 0.0) +
+              math.max(0.0, (0.40 - cDist) * 80.0);
         }
       }
 
       // d) Semantic objects
       if (a.semanticObjects.isNotEmpty) {
-        for (int j = 0; j < n; j++) {
-          if (i == j) continue;
+        final labels = a.semanticObjects.map((object) => object.label).toSet();
+        for (final j in visualCandidates) {
           final b = sorted[j];
-          if (b.semanticObjects.isNotEmpty) {
-            for (final oa in a.semanticObjects) {
-              for (final ob in b.semanticObjects) {
-                if (oa.label == ob.label) {
-                  candidateScores[j] = (candidateScores[j] ?? 0.0) + 25.0;
-                  break;
-                }
-              }
-            }
+          if (b.semanticObjects.any(
+            (object) => labels.contains(object.label),
+          )) {
+            candidateScores[j] = (candidateScores[j] ?? 0.0) + 25.0;
           }
         }
       }
 
       // e) Embedding similarity (if available)
       if (a.embeddings != null) {
-        for (int j = 0; j < n; j++) {
-          if (i == j) continue;
+        for (final j in visualCandidates) {
           final b = sorted[j];
           if (b.embeddings != null) {
             final (embSim, _) = _calcBestEmbeddingSimilarity(a, b);
             if (embSim != null && embSim >= 0.70) {
-              candidateScores[j] = (candidateScores[j] ?? 0.0) + (embSim * 50.0);
+              candidateScores[j] =
+                  (candidateScores[j] ?? 0.0) +
+                  (embSim * (portraitMode ? 140.0 : 50.0));
             }
           }
         }
       }
 
-      // Cap to top N candidates per photo to avoid O(N^2)
+      // Bound expensive ORB evaluation; retrieval is still quadratic for
+      // untimed libraries and portrait mode until an ANN index is introduced.
       final sortedCandidates = candidateScores.keys.toList()
-        ..sort((x, y) => candidateScores[y]!.compareTo(candidateScores[x]!));
+        ..sort((x, y) {
+          final cmp = candidateScores[y]!.compareTo(candidateScores[x]!);
+          return cmp != 0 ? cmp : x.compareTo(y);
+        });
 
       final topCandidates = sortedCandidates.take(config.maxCandidatesPerPhoto);
       for (final cand in topCandidates) {
@@ -215,16 +268,11 @@ class PhotoGrouper {
     }
 
     // 3. Pairwise Evaluation for Selected Candidate Edges
-    final edgeResults = <String, PairSimilarityResult>{};
     for (int i = 0; i < n; i++) {
       for (final j in candidatePairs[i]!) {
         final pairKey = '$i-$j';
         final revKey = '$j-$i';
-        final result = PairSimilarityEvaluator.evaluate(
-          sorted[i],
-          sorted[j],
-          burstWindowSeconds: config.burstWindowSeconds,
-        );
+        final result = evaluatePair(i, j);
         edgeResults[pairKey] = result;
         edgeResults[revKey] = result;
       }
@@ -246,15 +294,13 @@ class PhotoGrouper {
     }
 
     final clusterMembers = <int, List<int>>{
-      for (int i = 0; i < n; i++) i: [i]
+      for (int i = 0; i < n; i++) i: [i],
     };
     final photoToCluster = List<int>.generate(n, (i) => i);
     final clusterNeedsReviewMap = <int, bool>{
-      for (int i = 0; i < n; i++) i: false
+      for (int i = 0; i < n; i++) i: false,
     };
-    final activeClusterIds = <int>{
-      for (int i = 0; i < n; i++) i
-    };
+    final activeClusterIds = <int>{for (int i = 0; i < n; i++) i};
 
     Set<int> getAdjacentClusters(int cId) {
       final neighbors = <int>{};
@@ -285,9 +331,10 @@ class PhotoGrouper {
           final res = edgeResults['$u-$v'];
           if (res != null) {
             if (res.category == PairCategory.sameSubjectDifferentEvent) {
-              hasForbiddenEdge = true; // Same subject but different event: NEVER merge!
+              hasForbiddenEdge =
+                  true; // Same subject but different event: NEVER merge!
             }
-            if (res.isSameScene) {
+            if (res.canGroup) {
               hasSameSceneEdge = true;
               totalConfidence += res.confidence;
               connectedCount++;
@@ -307,19 +354,31 @@ class PhotoGrouper {
 
       for (final rA in repsA) {
         for (final rB in repsB) {
-          final res = edgeResults['$rA-$rB'] ??= PairSimilarityEvaluator.evaluate(sorted[rA], sorted[rB]);
+          final res = edgeResults['$rA-$rB'] ??= evaluatePair(rA, rB);
+          edgeResults['$rB-$rA'] = res;
+          if (res.category == PairCategory.sameSubjectDifferentEvent ||
+              (res.category == PairCategory.different &&
+                  res.confidence >= 0.85)) {
+            return null;
+          }
           // If directly evaluated as same scene (e.g. valid zoom or verified burst), not a drift violation
-          if (res.isSameScene) continue;
+          if (res.canGroup) {
+            edgeNeedsReview = edgeNeedsReview || res.needsReview;
+            continue;
+          }
 
           // Extreme difference between representatives prevents chaining drift
           final pDist = res.pHashDistance ?? 64;
           final inliers = res.orbInliers ?? 0;
 
           // If within rapid burst (<= 3s) with identical camera/focal EXIF, allow natural burst movement up to 21 bits
-          final isSameExifBurst = res.diffSeconds != null &&
+          final isSameExifBurst =
+              res.diffSeconds != null &&
               res.diffSeconds! <= 3.0 &&
               _hasIdenticalExif(sorted[rA], sorted[rB]);
-          final effectiveLimit = isSameExifBurst ? math.max(26, config.maxDriftPHashDistance) : config.maxDriftPHashDistance;
+          final effectiveLimit = isSameExifBurst
+              ? math.max(26, config.maxDriftPHashDistance)
+              : config.maxDriftPHashDistance;
 
           if (pDist >= effectiveLimit && inliers < 5) {
             return null; // drift violation
@@ -404,7 +463,7 @@ class PhotoGrouper {
     final clusters = clusterMembers.values.toList();
     final clusterNeedsReview = <int, bool>{
       for (int i = 0; i < clusters.length; i++)
-        i: clusterNeedsReviewMap[photoToCluster[clusters[i].first]] ?? false
+        i: clusterNeedsReviewMap[photoToCluster[clusters[i].first]] ?? false,
     };
 
     // 5. Cluster Refinement & Post-Validation (Outlier Separation)
@@ -427,8 +486,11 @@ class PhotoGrouper {
         bool hasSupport = false;
         for (final other in cluster) {
           if (member == other) continue;
-          final res = edgeResults['$member-$other'] ?? PairSimilarityEvaluator.evaluate(sorted[member], sorted[other]);
-          if (res.isSameScene && res.confidence >= 0.60) {
+          final res = edgeResults['$member-$other'] ??= evaluatePair(
+            member,
+            other,
+          );
+          if (res.canGroup && res.confidence >= 0.60) {
             hasSupport = true;
             break;
           }
@@ -456,7 +518,7 @@ class PhotoGrouper {
 
     for (int i = 0; i < refinedClusters.length; i++) {
       final clusterIndices = refinedClusters[i];
-      final isGroupNeedsReview = refinedNeedsReview[i];
+      var isGroupNeedsReview = refinedNeedsReview[i];
       final groupItems = <PhotoEntry>[];
 
       if (clusterIndices.length == 1) {
@@ -472,8 +534,12 @@ class PhotoGrouper {
         );
       } else {
         // Find Anchor (best representative)
-        final anchor = _getRepresentatives(clusterIndices, sorted, edgeResults, 1).first;
-        final anchorEntry = sorted[anchor];
+        final anchor = _getRepresentatives(
+          clusterIndices,
+          sorted,
+          edgeResults,
+          1,
+        ).first;
 
         for (final idx in clusterIndices) {
           final item = sorted[idx];
@@ -488,11 +554,34 @@ class PhotoGrouper {
               ),
             );
           } else {
-            final res = edgeResults['$anchor-$idx'] ?? PairSimilarityEvaluator.evaluate(anchorEntry, item);
+            var reference = anchor;
+            var res = edgeResults['$anchor-$idx'] ??= evaluatePair(anchor, idx);
+            // A member may be linked through another verified member, rather
+            // than directly to the display anchor. Report the actual evidence.
+            if (!res.canGroup) {
+              for (final other in clusterIndices) {
+                if (other == idx) continue;
+                final candidate = edgeResults['$other-$idx'] ??= evaluatePair(
+                  other,
+                  idx,
+                );
+                if (candidate.canGroup &&
+                    (!res.canGroup || candidate.confidence > res.confidence)) {
+                  reference = other;
+                  res = candidate;
+                }
+              }
+            }
+            isGroupNeedsReview =
+                isGroupNeedsReview || res.needsReview || !res.canGroup;
             groupItems.add(
               item.copyWith(
                 groupExplanation: () => GroupMatchExplanation(
-                  matchType: res.category == PairCategory.sameBurst ? '連写結合' : '特徴点救済マージ',
+                  matchType: res.category == PairCategory.sameBurst
+                      ? '連写結合'
+                      : portraitMode
+                      ? '被写体分類'
+                      : '同シーン分類',
                   description: res.explanation,
                   category: res.category.name,
                   diffSeconds: res.diffSeconds,
@@ -506,7 +595,7 @@ class PhotoGrouper {
                   semanticMatch: res.semanticMatch,
                   confidence: res.confidence,
                   needsReview: res.needsReview,
-                  referenceKey: anchorEntry.key,
+                  referenceKey: sorted[reference].key,
                 ),
               ),
             );
@@ -521,7 +610,9 @@ class PhotoGrouper {
       // Auto-deletion selection:
       // Safety Rule: If group is needsReview, do NOT mark delete candidates automatically!
       final deleteCandidates = <String>{};
-      if (!isGroupNeedsReview && groupItems.length > config.autoDeleteKeepTopN) {
+      if (!portraitMode &&
+          !isGroupNeedsReview &&
+          groupItems.length > config.autoDeleteKeepTopN) {
         for (int k = config.autoDeleteKeepTopN; k < groupItems.length; k++) {
           final item = groupItems[k];
           // Never auto-delete items flagged for review
@@ -531,7 +622,9 @@ class PhotoGrouper {
         }
       }
 
-      final uniquePrefix = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
+      final uniquePrefix = DateTime.now().millisecondsSinceEpoch.toRadixString(
+        36,
+      );
       groups.add(
         PhotoGroup(
           id: 'G_${uniquePrefix}_${groupIdCounter++}',
@@ -549,13 +642,25 @@ class PhotoGrouper {
       final ta = a.items
           .map((e) => e.capturedAt)
           .whereType<DateTime>()
-          .fold<DateTime?>(null, (min, t) => min == null || t.isBefore(min) ? t : min);
+          .fold<DateTime?>(
+            null,
+            (min, t) => min == null || t.isBefore(min) ? t : min,
+          );
       final tb = b.items
           .map((e) => e.capturedAt)
           .whereType<DateTime>()
-          .fold<DateTime?>(null, (min, t) => min == null || t.isBefore(min) ? t : min);
+          .fold<DateTime?>(
+            null,
+            (min, t) => min == null || t.isBefore(min) ? t : min,
+          );
 
-      return ta == null && tb == null ? 0 : ta == null ? 1 : tb == null ? -1 : ta.compareTo(tb);
+      return ta == null && tb == null
+          ? 0
+          : ta == null
+          ? 1
+          : tb == null
+          ? -1
+          : ta.compareTo(tb);
     });
 
     return groups;
@@ -569,14 +674,21 @@ class PhotoGrouper {
   ) {
     if (cluster.length <= topK) return cluster;
 
-    // Score by sharpness and centrality
+    // Centrality must dominate raw sharpness (which can be thousands).
+    final maxSharpness = cluster.fold<double>(
+      0,
+      (maxValue, idx) => math.max(maxValue, sorted[idx].sharpness),
+    );
     final scores = <int, double>{};
     for (final idx in cluster) {
       final entry = sorted[idx];
-      var score = entry.sharpness;
+      var score = maxSharpness > 0 ? 0.2 * entry.sharpness / maxSharpness : 0.0;
       for (final other in cluster) {
         if (idx != other) {
-          score += (edgeResults['$idx-$other']?.confidence ?? 0.0) * 100.0;
+          final res = edgeResults['$idx-$other'];
+          if (res?.canGroup == true) {
+            score += 0.8 * res!.confidence / (cluster.length - 1);
+          }
         }
       }
       scores[idx] = score;
@@ -590,7 +702,10 @@ class PhotoGrouper {
   // =========================================================================
   // LEGACY GROUPING (Baseline Reference Implementation)
   // =========================================================================
-  static List<PhotoGroup> _groupLegacy(List<PhotoEntry> items, GroupingConfig config) {
+  static List<PhotoGroup> _groupLegacy(
+    List<PhotoEntry> items,
+    GroupingConfig config,
+  ) {
     final sorted = items.toList()
       ..sort((a, b) {
         final ta = a.capturedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -603,6 +718,7 @@ class PhotoGrouper {
       if (parent[i] == i) return i;
       return parent[i] = find(parent[i]);
     }
+
     void union(int i, int j) {
       final rootI = find(i);
       final rootJ = find(j);
@@ -619,7 +735,8 @@ class PhotoGrouper {
         if (ta != null && tb != null) {
           final diffSec = (ta.difference(tb).inMilliseconds.abs() / 1000.0);
           final pDist = _calcPHashDistance(a, b);
-          if (diffSec <= config.burstWindowSeconds && (pDist == null || pDist <= config.maxPHashHammingDistance)) {
+          if (diffSec <= config.burstWindowSeconds &&
+              (pDist == null || pDist <= config.maxPHashHammingDistance)) {
             union(i, j);
           }
         }
@@ -642,7 +759,10 @@ class PhotoGrouper {
           id: 'LEGACY_G${idCounter++}',
           items: groupItems,
           bestKey: groupItems.first.key,
-          deleteCandidateKeys: groupItems.skip(config.autoDeleteKeepTopN).map((e) => e.key).toSet(),
+          deleteCandidateKeys: groupItems
+              .skip(config.autoDeleteKeepTopN)
+              .map((e) => e.key)
+              .toSet(),
           isBurst: isBurst,
           needsReview: false,
         ),
@@ -654,7 +774,10 @@ class PhotoGrouper {
   // =========================================================================
   // HELPER UTILITIES
   // =========================================================================
-  static (double?, String?) _calcBestEmbeddingSimilarity(PhotoEntry a, PhotoEntry b) {
+  static (double?, String?) _calcBestEmbeddingSimilarity(
+    PhotoEntry a,
+    PhotoEntry b,
+  ) {
     if (a.embeddings == null || b.embeddings == null) return (null, null);
     if (a.embeddings!.isEmpty || b.embeddings!.isEmpty) return (null, null);
 
@@ -688,7 +811,13 @@ class PhotoGrouper {
   static int? _calcPHashDistance(PhotoEntry a, PhotoEntry b) {
     final ha = a.pHashHex;
     final hb = b.pHashHex;
-    if (ha.isEmpty || hb.isEmpty || ha == '0000000000000000' || hb == '0000000000000000') return null;
+    final validHash = RegExp(r'^[0-9a-fA-F]{1,16}$');
+    if (!validHash.hasMatch(ha) ||
+        !validHash.hasMatch(hb) ||
+        ha == '0000000000000000' ||
+        hb == '0000000000000000') {
+      return null;
+    }
     final aBig = BigInt.tryParse(ha.padLeft(16, '0'), radix: 16);
     final bBig = BigInt.tryParse(hb.padLeft(16, '0'), radix: 16);
     if (aBig == null || bBig == null) return null;
@@ -726,10 +855,11 @@ class PhotoGrouper {
   }
 
   static bool _isBurstGroup(List<PhotoEntry> items, int burstWindowSeconds) {
-    final times = items.map((e) => e.capturedAt).whereType<DateTime>().toList()..sort();
-    if (times.length < 2) return false;
-    final span = times.last.difference(times.first).inSeconds.abs();
-    return span <= burstWindowSeconds;
+    final times = items.map((e) => e.capturedAt).whereType<DateTime>().toList()
+      ..sort();
+    if (times.length < 2 || times.length != items.length) return false;
+    final span = times.last.difference(times.first).inMilliseconds.abs();
+    return span <= burstWindowSeconds * 1000;
   }
 
   static int? _parseIso(String? iso) {
@@ -743,10 +873,14 @@ class PhotoGrouper {
     if (a.exif == null || b.exif == null) return false;
     final ea = a.exif!;
     final eb = b.exif!;
-    if (ea.cameraModel == null || ea.cameraModel != eb.cameraModel) return false;
+    if (ea.cameraModel == null || ea.cameraModel != eb.cameraModel) {
+      return false;
+    }
     if (ea.fNumber == null || ea.fNumber != eb.fNumber) return false;
     if (ea.iso == null || ea.iso != eb.iso) return false;
-    if (ea.focalLength == null || ea.focalLength != eb.focalLength) return false;
+    if (ea.focalLength == null || ea.focalLength != eb.focalLength) {
+      return false;
+    }
     return true;
   }
 
@@ -786,15 +920,18 @@ class PhotoGrouper {
       if (isBurst) {
         total = s;
         rule = '連写判定（ピント最重視）';
-        formula = 'ピント正規化(${s.toStringAsFixed(2)}) = ${(total * 100).toStringAsFixed(1)}点';
+        formula =
+            'ピント正規化(${s.toStringAsFixed(2)}) = ${(total * 100).toStringAsFixed(1)}点';
       } else if (f > 0) {
         total = (f * 0.6) + (s * 0.35) + (x * 0.05);
         rule = 'ポートレート（顔・表情重視）';
-        formula = '顔(${f.toStringAsFixed(2)})×60% + ピント(${s.toStringAsFixed(2)})×35% + 露出(${x.toStringAsFixed(2)})×5% = ${(total * 100).toStringAsFixed(1)}点';
+        formula =
+            '顔(${f.toStringAsFixed(2)})×60% + ピント(${s.toStringAsFixed(2)})×35% + 露出(${x.toStringAsFixed(2)})×5% = ${(total * 100).toStringAsFixed(1)}点';
       } else {
         total = (s * 0.8) + (x * 0.2);
         rule = '一般シーン（ピント80%＋露出20%）';
-        formula = 'ピント(${s.toStringAsFixed(2)})×80% + 露出(${x.toStringAsFixed(2)})×20% = ${(total * 100).toStringAsFixed(1)}点';
+        formula =
+            'ピント(${s.toStringAsFixed(2)})×80% + 露出(${x.toStringAsFixed(2)})×20% = ${(total * 100).toStringAsFixed(1)}点';
       }
 
       final exp = ScoreExplanation(
@@ -811,7 +948,11 @@ class PhotoGrouper {
       updated.add(e.copyWith(scoreExplanation: () => exp));
     }
 
-    updated.sort((a, b) => (b.scoreExplanation?.totalScore ?? 0).compareTo(a.scoreExplanation?.totalScore ?? 0));
+    updated.sort(
+      (a, b) => (b.scoreExplanation?.totalScore ?? 0).compareTo(
+        a.scoreExplanation?.totalScore ?? 0,
+      ),
+    );
 
     items.clear();
     items.addAll(updated);

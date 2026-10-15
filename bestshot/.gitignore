@@ -39,16 +39,9 @@ app.*.symbols
 # Obfuscation related
 app.*.map.json
 
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
 
-.gradle/
-.gradle_home/
 build/
 
-.gradle_home/
 .vscode/
 bestshot/.dart_tool/
 bestshot/.idea/
@@ -60,7 +53,10 @@ bestshot/.idea/
 
 .log
 .env
-*.pfx
-*.p12
 .venv/
 venv/
+# Local signing credentials
+*.p12
+*.pfx
+*.p8
+*.mobileprovision

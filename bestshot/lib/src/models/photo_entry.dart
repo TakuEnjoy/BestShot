@@ -77,6 +77,7 @@ class PhotoEntry {
     required this.displayBytes,
     this.assetId,
     this.filePath,
+    this.originalFilename,
     required this.pHashHex,
     required this.sharpness,
     required this.exposureScore,
@@ -110,6 +111,9 @@ class PhotoEntry {
   /// File path when [origin] == filePath.
   final String? filePath;
 
+  /// PhotoKit original resource name, used when there is no filesystem path.
+  final String? originalFilename;
+
   /// pHash (after grayscale + histogram equalization), 64-bit as 16 hex chars.
   final String pHashHex;
 
@@ -137,10 +141,10 @@ class PhotoEntry {
   /// Optional EXIF summary (F/SS/ISO).
   final ExifSummary? exif;
 
-  /// ML Kit object detection results (if available).
+  /// Object detection results (if available).
   final List<SemanticObject> semanticObjects;
 
-  /// ML Kit face-based preference (higher => better expression/eyes).
+  /// Native face-based preference (higher => better expression/eyes).
   final double faceQualityScore;
 
   /// Portrait-mode analysis results.
@@ -226,7 +230,9 @@ class PhotoEntry {
     if (e.fNumber != null && e.fNumber!.isNotEmpty) parts.add('F${e.fNumber}');
     if (e.shutter != null && e.shutter!.isNotEmpty) parts.add(e.shutter!);
     if (e.iso != null && e.iso!.isNotEmpty) parts.add('ISO${e.iso}');
-    if (e.focalLength != null && e.focalLength!.isNotEmpty) parts.add(e.focalLength!);
+    if (e.focalLength != null && e.focalLength!.isNotEmpty) {
+      parts.add(e.focalLength!);
+    }
     return parts.join('  ');
   }
 
@@ -236,6 +242,7 @@ class PhotoEntry {
     Uint8List? displayBytes,
     ValueGetter<String?>? assetId,
     ValueGetter<String?>? filePath,
+    ValueGetter<String?>? originalFilename,
     String? pHashHex,
     double? sharpness,
     double? exposureScore,
@@ -260,6 +267,9 @@ class PhotoEntry {
       displayBytes: displayBytes ?? this.displayBytes,
       assetId: assetId != null ? assetId() : this.assetId,
       filePath: filePath != null ? filePath() : this.filePath,
+      originalFilename: originalFilename != null
+          ? originalFilename()
+          : this.originalFilename,
       pHashHex: pHashHex ?? this.pHashHex,
       sharpness: sharpness ?? this.sharpness,
       exposureScore: exposureScore ?? this.exposureScore,

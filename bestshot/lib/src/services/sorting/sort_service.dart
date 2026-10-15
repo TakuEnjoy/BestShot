@@ -15,19 +15,15 @@ class FolderValidationResult {
 }
 
 class SortService {
-  /// Windows reserved device names that cannot be used as folder/file names.
-  static const Set<String> _reservedWindowsNames = {
-    'CON', 'PRN', 'AUX', 'NUL',
-    'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
-    'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
-  };
-
   /// Validates [name] as a safe relative folder name.
-  /// Prevents path traversal (e.g. `..`), reserved OS names, illegal characters,
+  /// Prevents path traversal (e.g. `..`), illegal characters,
   /// control characters, and trailing periods or spaces.
   static FolderValidationResult validateFolderName(String? name) {
     if (name == null || name.trim().isEmpty) {
-      return const FolderValidationResult(isValid: false, errorMessage: 'フォルダ名を入力してください');
+      return const FolderValidationResult(
+        isValid: false,
+        errorMessage: 'フォルダ名を入力してください',
+      );
     }
 
     final trimmed = name.trim();
@@ -44,7 +40,7 @@ class SortService {
       );
     }
 
-    // Trailing dot or space check (Windows filesystem limitation)
+    // Trailing dot or space check (compatible with external file providers)
     if (trimmed.endsWith('.') || trimmed.endsWith(' ')) {
       return const FolderValidationResult(
         isValid: false,
@@ -52,16 +48,7 @@ class SortService {
       );
     }
 
-    // Windows reserved device names
-    final upper = trimmed.toUpperCase();
-    if (_reservedWindowsNames.contains(upper)) {
-      return FolderValidationResult(
-        isValid: false,
-        errorMessage: '「$trimmed」はシステム予約語のため使用できません',
-      );
-    }
-
-    // Check length (MAX_PATH safety)
+    // Check length (keep names readable in Files)
     if (trimmed.length > 50) {
       return const FolderValidationResult(
         isValid: false,
@@ -226,7 +213,9 @@ class SortService {
         final srcLen = await srcFile.length();
         final tmpLen = await tmpFile.length();
         if (srcLen != tmpLen) {
-          throw Exception('ファイルサイズの不一致を検出しました (元: $srcLen bytes, コピー: $tmpLen bytes)');
+          throw Exception(
+            'ファイルサイズの不一致を検出しました (元: $srcLen bytes, コピー: $tmpLen bytes)',
+          );
         }
 
         // (C) アトミックな確定

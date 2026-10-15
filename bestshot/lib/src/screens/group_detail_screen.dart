@@ -6,6 +6,8 @@ import 'package:path/path.dart' as p;
 import '../core/navigation/fast_route.dart';
 import '../models/photo_entry.dart';
 import '../models/photo_group.dart';
+import '../models/review_session.dart';
+import '../services/analysis/analysis_types.dart';
 import '../theme/bestshot_theme.dart';
 import 'groups_screen.dart' show getFolderColor;
 import 'loupe_screen.dart';
@@ -14,6 +16,7 @@ class GroupDetailScreen extends StatefulWidget {
   const GroupDetailScreen({
     super.key,
     required this.group,
+    this.reviewSession,
     required this.selectedForDelete,
     this.selectedForDeleteNotifier,
     required this.onToggleDelete,
@@ -28,6 +31,7 @@ class GroupDetailScreen extends StatefulWidget {
   });
 
   final PhotoGroup group;
+  final ReviewSession? reviewSession;
   final Set<String> selectedForDelete;
   final ValueNotifier<Set<String>>? selectedForDeleteNotifier;
   final void Function(String key, bool selected) onToggleDelete;
@@ -48,7 +52,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   late List<PhotoEntry> _items;
   late final ValueNotifier<String> _activeKeyNotifier;
   late final ValueNotifier<Set<String>> _deleteSelectionNotifier;
-  bool _sortByQuality = false;
+  late final ReviewSession _review;
+  late String _bestKey;
 
   // キャッシュ (Step 4: 重い初期化処理の非同期化・キャッシュ化)
   final Map<String, int> _qualityScores = {};
@@ -57,19 +62,34 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   final Map<String, String> _fileSizeCache = {};
 
   // BottomSheet controller / state
-  final DraggableScrollableController _sheetController = DraggableScrollableController();
+  final DraggableScrollableController _sheetController =
+      DraggableScrollableController();
+
+  void _setBest(String key) {
+    setState(() {
+      _bestKey = key;
+    });
+    widget.onSetBest(key);
+  }
 
   @override
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
-    _items = List.of(widget.group.items);
-    final initialActiveKey = widget.group.bestKey.isNotEmpty
-        ? widget.group.bestKey
+    _review =
+        widget.reviewSession ??
+        ReviewSession(groups: [widget.group], mode: DetectionMode.standard);
+    _items = _review.sortedPhotos(widget.group.items);
+    _bestKey = widget.group.bestKey;
+    final initialActiveKey = _bestKey.isNotEmpty
+        ? _bestKey
         : (_items.isNotEmpty ? _items.first.key : '');
     _activeKeyNotifier = ValueNotifier<String>(initialActiveKey);
-    _deleteSelectionNotifier = widget.selectedForDeleteNotifier ??
+    _deleteSelectionNotifier =
+        widget.selectedForDeleteNotifier ??
         ValueNotifier<Set<String>>(Set.of(widget.selectedForDelete));
+    _deleteSelectionNotifier.addListener(_sanitizeDeleteSelection);
+    _sanitizeDeleteSelection();
 
     _precomputeScores();
   }
@@ -78,6 +98,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _activeKeyNotifier.dispose();
+    _deleteSelectionNotifier.removeListener(_sanitizeDeleteSelection);
     if (widget.selectedForDeleteNotifier == null) {
       _deleteSelectionNotifier.dispose();
     }
@@ -96,6 +117,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         key == LogicalKeyboardKey.keyD ||
         key == LogicalKeyboardKey.keyX) {
       if (activeKey.isNotEmpty) {
+        if (!_review.canDelete(activeKey)) return true;
         final current = _deleteSelectionNotifier.value;
         final next = Set<String>.from(current);
         final nextState = !current.contains(activeKey);
@@ -110,7 +132,16 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       }
     }
 
-    if (key == LogicalKeyboardKey.arrowRight || key == LogicalKeyboardKey.arrowDown) {
+    if (key == LogicalKeyboardKey.keyB) {
+      if (activeKey.isNotEmpty) {
+        HapticFeedback.selectionClick();
+        _setBest(activeKey);
+        return true;
+      }
+    }
+
+    if (key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowDown) {
       final idx = _items.indexWhere((e) => e.key == activeKey);
       if (idx >= 0 && idx < _items.length - 1) {
         _activeKeyNotifier.value = _items[idx + 1].key;
@@ -118,7 +149,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       }
     }
 
-    if (key == LogicalKeyboardKey.arrowLeft || key == LogicalKeyboardKey.arrowUp) {
+    if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowUp) {
       final idx = _items.indexWhere((e) => e.key == activeKey);
       if (idx > 0) {
         _activeKeyNotifier.value = _items[idx - 1].key;
@@ -138,28 +170,36 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     }
   }
 
-  int _getQualityScore(PhotoEntry e) => _qualityScores[e.key] ?? _calculateQualityScoreRaw(e);
-  int _getNoiseScore(PhotoEntry e) => _noiseScores[e.key] ?? _calculateNoiseScoreRaw(e);
-  int _getCompositionScore(PhotoEntry e) => _compositionScores[e.key] ?? _calculateCompositionScoreRaw(e);
-  String _getFileSize(PhotoEntry e) => _fileSizeCache[e.key] ?? _formatFileSizeRaw(e);
+  void _sanitizeDeleteSelection() {
+    final safe = _deleteSelectionNotifier.value
+        .where(_review.canDelete)
+        .toSet();
+    if (safe.length != _deleteSelectionNotifier.value.length) {
+      _deleteSelectionNotifier.value = safe;
+    }
+  }
 
-  void _toggleSortQuality() {
+  int _getQualityScore(PhotoEntry e) =>
+      _qualityScores[e.key] ?? _calculateQualityScoreRaw(e);
+  int _getNoiseScore(PhotoEntry e) =>
+      _noiseScores[e.key] ?? _calculateNoiseScoreRaw(e);
+  int _getCompositionScore(PhotoEntry e) =>
+      _compositionScores[e.key] ?? _calculateCompositionScoreRaw(e);
+  String _getFileSize(PhotoEntry e) =>
+      _fileSizeCache[e.key] ?? _formatFileSizeRaw(e);
+
+  void _sortPhotos(PhotoOrder order) {
     setState(() {
-      _sortByQuality = !_sortByQuality;
-      if (_sortByQuality) {
-        _items.sort((a, b) => b.sharpness.compareTo(a.sharpness));
-      } else {
-        _items = List.of(widget.group.items);
-      }
-      if (_items.isNotEmpty) {
-        _activeKeyNotifier.value = _items.first.key;
-      }
+      _review.photoOrder = order;
+      _items = _review.sortedPhotos(_items);
     });
   }
 
   void _selectAllForDelete() {
     final current = _deleteSelectionNotifier.value;
-    final nonBestItems = _items.where((e) => e.key != widget.group.bestKey).toList();
+    final nonBestItems = _items
+        .where((e) => e.key != _bestKey && _review.canDelete(e.key))
+        .toList();
     if (nonBestItems.isEmpty) return;
 
     final allMarked = nonBestItems.every((e) => current.contains(e.key));
@@ -175,7 +215,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     if (widget.onUpdateDeleteSelection != null) {
       widget.onUpdateDeleteSelection!(next);
     } else {
-      for (final e in _items) {
+      for (final e in nonBestItems) {
         if (allMarked) {
           widget.onToggleDelete(e.key, false);
         } else {
@@ -209,7 +249,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     // 0..100 quality metric
     final sNorm = ((e.sharpness / 6.0).clamp(0.0, 100.0) * 0.4);
     final eNorm = ((e.exposureScore * 100.0).clamp(0.0, 100.0) * 0.3);
-    final faceScore = (e.portrait.faceSharpness > 0 ? (e.portrait.faceSharpness / 6.0).clamp(0.0, 100.0) : 80.0) * 0.3;
+    final faceScore =
+        (e.portrait.faceSharpness > 0
+            ? (e.portrait.faceSharpness / 6.0).clamp(0.0, 100.0)
+            : 80.0) *
+        0.3;
     final total = (sNorm + eNorm + faceScore).round().clamp(10, 99);
     return total;
   }
@@ -240,8 +284,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     final score = (95 - (bestDist * 50)).round().clamp(70, 98);
     return score;
   }
-
-
 
   String _formatFileSizeRaw(PhotoEntry e) {
     if (_fileSizeCache.containsKey(e.key)) {
@@ -274,19 +316,23 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
   String _getTimeRange() {
     if (_items.isEmpty) return '';
-    final times = _items.map((e) => e.capturedAt).whereType<DateTime>().toList()..sort();
+    final times = _items.map((e) => e.capturedAt).whereType<DateTime>().toList()
+      ..sort();
     if (times.isEmpty) return '時刻不明';
     final first = times.first;
     final last = times.last;
-    final fStr = '${first.year}-${first.month.toString().padLeft(2, '0')}-${first.day.toString().padLeft(2, '0')} ${first.hour.toString().padLeft(2, '0')}:${first.minute.toString().padLeft(2, '0')}';
+    final fStr =
+        '${first.year}-${first.month.toString().padLeft(2, '0')}-${first.day.toString().padLeft(2, '0')} ${first.hour.toString().padLeft(2, '0')}:${first.minute.toString().padLeft(2, '0')}';
     if (first == last) return fStr;
-    final lStr = '${last.hour.toString().padLeft(2, '0')}:${last.minute.toString().padLeft(2, '0')}';
+    final lStr =
+        '${last.hour.toString().padLeft(2, '0')}:${last.minute.toString().padLeft(2, '0')}';
     return '$fStr - $lStr';
   }
 
   String _getBurstInfo() {
     if (!widget.group.isBurst) return '📷 単写';
-    final times = _items.map((e) => e.capturedAt).whereType<DateTime>().toList()..sort();
+    final times = _items.map((e) => e.capturedAt).whereType<DateTime>().toList()
+      ..sort();
     if (times.length < 2) return '📷 連写';
     final diffMs = times.last.difference(times.first).inMilliseconds;
     final sec = (diffMs / 1000.0).toStringAsFixed(1);
@@ -320,7 +366,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 // 4. 画像グリッド
                 Expanded(
                   child: GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(4, 4, 4, 100), // Bottom padding for sheet
+                    padding: const EdgeInsets.fromLTRB(
+                      4,
+                      4,
+                      4,
+                      100,
+                    ), // Bottom padding for sheet
                     gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: crossAxisCount,
                       mainAxisSpacing: 4,
@@ -351,20 +402,26 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: const BoxDecoration(
         color: BestShotTheme.backgroundPrimary,
-        border: Border(bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+        border: Border(
+          bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1),
+        ),
       ),
       child: Row(
         children: [
           IconButton(
             tooltip: '戻る',
-            icon: const Icon(Icons.arrow_back, color: BestShotTheme.textPrimary, size: 20),
+            icon: const Icon(
+              Icons.arrow_back,
+              color: BestShotTheme.textPrimary,
+              size: 20,
+            ),
             onPressed: () => Navigator.of(context).pop(),
           ),
           const SizedBox(width: 4),
           Expanded(
             child: Text.rich(
               TextSpan(
-                text: 'グループ #${widget.group.id} ',
+                text: 'グループ ${_review.name(widget.group)} ',
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -392,7 +449,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               HapticFeedback.selectionClick();
               final next = Set<String>.from(_deleteSelectionNotifier.value);
               for (final item in _items) {
-                if (item.key != widget.group.bestKey) {
+                if (item.key != _bestKey && _review.canDelete(item.key)) {
                   next.add(item.key);
                 } else {
                   next.remove(item.key);
@@ -410,7 +467,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 const SnackBar(content: Text('Best 以外の写真を削除予定に設定しました')),
               );
             },
-            icon: const Icon(Icons.star_rounded, size: 16, color: BestShotTheme.accentGold),
+            icon: const Icon(
+              Icons.star_rounded,
+              size: 16,
+              color: BestShotTheme.accentGold,
+            ),
             label: const Text(
               'Best抽出',
               style: TextStyle(
@@ -424,10 +485,21 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           // ルーペ比較ボタン
           IconButton(
             tooltip: 'ルーペで比較',
-            icon: const Icon(Icons.zoom_in, color: BestShotTheme.accentBlue, size: 22),
+            icon: const Icon(
+              Icons.zoom_in,
+              color: BestShotTheme.accentBlue,
+              size: 22,
+            ),
             onPressed: () {
               final targets = widget.loupeSelection.isNotEmpty
-                  ? widget.loupeSelection.map((k) => _items.firstWhere((e) => e.key == k, orElse: () => _items.first)).toList()
+                  ? widget.loupeSelection
+                        .map(
+                          (k) => _items.firstWhere(
+                            (e) => e.key == k,
+                            orElse: () => _items.first,
+                          ),
+                        )
+                        .toList()
                   : _items.take(4).toList();
               for (final item in targets.take(4)) {
                 precacheImage(MemoryImage(item.displayBytes), context);
@@ -437,7 +509,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                   builder: (context) => LoupeScreen(
                     items: targets,
                     scores: targets.map((e) => e.sharpness).toList(),
-                    isBests: targets.map((e) => e.key == widget.group.bestKey).toList(),
+                    isBests: targets.map((e) => e.key == _bestKey).toList(),
                     initialSelectedForDelete: _deleteSelectionNotifier.value,
                     onToggleDelete: (k, v) {
                       widget.onToggleDelete(k, v);
@@ -451,8 +523,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                       _deleteSelectionNotifier.value = next;
                     },
                     onSetBest: (k) {
-                      widget.onSetBest(k);
-                      setState(() {});
+                      _setBest(k);
                     },
                   ),
                 ),
@@ -476,17 +547,27 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.calendar_today_outlined, size: 13, color: BestShotTheme.textSecondary),
+              const Icon(
+                Icons.calendar_today_outlined,
+                size: 13,
+                color: BestShotTheme.textSecondary,
+              ),
               const SizedBox(width: 6),
               Text(
                 _getTimeRange(),
-                style: const TextStyle(fontSize: 12, color: BestShotTheme.textSecondary),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: BestShotTheme.textSecondary,
+                ),
               ),
             ],
           ),
           Text(
             _getBurstInfo(),
-            style: const TextStyle(fontSize: 12, color: BestShotTheme.textSecondary),
+            style: const TextStyle(
+              fontSize: 12,
+              color: BestShotTheme.textSecondary,
+            ),
           ),
           if (widget.group.needsReview)
             Container(
@@ -516,7 +597,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: const BoxDecoration(
         color: BestShotTheme.backgroundPrimary,
-        border: Border(bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+        border: Border(
+          bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1),
+        ),
       ),
       child: Wrap(
         spacing: 8,
@@ -534,28 +617,42 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                   // 全選択 / 解除
                   OutlinedButton(
                     style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                       minimumSize: const Size(0, 30),
                       side: const BorderSide(color: BestShotTheme.dividerColor),
                     ),
                     onPressed: _selectAllForDelete,
                     child: Text(
                       allMarked ? '選択全解除' : '全選択',
-                      style: const TextStyle(fontSize: 12, color: BestShotTheme.textPrimary),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: BestShotTheme.textPrimary,
+                      ),
                     ),
                   ),
                   if (hasMarked) ...[
                     const SizedBox(width: 8),
                     OutlinedButton(
                       style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
                         minimumSize: const Size(0, 30),
-                        side: const BorderSide(color: BestShotTheme.dividerColor),
+                        side: const BorderSide(
+                          color: BestShotTheme.dividerColor,
+                        ),
                       ),
                       onPressed: _clearAllDelete,
                       child: const Text(
                         '削除予定を解除',
-                        style: TextStyle(fontSize: 12, color: BestShotTheme.accentRed),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: BestShotTheme.accentRed,
+                        ),
                       ),
                     ),
                   ],
@@ -564,40 +661,36 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             },
           ),
 
-          // 品質ソート
-          OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              minimumSize: const Size(0, 30),
-              side: BorderSide(
-                color: _sortByQuality ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
-              ),
-              backgroundColor: _sortByQuality
-                  ? BestShotTheme.accentBlue.withValues(alpha: 0.15)
-                  : Colors.transparent,
-            ),
-            onPressed: _toggleSortQuality,
-            icon: Icon(
-              Icons.bar_chart,
-              size: 14,
-              color: _sortByQuality ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
-            ),
-            label: Text(
-              '品質ソート',
-              style: TextStyle(
-                fontSize: 12,
-                color: _sortByQuality ? BestShotTheme.accentBlue : BestShotTheme.textPrimary,
-              ),
+          PopupMenuButton<PhotoOrder>(
+            tooltip: '写真の並べ替え',
+            initialValue: _review.photoOrder,
+            onSelected: _sortPhotos,
+            itemBuilder: (_) => [
+              for (final order in PhotoOrder.values)
+                if (_review.mode == DetectionMode.portrait ||
+                    (order != PhotoOrder.subject &&
+                        order != PhotoOrder.faceQuality))
+                  PopupMenuItem(
+                    value: order,
+                    child: Text(photoOrderLabels[order.index]),
+                  ),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text('↕ ${photoOrderLabels[_review.photoOrder.index]}'),
             ),
           ),
 
-          // テンキー仕分けヒント (Windows)
-          if (!Platform.isAndroid && !Platform.isIOS)
+          // iPad hardware keyboard sorting shortcuts
+          if (MediaQuery.sizeOf(context).width >= 750)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 4),
               child: Text(
                 '1〜9: 仕分け',
-                style: TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: BestShotTheme.textSecondary,
+                ),
               ),
             ),
         ],
@@ -606,7 +699,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 
   Widget _buildGridThumbnail(PhotoEntry item) {
-    final isBest = item.key == widget.group.bestKey;
+    final isBest = item.key == _bestKey;
     final loupeIndex = widget.loupeSelection.indexOf(item.key);
     final isLoupeSelected = loupeIndex != -1;
     final sortFolder = widget.selectedSortFolders[item.key];
@@ -643,18 +736,23 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 },
                 onDoubleTap: () {
                   final best = widget.group.items.firstWhere(
-                    (e) => e.key == widget.group.bestKey,
+                    (e) => e.key == _bestKey,
                     orElse: () => widget.group.items.first,
                   );
-                  final compareItems = best.key == item.key ? [item] : [best, item];
+                  final compareItems = best.key == item.key
+                      ? [item]
+                      : [best, item];
                   precacheImage(MemoryImage(item.displayBytes), context);
                   Navigator.of(context).push(
                     FastRoute(
                       builder: (context) => LoupeScreen(
                         items: compareItems,
                         scores: compareItems.map((e) => e.sharpness).toList(),
-                        isBests: compareItems.map((e) => e.key == widget.group.bestKey).toList(),
-                        initialSelectedForDelete: _deleteSelectionNotifier.value,
+                        isBests: compareItems
+                            .map((e) => e.key == _bestKey)
+                            .toList(),
+                        initialSelectedForDelete:
+                            _deleteSelectionNotifier.value,
                         onToggleDelete: (k, val) {
                           final current = _deleteSelectionNotifier.value;
                           final next = Set<String>.from(current);
@@ -667,7 +765,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                           widget.onToggleDelete(k, val);
                         },
                         onSetBest: (k) {
-                          widget.onSetBest(k);
+                          _setBest(k);
                         },
                       ),
                     ),
@@ -677,7 +775,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                   decoration: BoxDecoration(
                     color: BestShotTheme.surfaceColor,
                     borderRadius: BorderRadius.circular(4),
-                    border: borderWidth > 0 ? Border.all(color: borderColor, width: borderWidth) : null,
+                    border: borderWidth > 0
+                        ? Border.all(color: borderColor, width: borderWidth)
+                        : null,
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: Stack(
@@ -705,15 +805,24 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                           top: 0,
                           left: 0,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 3,
+                            ),
                             decoration: const BoxDecoration(
                               color: BestShotTheme.accentGold,
-                              borderRadius: BorderRadius.only(bottomRight: Radius.circular(4)),
+                              borderRadius: BorderRadius.only(
+                                bottomRight: Radius.circular(4),
+                              ),
                             ),
                             child: const Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.star, size: 12, color: BestShotTheme.backgroundPrimary),
+                                Icon(
+                                  Icons.star,
+                                  size: 12,
+                                  color: BestShotTheme.backgroundPrimary,
+                                ),
                                 SizedBox(width: 2),
                                 Text(
                                   'Best',
@@ -763,9 +872,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                               ),
                             ),
                             child: Icon(
-                              isSelectedForDelete ? Icons.delete : Icons.delete_outline,
+                              isSelectedForDelete
+                                  ? Icons.delete
+                                  : Icons.delete_outline,
                               size: 13,
-                              color: isSelectedForDelete ? Colors.white : Colors.white70,
+                              color: isSelectedForDelete
+                                  ? Colors.white
+                                  : Colors.white70,
                             ),
                           ),
                         ),
@@ -777,7 +890,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                           top: isBest ? 26 : 4,
                           left: 4,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
                               color: BestShotTheme.accentBlue,
                               borderRadius: BorderRadius.circular(2),
@@ -800,7 +916,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                         bottom: 0,
                         child: Container(
                           color: Colors.black.withValues(alpha: 0.4),
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 3,
+                          ),
                           child: Row(
                             children: [
                               // 品質スコア
@@ -812,7 +931,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                   color: BestShotTheme.textPrimary,
                                 ),
                               ),
-
                             ],
                           ),
                         ),
@@ -841,13 +959,21 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           valueListenable: _deleteSelectionNotifier,
           builder: (context, deleteSet, _) {
             final isSelectedForDelete = deleteSet.contains(activeEntry.key);
-            final isBest = activeEntry.key == widget.group.bestKey;
+            final isBest = activeEntry.key == _bestKey;
             final qualityScore = _getQualityScore(activeEntry);
-            final sharpnessScore = ((activeEntry.sharpness / 6.0).clamp(0.0, 100.0)).round();
-            final exposureScore = (activeEntry.exposureScore * 100.0).round().clamp(0, 100);
+            final sharpnessScore = ((activeEntry.sharpness / 6.0).clamp(
+              0.0,
+              100.0,
+            )).round();
+            final exposureScore = (activeEntry.exposureScore * 100.0)
+                .round()
+                .clamp(0, 100);
             final noiseScore = _getNoiseScore(activeEntry);
             final compositionScore = _getCompositionScore(activeEntry);
-            final filename = p.basename(activeEntry.filePath ?? 'DSC_${activeEntry.key.substring(0, 4)}.JPG');
+            final filename = p.basename(
+              activeEntry.filePath ??
+                  'DSC_${activeEntry.key.substring(0, 4)}.JPG',
+            );
             final fileSize = _getFileSize(activeEntry);
 
             return RepaintBoundary(
@@ -855,23 +981,37 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 controller: _sheetController,
                 initialChildSize: 0.12, // ~80dp 相当
                 minChildSize: 0.10,
-                maxChildSize: 0.45,    // 展開時 ~40%
+                maxChildSize: 0.45, // 展開時 ~40%
                 snap: true,
                 snapSizes: const [0.10, 0.45],
                 builder: (context, scrollController) {
                   return Container(
                     decoration: const BoxDecoration(
                       color: BestShotTheme.surfaceColor,
-                      borderRadius: BorderRadius.vertical(top: Radius.circular(4)),
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(4),
+                      ),
                       border: Border(
-                        top: BorderSide(color: BestShotTheme.dividerColor, width: 1),
-                        left: BorderSide(color: BestShotTheme.dividerColor, width: 1),
-                        right: BorderSide(color: BestShotTheme.dividerColor, width: 1),
+                        top: BorderSide(
+                          color: BestShotTheme.dividerColor,
+                          width: 1,
+                        ),
+                        left: BorderSide(
+                          color: BestShotTheme.dividerColor,
+                          width: 1,
+                        ),
+                        right: BorderSide(
+                          color: BestShotTheme.dividerColor,
+                          width: 1,
+                        ),
                       ),
                     ),
                     child: ListView(
                       controller: scrollController,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
                       children: [
                         // ドラッグハンドル ≡
                         Center(
@@ -889,7 +1029,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                         // 最小化時に常に見える行: 📊 選択中ファイル名 + 品質スコア
                         Row(
                           children: [
-                            const Icon(Icons.bar_chart, size: 16, color: BestShotTheme.accentGold),
+                            const Icon(
+                              Icons.bar_chart,
+                              size: 16,
+                              color: BestShotTheme.accentGold,
+                            ),
                             const SizedBox(width: 6),
                             Expanded(
                               child: Text(
@@ -918,32 +1062,63 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                         // 1. ファイル名 │ 解像度 │ 容量
                         Row(
                           children: [
-                            const Icon(Icons.insert_drive_file_outlined, size: 13, color: BestShotTheme.textSecondary),
+                            const Icon(
+                              Icons.insert_drive_file_outlined,
+                              size: 13,
+                              color: BestShotTheme.textSecondary,
+                            ),
                             const SizedBox(width: 4),
                             Expanded(
                               child: Text(
                                 filename,
-                                style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: BestShotTheme.textSecondary,
+                                ),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
                             const SizedBox(width: 8),
-                            Text('│', style: TextStyle(color: BestShotTheme.dividerColor)),
+                            Text(
+                              '│',
+                              style: TextStyle(
+                                color: BestShotTheme.dividerColor,
+                              ),
+                            ),
                             const SizedBox(width: 8),
-                            const Icon(Icons.aspect_ratio, size: 13, color: BestShotTheme.textSecondary),
+                            const Icon(
+                              Icons.aspect_ratio,
+                              size: 13,
+                              color: BestShotTheme.textSecondary,
+                            ),
                             const SizedBox(width: 4),
                             Text(
                               _formatResolution(activeEntry),
-                              style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: BestShotTheme.textSecondary,
+                              ),
                             ),
                             const SizedBox(width: 8),
-                            Text('│', style: TextStyle(color: BestShotTheme.dividerColor)),
+                            Text(
+                              '│',
+                              style: TextStyle(
+                                color: BestShotTheme.dividerColor,
+                              ),
+                            ),
                             const SizedBox(width: 8),
-                            const Icon(Icons.sd_storage_outlined, size: 13, color: BestShotTheme.textSecondary),
+                            const Icon(
+                              Icons.sd_storage_outlined,
+                              size: 13,
+                              color: BestShotTheme.textSecondary,
+                            ),
                             const SizedBox(width: 4),
                             Text(
                               fileSize,
-                              style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: BestShotTheme.textSecondary,
+                              ),
                             ),
                           ],
                         ),
@@ -978,13 +1153,29 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                             padding: const EdgeInsets.only(left: 20),
                             child: Column(
                               children: [
-                                _buildSubMetricRow('シャープネス', sharpnessScore, BestShotTheme.accentBlue),
+                                _buildSubMetricRow(
+                                  'シャープネス',
+                                  sharpnessScore,
+                                  BestShotTheme.accentBlue,
+                                ),
                                 const SizedBox(height: 4),
-                                _buildSubMetricRow('露出', exposureScore, BestShotTheme.accentGold),
+                                _buildSubMetricRow(
+                                  '露出',
+                                  exposureScore,
+                                  BestShotTheme.accentGold,
+                                ),
                                 const SizedBox(height: 4),
-                                _buildSubMetricRow('ノイズ', noiseScore, BestShotTheme.textSecondary),
+                                _buildSubMetricRow(
+                                  'ノイズ',
+                                  noiseScore,
+                                  BestShotTheme.textSecondary,
+                                ),
                                 const SizedBox(height: 4),
-                                _buildSubMetricRow('構図', compositionScore, BestShotTheme.accentGreen),
+                                _buildSubMetricRow(
+                                  '構図',
+                                  compositionScore,
+                                  BestShotTheme.accentGreen,
+                                ),
                               ],
                             ),
                           ),
@@ -1007,13 +1198,18 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                         : BestShotTheme.dividerColor,
                                   ),
                                   backgroundColor: isSelectedForDelete
-                                      ? BestShotTheme.accentRed.withValues(alpha: 0.15)
+                                      ? BestShotTheme.accentRed.withValues(
+                                          alpha: 0.15,
+                                        )
                                       : Colors.transparent,
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 10,
+                                  ),
                                 ),
                                 onPressed: () {
                                   HapticFeedback.selectionClick();
-                                  final current = _deleteSelectionNotifier.value;
+                                  final current =
+                                      _deleteSelectionNotifier.value;
                                   final next = Set<String>.from(current);
                                   final nextState = !isSelectedForDelete;
                                   if (nextState) {
@@ -1022,7 +1218,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                     next.remove(activeEntry.key);
                                   }
                                   _deleteSelectionNotifier.value = next;
-                                  widget.onToggleDelete(activeEntry.key, nextState);
+                                  widget.onToggleDelete(
+                                    activeEntry.key,
+                                    nextState,
+                                  );
                                 },
                                 icon: Icon(
                                   Icons.delete_outline,
@@ -1057,12 +1256,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                     color: BestShotTheme.accentGold,
                                     width: isBest ? 0 : 1,
                                   ),
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 10,
+                                  ),
                                 ),
                                 onPressed: () {
                                   HapticFeedback.selectionClick();
-                                  widget.onSetBest(activeEntry.key);
-                                  setState(() {});
+                                  _setBest(activeEntry.key);
                                 },
                                 icon: Icon(
                                   isBest ? Icons.star : Icons.star_border,
@@ -1113,7 +1313,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           width: 50,
           child: Text(
             label,
-            style: const TextStyle(fontSize: 12, color: BestShotTheme.textPrimary, fontWeight: FontWeight.w500),
+            style: const TextStyle(
+              fontSize: 12,
+              color: BestShotTheme.textPrimary,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ),
         Expanded(
@@ -1129,8 +1333,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         ),
         const SizedBox(width: 10),
         Text(
-          extraText != null && extraText.isNotEmpty ? '$score% $extraText' : '$score%',
-          style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
+          extraText != null && extraText.isNotEmpty
+              ? '$score% $extraText'
+              : '$score%',
+          style: const TextStyle(
+            fontSize: 11,
+            color: BestShotTheme.textSecondary,
+          ),
         ),
       ],
     );
@@ -1139,19 +1348,29 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   Widget _buildSubMetricRow(String label, int score, Color barColor) {
     return Row(
       children: [
-        Text('├ ', style: TextStyle(color: BestShotTheme.dividerColor, fontSize: 11)),
+        Text(
+          '├ ',
+          style: TextStyle(color: BestShotTheme.dividerColor, fontSize: 11),
+        ),
         SizedBox(
           width: 80,
           child: Text(
             label,
-            style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
+            style: const TextStyle(
+              fontSize: 11,
+              color: BestShotTheme.textSecondary,
+            ),
           ),
         ),
         SizedBox(
           width: 30,
           child: Text(
             '$score',
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: BestShotTheme.textPrimary,
+            ),
           ),
         ),
         Expanded(
@@ -1186,7 +1405,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.analytics_outlined, size: 13, color: BestShotTheme.accentGold),
+              const Icon(
+                Icons.analytics_outlined,
+                size: 13,
+                color: BestShotTheme.accentGold,
+              ),
               const SizedBox(width: 4),
               const Text(
                 'AI判定根拠・算出詳細',
@@ -1216,7 +1439,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: BestShotTheme.accentBlue.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(2),
@@ -1234,7 +1460,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 Expanded(
                   child: Text(
                     gExp.description,
-                    style: const TextStyle(color: BestShotTheme.textPrimary, fontSize: 10),
+                    style: const TextStyle(
+                      color: BestShotTheme.textPrimary,
+                      fontSize: 10,
+                    ),
                   ),
                 ),
               ],
@@ -1245,7 +1474,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               runSpacing: 3,
               children: [
                 if (gExp.diffSeconds != null)
-                  _buildDebugTag('Δt', '${gExp.diffSeconds!.toStringAsFixed(1)}s'),
+                  _buildDebugTag(
+                    'Δt',
+                    '${gExp.diffSeconds!.toStringAsFixed(1)}s',
+                  ),
                 if (gExp.pHashDistance != null)
                   _buildDebugTag('pHash距離', '${gExp.pHashDistance}'),
                 if (gExp.colorDistance != null)
@@ -1255,11 +1487,20 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 if (gExp.inliers != null)
                   _buildDebugTag('幾何Inlier', '${gExp.inliers}点'),
                 if (gExp.orbInlierRatio != null)
-                  _buildDebugTag('Inlier率', '${(gExp.orbInlierRatio! * 100).toStringAsFixed(1)}%'),
+                  _buildDebugTag(
+                    'Inlier率',
+                    '${(gExp.orbInlierRatio! * 100).toStringAsFixed(1)}%',
+                  ),
                 if (gExp.embeddingSimilarity != null)
-                  _buildDebugTag('埋め込み類似度', '${(gExp.embeddingSimilarity! * 100).toStringAsFixed(1)}%'),
+                  _buildDebugTag(
+                    '埋め込み類似度',
+                    '${(gExp.embeddingSimilarity! * 100).toStringAsFixed(1)}%',
+                  ),
                 if (gExp.confidence > 0)
-                  _buildDebugTag('結合信頼度', '${(gExp.confidence * 100).toStringAsFixed(1)}%'),
+                  _buildDebugTag(
+                    '結合信頼度',
+                    '${(gExp.confidence * 100).toStringAsFixed(1)}%',
+                  ),
               ],
             ),
             const SizedBox(height: 6),
@@ -1272,7 +1513,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: BestShotTheme.accentGold.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(2),
@@ -1303,11 +1547,23 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               runSpacing: 3,
               children: [
                 _buildDebugTag('生鮮鋭度', sExp.rawSharpness.toStringAsFixed(0)),
-                _buildDebugTag('ISO補正後', sExp.effectiveSharpness.toStringAsFixed(0)),
-                _buildDebugTag('正規化鮮鋭度', '${(sExp.normalizedSharpness * 100).toStringAsFixed(1)}%'),
-                _buildDebugTag('露出点', '${(sExp.exposureScore * 100).toStringAsFixed(1)}%'),
+                _buildDebugTag(
+                  'ISO補正後',
+                  sExp.effectiveSharpness.toStringAsFixed(0),
+                ),
+                _buildDebugTag(
+                  '正規化鮮鋭度',
+                  '${(sExp.normalizedSharpness * 100).toStringAsFixed(1)}%',
+                ),
+                _buildDebugTag(
+                  '露出点',
+                  '${(sExp.exposureScore * 100).toStringAsFixed(1)}%',
+                ),
                 if (sExp.faceQualityScore > 0)
-                  _buildDebugTag('顔品質点', '${(sExp.faceQualityScore * 100).toStringAsFixed(1)}%'),
+                  _buildDebugTag(
+                    '顔品質点',
+                    '${(sExp.faceQualityScore * 100).toStringAsFixed(1)}%',
+                  ),
               ],
             ),
           ] else ...[
@@ -1316,9 +1572,15 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               runSpacing: 3,
               children: [
                 _buildDebugTag('生鮮鋭度', entry.sharpness.toStringAsFixed(0)),
-                _buildDebugTag('露出スコア', '${(entry.exposureScore * 100).toStringAsFixed(1)}%'),
+                _buildDebugTag(
+                  '露出スコア',
+                  '${(entry.exposureScore * 100).toStringAsFixed(1)}%',
+                ),
                 if (entry.portrait.hasFace)
-                  _buildDebugTag('顔鮮鋭度', entry.portrait.faceSharpness.toStringAsFixed(0)),
+                  _buildDebugTag(
+                    '顔鮮鋭度',
+                    entry.portrait.faceSharpness.toStringAsFixed(0),
+                  ),
               ],
             ),
           ],
@@ -1337,10 +1599,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       ),
       child: Text(
         '$label: $value',
-        style: const TextStyle(
-          fontSize: 9,
-          color: BestShotTheme.textSecondary,
-        ),
+        style: const TextStyle(fontSize: 9, color: BestShotTheme.textSecondary),
       ),
     );
   }

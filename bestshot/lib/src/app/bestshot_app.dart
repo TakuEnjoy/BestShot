@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 
@@ -26,12 +25,21 @@ class _BestShotAppState extends State<BestShotApp> with WidgetsBindingObserver {
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.detached) {
-      // ウィンドウが閉じられアプリが破棄される際、
-      // バックグラウンドのIsolateがReceivePortで待機したままプロセスがゾンビ化するのを防ぐため強制終了する
-      exit(0);
-    }
+  void didHaveMemoryPressure() {
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Use the display size, so iPad split view does not change the cache budget.
+    final display = View.of(context).display;
+    final isTablet =
+        display.size.shortestSide / display.devicePixelRatio >= 600;
+    PaintingBinding.instance.imageCache.maximumSizeBytes =
+        (isTablet ? 192 : 96) * 1024 * 1024;
+    PaintingBinding.instance.imageCache.maximumSize = isTablet ? 600 : 300;
   }
 
   @override

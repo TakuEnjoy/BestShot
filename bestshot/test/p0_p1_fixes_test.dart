@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:bestshot/src/models/photo_entry.dart';
@@ -36,40 +35,11 @@ void main() {
       final failedResult = DeleteResult(failed: [dummyEntry]);
       expect(failedResult.isAllSuccess, isFalse);
 
-      final partialResult = DeleteResult(success: [dummyEntry], unprocessed: [dummyEntry]);
+      final partialResult = DeleteResult(
+        success: [dummyEntry],
+        unprocessed: [dummyEntry],
+      );
       expect(partialResult.isAllSuccess, isFalse);
-    });
-
-    test('Windows path > 259 chars fails safely without falling back to File.delete()', () async {
-      // Create a temporary file
-      final tempDir = Directory.systemTemp.createTempSync('delete_test');
-      try {
-        final longName = 'a' * 260;
-        final longPath = '${tempDir.path}/$longName.jpg';
-
-        final entry = PhotoEntry(
-          key: 'long_path_entry',
-          origin: PhotoOrigin.filePath,
-          displayBytes: Uint8List(0),
-          filePath: longPath,
-          pHashHex: '0000000000000000',
-          sharpness: 10,
-          exposureScore: 0.5,
-          orbRows: 0,
-          orbCols: 0,
-          orbBytes: Uint8List(0),
-          orbKeypoints: Float32List(0),
-          histogram: Uint8List(256),
-        );
-
-        final result = await DeleteService.moveToTrash([entry]);
-        expect(result.isAllSuccess, isFalse);
-        expect(result.failed.length, equals(1));
-        expect(result.failed.first.key, equals('long_path_entry'));
-        expect(result.errorMessage, contains('MAX_PATH'));
-      } finally {
-        tempDir.deleteSync(recursive: true);
-      }
     });
   });
 
@@ -90,41 +60,44 @@ void main() {
   });
 
   group('[P1] PhotoGrouper.groupAsync tests', () {
-    test('groupAsync runs in background isolate and produces valid groups', () async {
-      final entry1 = PhotoEntry(
-        key: 'photo1',
-        origin: PhotoOrigin.filePath,
-        displayBytes: Uint8List(0),
-        pHashHex: '1111111111111111',
-        sharpness: 100,
-        exposureScore: 0.8,
-        orbRows: 0,
-        orbCols: 0,
-        orbBytes: Uint8List(0),
-        orbKeypoints: Float32List(0),
-        histogram: Uint8List(256),
-      );
-      final entry2 = PhotoEntry(
-        key: 'photo2',
-        origin: PhotoOrigin.filePath,
-        displayBytes: Uint8List(0),
-        pHashHex: 'ffffffffffffffff',
-        sharpness: 90,
-        exposureScore: 0.7,
-        orbRows: 0,
-        orbCols: 0,
-        orbBytes: Uint8List(0),
-        orbKeypoints: Float32List(0),
-        histogram: Uint8List(256),
-      );
+    test(
+      'groupAsync runs in background isolate and produces valid groups',
+      () async {
+        final entry1 = PhotoEntry(
+          key: 'photo1',
+          origin: PhotoOrigin.filePath,
+          displayBytes: Uint8List(0),
+          pHashHex: '1111111111111111',
+          sharpness: 100,
+          exposureScore: 0.8,
+          orbRows: 0,
+          orbCols: 0,
+          orbBytes: Uint8List(0),
+          orbKeypoints: Float32List(0),
+          histogram: Uint8List(256),
+        );
+        final entry2 = PhotoEntry(
+          key: 'photo2',
+          origin: PhotoOrigin.filePath,
+          displayBytes: Uint8List(0),
+          pHashHex: 'ffffffffffffffff',
+          sharpness: 90,
+          exposureScore: 0.7,
+          orbRows: 0,
+          orbCols: 0,
+          orbBytes: Uint8List(0),
+          orbKeypoints: Float32List(0),
+          histogram: Uint8List(256),
+        );
 
-      final groups = await PhotoGrouper.groupAsync(
-        [entry1, entry2],
-        const GroupingConfig(),
-      );
+        final groups = await PhotoGrouper.groupAsync([
+          entry1,
+          entry2,
+        ], const GroupingConfig());
 
-      expect(groups, isA<List<PhotoGroup>>());
-      expect(groups.isNotEmpty, isTrue);
-    });
+        expect(groups, isA<List<PhotoGroup>>());
+        expect(groups.isNotEmpty, isTrue);
+      },
+    );
   });
 }

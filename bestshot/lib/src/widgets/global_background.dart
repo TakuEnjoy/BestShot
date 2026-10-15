@@ -8,9 +8,6 @@ class GlobalBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: BestShotTheme.backgroundPrimary,
-      child: child,
-    );
+    return Container(color: BestShotTheme.backgroundPrimary, child: child);
   }
 }

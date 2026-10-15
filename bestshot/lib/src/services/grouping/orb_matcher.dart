@@ -26,8 +26,12 @@ class OrbMatcher {
     double minBoundingBoxSpread = 50.0,
   }) {
     if (rowsA < 4 || rowsB < 4) return (0, 0.0, 0);
-    if (bytesA.length < rowsA * 32 || bytesB.length < rowsB * 32) return (0, 0.0, 0);
-    if (keypointsA.length < rowsA * 2 || keypointsB.length < rowsB * 2) return (0, 0.0, 0);
+    if (bytesA.length < rowsA * 32 || bytesB.length < rowsB * 32) {
+      return (0, 0.0, 0);
+    }
+    if (keypointsA.length < rowsA * 2 || keypointsB.length < rowsB * 2) {
+      return (0, 0.0, 0);
+    }
 
     cv.Mat? matA;
     cv.Mat? matB;
@@ -50,9 +54,14 @@ class OrbMatcher {
           if (m.distance < ratioThreshold * n.distance) {
             final idxA = m.queryIdx;
             final idxB = m.trainIdx;
-            if (idxA * 2 + 1 < keypointsA.length && idxB * 2 + 1 < keypointsB.length) {
-              ptsA.add(OrbPoint(keypointsA[idxA * 2], keypointsA[idxA * 2 + 1]));
-              ptsB.add(OrbPoint(keypointsB[idxB * 2], keypointsB[idxB * 2 + 1]));
+            if (idxA * 2 + 1 < keypointsA.length &&
+                idxB * 2 + 1 < keypointsB.length) {
+              ptsA.add(
+                OrbPoint(keypointsA[idxA * 2], keypointsA[idxA * 2 + 1]),
+              );
+              ptsB.add(
+                OrbPoint(keypointsB[idxB * 2], keypointsB[idxB * 2 + 1]),
+              );
             }
           }
         }
@@ -115,7 +124,6 @@ class OrbMatcher {
 
       final inlierRatio = goodMatches > 0 ? (inliers / goodMatches) : 0.0;
       return (inliers, inlierRatio, goodMatches);
-
     } catch (_) {
       return (0, 0.0, 0);
     } finally {
@@ -160,7 +168,10 @@ class OrbMatcher {
 
       // Solve 3-point affine transformation
       // det of matrix M = [ [x1, y1, 1], [x2, y2, 1], [x3, y3, 1] ]
-      final detM = p1.x * (p2.y - p3.y) - p1.y * (p2.x - p3.x) + (p2.x * p3.y - p3.x * p2.y);
+      final detM =
+          p1.x * (p2.y - p3.y) -
+          p1.y * (p2.x - p3.x) +
+          (p2.x * p3.y - p3.x * p2.y);
       if (detM.abs() < 1e-5) continue; // Collinear sample
 
       final invDet = 1.0 / detM;

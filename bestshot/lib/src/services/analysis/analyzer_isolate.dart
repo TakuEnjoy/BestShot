@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'analysis_types.dart';
 import '../../utils/jpeg_utils.dart';
+import '../../platform/ios_image_decoder.dart';
 
 class AnalyzerIsolate {
   static Future<List<AnalyzeOutput>> analyzeAll(
@@ -25,9 +26,8 @@ class AnalyzerIsolate {
   }) async {
     if (inputs.isEmpty) return [];
 
-    final isMobile = Platform.isAndroid || Platform.isIOS;
     final processorCount = Platform.numberOfProcessors;
-    final maxWorkers = isMobile ? 3 : 6;
+    const maxWorkers = 3;
     final calculatedWorkerCount = (processorCount ~/ 2).clamp(1, maxWorkers);
     final workerCount = overrideWorkerCount ?? calculatedWorkerCount;
     final actualWorkerCount = workerCount > inputs.length
@@ -177,7 +177,8 @@ class AnalyzerIsolate {
       // ワーカーの正常終了（リソース解放）を短時間待機
       if (finishedWorkers < actualWorkerCount) {
         final deadline = DateTime.now().add(const Duration(milliseconds: 300));
-        while (finishedWorkers < actualWorkerCount && DateTime.now().isBefore(deadline)) {
+        while (finishedWorkers < actualWorkerCount &&
+            DateTime.now().isBefore(deadline)) {
           await Future.delayed(const Duration(milliseconds: 20));
         }
       }
@@ -224,13 +225,8 @@ class AnalyzerIsolate {
       ),
     );
 
-    final isAndroid = Platform.isAndroid;
-    final isWindows = Platform.isWindows;
-
     NativeFaceDetector? faceDetector;
     Directory? tmpDir;
-    cv.CascadeClassifier? faceCascade;
-    cv.CascadeClassifier? eyeCascade;
 
     if (message.mode == DetectionMode.portrait) {
       faceDetector = NativeFaceDetector();
@@ -238,24 +234,11 @@ class AnalyzerIsolate {
 
     cv.ORB? orbDetector;
     try {
-      if (message.mode == DetectionMode.portrait && isAndroid) {
+      if (message.mode == DetectionMode.portrait) {
         final baseTmp = await getTemporaryDirectory();
-        tmpDir = Directory(p.join(baseTmp.path, 'bestshot_isolate_${message.workerId}'));
-        if (!await tmpDir.exists()) {
-          await tmpDir.create(recursive: true);
-        }
-      }
-
-      if (message.mode == DetectionMode.portrait && isWindows) {
-        final support = await getApplicationSupportDirectory();
-        final cascadeDir = Directory(p.join(support.path, 'cascades'));
-        final facePath = p.join(
-          cascadeDir.path,
-          'haarcascade_frontalface_default.xml',
+        tmpDir = await baseTmp.createTemp(
+          'bestshot_analysis_${message.workerId}_',
         );
-        final eyePath = p.join(cascadeDir.path, 'haarcascade_eye.xml');
-        faceCascade = cv.CascadeClassifier.fromFile(facePath);
-        eyeCascade = cv.CascadeClassifier.fromFile(eyePath);
       }
 
       orbDetector = cv.ORB.create(
@@ -279,15 +262,15 @@ class AnalyzerIsolate {
               mode: message.mode,
               faceDetector: faceDetector,
               tmpDir: tmpDir,
-              faceCascade: faceCascade,
-              eyeCascade: eyeCascade,
               orbDetector: orbDetector,
             );
             message.mainSendPort.send(
               _WorkerResultMessage(workerId: message.workerId, output: out),
             );
           } catch (e, s) {
-            developer.log('Error analyzing item ${input.key} (${input.filePath}): $e\n$s');
+            developer.log(
+              'Error analyzing item ${input.key} (${input.filePath}): $e\n$s',
+            );
             message.mainSendPort.send(
               _WorkerErrorMessage(
                 workerId: message.workerId,
@@ -307,8 +290,6 @@ class AnalyzerIsolate {
       }
       orbDetector?.dispose();
       await faceDetector?.close();
-      faceCascade?.dispose();
-      eyeCascade?.dispose();
       workerReceivePort.close();
       message.mainSendPort.send(_WorkerDoneMessage(workerId: message.workerId));
     }
@@ -347,8 +328,6 @@ class AnalyzerIsolate {
     required DetectionMode mode,
     NativeFaceDetector? faceDetector,
     Directory? tmpDir,
-    cv.CascadeClassifier? faceCascade,
-    cv.CascadeClassifier? eyeCascade,
     required cv.ORB orbDetector,
   }) async {
     const rawExts = <String>{
@@ -368,10 +347,14 @@ class AnalyzerIsolate {
       rawBytes = displayBytes;
     } else if (filePath != null) {
       final ext = p.extension(filePath).toLowerCase();
-      final fileBytes = await File(filePath).readAsBytes();
+      final fileBytes = IosImageDecoder.needsNativeDecoder(filePath)
+          ? await IosImageDecoder.decode(filePath)
+          : await File(filePath).readAsBytes();
       if (rawExts.contains(ext)) {
         final jpegBytes = JpegUtils.extractEmbeddedJpeg(fileBytes);
-        rawBytes = jpegBytes != null ? Uint8List.fromList(jpegBytes) : fileBytes;
+        rawBytes = jpegBytes != null
+            ? Uint8List.fromList(jpegBytes)
+            : fileBytes;
       } else {
         rawBytes = fileBytes;
       }
@@ -424,11 +407,17 @@ class AnalyzerIsolate {
       final (fullSharpness, debugGridSharps) = _calcLaplacianVarianceFromMat(
         analysisWork,
         () {
-          final res = cv.imencode('.jpg', analysisWork, params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, jpegQuality]));
+          final res = cv.imencode(
+            '.jpg',
+            analysisWork,
+            params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, jpegQuality]),
+          );
           return res.$1 ? res.$2 : null;
         },
       );
-      final (exposure, histogram) = _calcExposureAndHistogramFromMat(analysisWork);
+      final (exposure, histogram) = _calcExposureAndHistogramFromMat(
+        analysisWork,
+      );
       final hueHistogram = _calcHueHistogramFromMat(analysisWork);
       final orb = _calcOrbDescriptorsFromMat(analysisWork, orbDetector);
 
@@ -446,29 +435,12 @@ class AnalyzerIsolate {
       var sharpnessForScore = fullSharpness;
 
       if (mode == DetectionMode.portrait) {
-        if (Platform.isAndroid && faceDetector != null && tmpDir != null) {
-          final r = await _portraitAnalyzeAndroid(
-            rawBytes, // Use extracted JPEG for RAW files
+        if (faceDetector != null && tmpDir != null) {
+          final r = await _portraitAnalyzeIos(
+            // Face bounds must use the same upright, resized coordinates as the output.
+            cv.imencode('.jpg', mat).$2,
             faceDetector: faceDetector,
             tmpDir: tmpDir,
-          );
-          hasFace = r.hasFace;
-          faceX = r.faceX;
-          faceY = r.faceY;
-          faceW = r.faceW;
-          faceH = r.faceH;
-          faceSharpness = r.faceSharpness;
-          eyeOpenAvg = r.eyeOpenAvg;
-          eyesClosed = r.eyesClosed;
-          bothEyesDetected = r.bothEyesDetected;
-          eyeSharpness = r.eyeSharpness;
-        } else if (Platform.isWindows &&
-            faceCascade != null &&
-            eyeCascade != null) {
-          final r = _portraitAnalyzeWindowsFromMat(
-            mat, // Resized to max 1920px
-            faceCascade: faceCascade,
-            eyeCascade: eyeCascade,
           );
           hasFace = r.hasFace;
           faceX = r.faceX;
@@ -509,6 +481,8 @@ class AnalyzerIsolate {
         faceY: faceY,
         faceW: faceW,
         faceH: faceH,
+        faceImageWidth: mat.cols,
+        faceImageHeight: mat.rows,
         faceSharpness: faceSharpness,
         eyeOpenAvg: eyeOpenAvg,
         eyesClosed: eyesClosed,
@@ -793,7 +767,13 @@ class AnalyzerIsolate {
         cv.VecF32.fromList([0, 180]),
       );
       histHNorm = cv.Mat.empty();
-      cv.normalize(histH, histHNorm, alpha: 1.0, beta: 0.0, normType: cv.NORM_L1);
+      cv.normalize(
+        histH,
+        histHNorm,
+        alpha: 1.0,
+        beta: 0.0,
+        normType: cv.NORM_L1,
+      );
 
       histS = cv.calcHist(
         cv.VecMat.fromList([hsv]),
@@ -803,7 +783,13 @@ class AnalyzerIsolate {
         cv.VecF32.fromList([0, 256]),
       );
       histSNorm = cv.Mat.empty();
-      cv.normalize(histS, histSNorm, alpha: 1.0, beta: 0.0, normType: cv.NORM_L1);
+      cv.normalize(
+        histS,
+        histSNorm,
+        alpha: 1.0,
+        beta: 0.0,
+        normType: cv.NORM_L1,
+      );
 
       histV = cv.calcHist(
         cv.VecMat.fromList([hsv]),
@@ -813,7 +799,13 @@ class AnalyzerIsolate {
         cv.VecF32.fromList([0, 256]),
       );
       histVNorm = cv.Mat.empty();
-      cv.normalize(histV, histVNorm, alpha: 1.0, beta: 0.0, normType: cv.NORM_L1);
+      cv.normalize(
+        histV,
+        histVNorm,
+        alpha: 1.0,
+        beta: 0.0,
+        normType: cv.NORM_L1,
+      );
 
       final hData = histHNorm.data;
       final sHistData = histSNorm.data;
@@ -839,134 +831,6 @@ class AnalyzerIsolate {
       histHNorm?.dispose();
       histSNorm?.dispose();
       histVNorm?.dispose();
-    }
-  }
-
-  static _PortraitResult _portraitAnalyzeWindowsFromMat(
-    cv.Mat mat, {
-    required cv.CascadeClassifier faceCascade,
-    required cv.CascadeClassifier eyeCascade,
-  }) {
-    cv.Mat? gray;
-    try {
-      if (mat.isEmpty) return const _PortraitResult.none();
-      gray = cv.cvtColor(mat, cv.COLOR_BGR2GRAY);
-
-      final faces = faceCascade.detectMultiScale(
-        gray,
-        scaleFactor: 1.1,
-        minNeighbors: 3,
-        minSize: (48, 48),
-      );
-      if (faces.isEmpty) return const _PortraitResult.none();
-
-      // Find largest area to determine threshold
-      double maxArea = 0;
-      for (final r in faces) {
-        final area = (r.width * r.height).toDouble();
-        if (area > maxArea) {
-          maxArea = area;
-        }
-      }
-
-      // Keep only faces that are at least 25% of the largest face area
-      final mainFaces = faces.where((r) {
-        final area = r.width * r.height;
-        return area >= (maxArea * 0.25);
-      }).toList();
-
-      // Primary face is the largest one
-      cv.Rect primaryFace = mainFaces.first;
-      var primaryArea = primaryFace.width * primaryFace.height;
-      for (final r in mainFaces.skip(1)) {
-        final area = r.width * r.height;
-        if (area > primaryArea) {
-          primaryFace = r;
-          primaryArea = area;
-        }
-      }
-
-      double totalFaceSharpness = 0.0;
-      double totalEyeSharpness = 0.0;
-      int eyeSharpnessCount = 0;
-      var anyEyesClosed = false;
-      var allBothEyesDetected = true;
-
-      for (final faceRect in mainFaces) {
-        final fSharp = _calcLaplacianVarianceInRoi(mat, faceRect);
-        totalFaceSharpness += fSharp;
-
-        final faceGray = gray.region(faceRect);
-        var faceEyesClosed = false;
-        var faceBothEyesDetected = false;
-
-        try {
-          if (!faceGray.isEmpty) {
-            final eyes = eyeCascade.detectMultiScale(
-              faceGray,
-              scaleFactor: 1.1,
-              minNeighbors: 3,
-              minSize: (16, 16),
-            );
-            faceBothEyesDetected = eyes.length >= 2;
-
-            // Windows environment eye close detection threshold heuristics
-            faceEyesClosed = eyes.isEmpty && faceRect.width >= 120;
-
-            if (eyes.isNotEmpty) {
-              for (final eyeRect in eyes) {
-                final absEyeRect = cv.Rect(
-                  faceRect.x + eyeRect.x,
-                  faceRect.y + eyeRect.y,
-                  eyeRect.width,
-                  eyeRect.height,
-                );
-                final v = _calcLaplacianVarianceInRoi(mat, absEyeRect);
-                if (v > 0) {
-                  totalEyeSharpness += v;
-                  eyeSharpnessCount++;
-                }
-              }
-            }
-          } else {
-            faceBothEyesDetected = false;
-          }
-        } finally {
-          faceGray.dispose();
-        }
-
-        if (faceEyesClosed) {
-          anyEyesClosed = true;
-        }
-        if (!faceBothEyesDetected) {
-          allBothEyesDetected = false;
-        }
-      }
-
-      final avgFaceSharpness = totalFaceSharpness / mainFaces.length;
-      var avgEyeSharpness = -1.0;
-      if (eyeSharpnessCount > 0) {
-        final avgV = totalEyeSharpness / eyeSharpnessCount;
-        avgEyeSharpness = (avgV / 1000.0).clamp(0.0, 1.0);
-      }
-
-      return _PortraitResult(
-        hasFace: true,
-        faceX: primaryFace.x,
-        faceY: primaryFace.y,
-        faceW: primaryFace.width,
-        faceH: primaryFace.height,
-        faceSharpness: avgFaceSharpness,
-        eyeOpenAvg: null,
-        eyesClosed: anyEyesClosed,
-        bothEyesDetected: allBothEyesDetected,
-        eyeSharpness: avgEyeSharpness,
-      );
-    } catch (e, s) {
-      developer.log('Error in _portraitAnalyzeWindowsFromMat: $e\n$s');
-      return const _PortraitResult.none();
-    } finally {
-      gray?.dispose();
     }
   }
 
@@ -1073,7 +937,7 @@ class AnalyzerIsolate {
     }
   }
 
-  static Future<_PortraitResult> _portraitAnalyzeAndroid(
+  static Future<_PortraitResult> _portraitAnalyzeIos(
     Uint8List bytes, {
     required NativeFaceDetector faceDetector,
     required Directory tmpDir,
@@ -1090,7 +954,10 @@ class AnalyzerIsolate {
         'bestshot_portrait_${bytes.length}_${DateTime.now().microsecondsSinceEpoch}.jpg',
       );
       final file = File(fp);
-      await file.writeAsBytes(bytes, flush: true);
+      // Detect in the same upright coordinates used for sharpness and face ROIs.
+      final (encoded, uprightBytes) = cv.imencode('.jpg', mat);
+      if (!encoded) return const _PortraitResult.none();
+      await file.writeAsBytes(uprightBytes, flush: true);
 
       final faces = await faceDetector.processImage(fp);
 
@@ -1123,7 +990,8 @@ class AnalyzerIsolate {
       if (mainFaces.isEmpty) return const _PortraitResult.none();
 
       var primaryFace = mainFaces.first;
-      var primaryArea = primaryFace.width * imageWidth * primaryFace.height * imageHeight;
+      var primaryArea =
+          primaryFace.width * imageWidth * primaryFace.height * imageHeight;
       for (final f in mainFaces.skip(1)) {
         final area = f.width * imageWidth * f.height * imageHeight;
         if (area > primaryArea) {
@@ -1142,12 +1010,21 @@ class AnalyzerIsolate {
         final rx = (face.x * imageWidth).round().clamp(0, imageWidth - 1);
         final ry = (face.y * imageHeight).round().clamp(0, imageHeight - 1);
         final rw = (face.width * imageWidth).round().clamp(1, imageWidth - rx);
-        final rh = (face.height * imageHeight).round().clamp(1, imageHeight - ry);
+        final rh = (face.height * imageHeight).round().clamp(
+          1,
+          imageHeight - ry,
+        );
 
         final roi = cv.Rect(rx, ry, rw, rh);
         var fSharp = _calcLaplacianVarianceInRoi(mat, roi);
         if (fSharp <= 0) {
-          fSharp = _fallbackLaplacianVariance(bytes, x: rx, y: ry, w: rw, h: rh);
+          fSharp = _fallbackLaplacianVariance(
+            bytes,
+            x: rx,
+            y: ry,
+            w: rw,
+            h: rh,
+          );
         }
         totalFaceSharpness += fSharp;
 
@@ -1183,7 +1060,9 @@ class AnalyzerIsolate {
       }
 
       final avgFaceSharpness = totalFaceSharpness / mainFaces.length;
-      final finalEyeOpenAvg = (minEyeOpen == 1.0 && !anyBothEyesDetected) ? null : minEyeOpen;
+      final finalEyeOpenAvg = (minEyeOpen == 1.0 && !anyBothEyesDetected)
+          ? null
+          : minEyeOpen;
 
       final prx = (primaryFace.x * imageWidth).round();
       final pry = (primaryFace.y * imageHeight).round();
@@ -1233,8 +1112,17 @@ class _TransferableInput {
 }
 
 class _OrbDesc {
-  const _OrbDesc({required this.rows, required this.cols, required this.bytes, required this.keypoints});
-  _OrbDesc.empty() : rows = 0, cols = 0, bytes = Uint8List(0), keypoints = Float32List(0);
+  const _OrbDesc({
+    required this.rows,
+    required this.cols,
+    required this.bytes,
+    required this.keypoints,
+  });
+  _OrbDesc.empty()
+    : rows = 0,
+      cols = 0,
+      bytes = Uint8List(0),
+      keypoints = Float32List(0);
   final int rows;
   final int cols;
   final Uint8List bytes;
@@ -1278,8 +1166,6 @@ class _PortraitResult {
   final bool bothEyesDetected;
   final double eyeSharpness;
 }
-
-
 
 sealed class _WorkerMessage {}
 
@@ -1339,4 +1225,3 @@ class AnalysisException implements Exception {
   @override
   String toString() => message;
 }
-

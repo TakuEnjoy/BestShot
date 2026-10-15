@@ -8,6 +8,8 @@ class PortraitAnalysis {
     this.faceY = 0,
     this.faceW = 0,
     this.faceH = 0,
+    this.faceImageWidth = 0,
+    this.faceImageHeight = 0,
     this.faceSharpness = 0,
   });
 
@@ -29,6 +31,10 @@ class PortraitAnalysis {
   final int faceW;
   final int faceH;
 
+  /// Dimensions of the upright image used for face detection.
+  final int faceImageWidth;
+  final int faceImageHeight;
+
   /// Portrait-mode: Laplacian variance within face ROI.
   final double faceSharpness;
 
@@ -41,6 +47,8 @@ class PortraitAnalysis {
     int? faceY,
     int? faceW,
     int? faceH,
+    int? faceImageWidth,
+    int? faceImageHeight,
     double? faceSharpness,
   }) {
     return PortraitAnalysis(
@@ -52,6 +60,8 @@ class PortraitAnalysis {
       faceY: faceY ?? this.faceY,
       faceW: faceW ?? this.faceW,
       faceH: faceH ?? this.faceH,
+      faceImageWidth: faceImageWidth ?? this.faceImageWidth,
+      faceImageHeight: faceImageHeight ?? this.faceImageHeight,
       faceSharpness: faceSharpness ?? this.faceSharpness,
     );
   }
@@ -69,6 +79,8 @@ class PortraitAnalysis {
         other.faceY == faceY &&
         other.faceW == faceW &&
         other.faceH == faceH &&
+        other.faceImageWidth == faceImageWidth &&
+        other.faceImageHeight == faceImageHeight &&
         other.faceSharpness == faceSharpness;
   }
 
@@ -82,6 +94,8 @@ class PortraitAnalysis {
         faceY.hashCode ^
         faceW.hashCode ^
         faceH.hashCode ^
+        faceImageWidth.hashCode ^
+        faceImageHeight.hashCode ^
         faceSharpness.hashCode;
   }
 }

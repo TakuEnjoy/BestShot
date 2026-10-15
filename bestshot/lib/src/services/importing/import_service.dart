@@ -5,13 +5,17 @@ import 'dart:typed_data';
 
 import 'package:exif/exif.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import '../../platform/ios_image_decoder.dart';
 import 'package:image/image.dart' as img;
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:path/path.dart' as p;
+import 'package:photo_manager/photo_manager.dart';
 
 import '../../models/photo_entry.dart';
 import '../../utils/jpeg_utils.dart';
 import '../analysis/analysis_types.dart';
+import '../deleting/ios_file_trash.dart';
 
 class ImportedItem {
   ImportedItem({
@@ -20,6 +24,7 @@ class ImportedItem {
     required this.displayBytes,
     this.assetId,
     this.filePath,
+    this.originalFilename,
     this.exifSummary,
   });
 
@@ -28,6 +33,7 @@ class ImportedItem {
   final Uint8List displayBytes;
   final String? assetId;
   final String? filePath;
+  final String? originalFilename;
   final ExifSummary? exifSummary;
 
   AnalyzeInput toAnalyzeInput() =>
@@ -50,6 +56,61 @@ img.Image _resizeKeepingAspect(img.Image src, int maxEdge) {
 }
 
 class ImportService {
+  /// PhotoKit supplies upright JPEG previews, including HEIC and iCloud assets.
+  /// Keep the asset ID (not a temporary file path) for PhotoKit deletion.
+  static Future<List<ImportedItem>> importAlbum(
+    AssetPathEntity album, {
+    required int maxCount,
+    void Function(int done, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    final assets = await album.getAssetListRange(start: 0, end: maxCount);
+    final imported = <ImportedItem>[];
+    for (var index = 0; index < assets.length; index++) {
+      if (isCancelled?.call() == true) break;
+      final asset = assets[index];
+      try {
+        final bytes = await asset.thumbnailDataWithOption(
+          ThumbnailOption.ios(
+            size: const ThumbnailSize(1920, 1920),
+            resizeContentMode: ResizeContentMode.fit,
+            format: ThumbnailFormat.jpeg,
+            quality: 95,
+          ),
+        );
+        if (bytes != null && bytes.isNotEmpty) {
+          String? filename = asset.title;
+          try {
+            filename ??= await asset.titleAsync;
+          } catch (_) {}
+          imported.add(
+            ImportedItem(
+              key: 'asset:${asset.id}',
+              origin: PhotoOrigin.deviceAsset,
+              assetId: asset.id,
+              originalFilename: filename,
+              displayBytes: bytes,
+              exifSummary: ExifSummary(
+                fNumber: null,
+                shutter: null,
+                iso: null,
+                capturedAt: asset.createDateTime,
+                imageWidth: asset.orientatedWidth,
+                imageHeight: asset.orientatedHeight,
+              ),
+            ),
+          );
+        }
+      } catch (error) {
+        debugPrint('[ImportService] PhotoKit asset unavailable: $error');
+      }
+      onProgress?.call(index + 1, assets.length);
+    }
+    if (imported.isEmpty && assets.isNotEmpty && isCancelled?.call() != true) {
+      throw StateError('写真を読み込めませんでした。iCloudの接続状態と写真へのアクセス許可を確認してください。');
+    }
+    return imported;
+  }
 
   static Future<FolderScanResult?> scanFolder(String dir) async {
     final directory = Directory(dir);
@@ -81,6 +142,11 @@ class ImportService {
       followLinks: false,
     )) {
       if (entity is! File) continue;
+      if (p
+          .split(p.relative(entity.path, from: dir))
+          .contains(IosFileTrash.directoryName)) {
+        continue;
+      }
       final ext = p.extension(entity.path).toLowerCase();
       if (!exts.contains(ext)) continue;
       targetFiles.add(entity);
@@ -177,13 +243,8 @@ class ImportService {
       } catch (_) {}
     }
 
-    final isMobile = Platform.isAndroid || Platform.isIOS;
-    final processorCount = Platform.numberOfProcessors;
-    // For large/RAW files: 1 worker on mobile, max 2 on desktop.
-    // For normal files: 2 workers on mobile, max 4 on desktop.
-    final maxWorkers = hasLargeOrRawFiles
-        ? (isMobile ? 1 : 2)
-        : (isMobile ? 2 : (processorCount ~/ 2).clamp(1, 4));
+    // Bound in-flight decoding for iPhone/iPad memory pressure.
+    final maxWorkers = hasLargeOrRawFiles ? 1 : 2;
     final workerCount = files.length < maxWorkers ? files.length : maxWorkers;
     final chunkSize = hasLargeOrRawFiles ? 2 : 4;
 
@@ -201,6 +262,7 @@ class ImportService {
     });
 
     var firstError = '';
+    final rootToken = RootIsolateToken.instance;
 
     Future<void> worker() async {
       while (true) {
@@ -220,13 +282,21 @@ class ImportService {
         final sendPort = receivePort.sendPort;
 
         try {
-          final task = _createIsolateTask(chunkPaths, sendPort, rawExts, thumbnailMaxEdge);
+          final task = _createIsolateTask(
+            chunkPaths,
+            sendPort,
+            rawExts,
+            thumbnailMaxEdge,
+            rootToken,
+          );
           final results = await Isolate.run(task);
 
           for (final res in results) {
             if (res != null) {
               if (res.error != null) {
-                if (firstError.isEmpty) firstError = 'File: ${res.path}\nError: ${res.error}';
+                if (firstError.isEmpty) {
+                  firstError = 'File: ${res.path}\nError: ${res.error}';
+                }
                 debugPrint('Error processing ${res.path}: ${res.error}');
               } else if (res.jpg != null) {
                 out.add(
@@ -311,8 +381,12 @@ Future<ExifSummary?> _readExifSummary(File f) async {
       return int.tryParse(val.replaceAll(RegExp(r'[^\d]'), ''));
     }
 
-    final imgW = parseIntTag(getTag('EXIF ExifImageWidth') ?? getTag('Image ImageWidth'));
-    final imgH = parseIntTag(getTag('EXIF ExifImageLength') ?? getTag('Image ImageLength'));
+    final imgW = parseIntTag(
+      getTag('EXIF ExifImageWidth') ?? getTag('Image ImageWidth'),
+    );
+    final imgH = parseIntTag(
+      getTag('EXIF ExifImageLength') ?? getTag('Image ImageLength'),
+    );
 
     return ExifSummary(
       fNumber: fnum,
@@ -451,8 +525,12 @@ Future<List<_ImportPayload?>> Function() _createIsolateTask(
   SendPort sendPort,
   Set<String> rawExts,
   int thumbnailMaxEdge,
+  RootIsolateToken? rootToken,
 ) {
   return () async {
+    if (rootToken != null) {
+      BackgroundIsolateBinaryMessenger.ensureInitialized(rootToken);
+    }
     final chunkOut = <_ImportPayload?>[];
     for (final path in chunkPaths) {
       final f = File(path);
@@ -460,7 +538,12 @@ Future<List<_ImportPayload?>> Function() _createIsolateTask(
         final ext = p.extension(f.path).toLowerCase();
         Uint8List decodeSource;
 
-        if (rawExts.contains(ext)) {
+        if (IosImageDecoder.needsNativeDecoder(path)) {
+          decodeSource = await IosImageDecoder.decode(
+            path,
+            maxEdge: thumbnailMaxEdge,
+          );
+        } else if (rawExts.contains(ext)) {
           // Priority thumbnail extraction:
           // In RAW files (DNG, NEF, ARW, CR2, CR3), embedded preview JPEG is almost always
           // in the first 8MB header. Reading only the first 8MB avoids reading 50-100MB into RAM!
@@ -503,10 +586,17 @@ Future<List<_ImportPayload?>> Function() _createIsolateTask(
             cv.Mat targetMat = mat;
             if (maxDim > thumbnailMaxEdge) {
               final scale = thumbnailMaxEdge / maxDim;
-              targetMat = cv.resize(mat, ((mat.cols * scale).round(), (mat.rows * scale).round()));
+              targetMat = cv.resize(mat, (
+                (mat.cols * scale).round(),
+                (mat.rows * scale).round(),
+              ));
               mat.dispose();
             }
-            final (success, encBytes) = cv.imencode('.jpg', targetMat, params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, 85]));
+            final (success, encBytes) = cv.imencode(
+              '.jpg',
+              targetMat,
+              params: cv.VecI32.fromList([cv.IMWRITE_JPEG_QUALITY, 85]),
+            );
             targetMat.dispose();
             if (success) {
               thumbJpg = encBytes;
@@ -519,17 +609,18 @@ Future<List<_ImportPayload?>> Function() _createIsolateTask(
         if (thumbJpg == null) {
           final decoded = img.decodeImage(decodeSource);
           if (decoded == null) {
-            chunkOut.add(_ImportPayload(
+            chunkOut.add(
+              _ImportPayload(
                 path: f.path,
-                error: 'decodeImage returned null (format not supported)'));
+                error: 'decodeImage returned null (format not supported)',
+              ),
+            );
             sendPort.send(1);
             continue;
           }
           final upright = img.bakeOrientation(decoded);
           final resized = _resizeKeepingAspect(upright, thumbnailMaxEdge);
-          thumbJpg = Uint8List.fromList(
-            img.encodeJpg(resized, quality: 85),
-          );
+          thumbJpg = Uint8List.fromList(img.encodeJpg(resized, quality: 85));
         }
 
         final exifSummary = await _readExifSummary(f);

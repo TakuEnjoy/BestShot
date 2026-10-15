@@ -3,6 +3,8 @@ part of '../groups_screen.dart';
 class _ExpandableGroupCard extends StatelessWidget {
   const _ExpandableGroupCard({
     required this.group,
+    this.displayName,
+    this.reviewSession,
     required this.selectedForDelete,
     required this.onToggleDelete,
     required this.loupeSelection,
@@ -22,6 +24,8 @@ class _ExpandableGroupCard extends StatelessWidget {
   });
 
   final PhotoGroup group;
+  final String? displayName;
+  final ReviewSession? reviewSession;
   final Set<String> selectedForDelete;
   final ValueListenable<Set<String>>? selectedForDeleteListenable;
   final void Function(String key, bool selected) onToggleDelete;
@@ -75,7 +79,9 @@ class _ExpandableGroupCard extends StatelessWidget {
       orElse: () => group.items.first,
     );
 
-    final deleteCountInGroup = group.items.where((e) => selectedForDelete.contains(e.key)).length;
+    final deleteCountInGroup = group.items
+        .where((e) => selectedForDelete.contains(e.key))
+        .length;
     final matchRate = group.geometricMatchRate;
     final pHashRate = _getPHashSimilarity();
     final timeStr = group.timeRange;
@@ -90,7 +96,9 @@ class _ExpandableGroupCard extends StatelessWidget {
           border: Border.all(
             color: isKeyboardGroupFocused
                 ? BestShotTheme.accentBlue
-                : (group.needsReview ? BestShotTheme.accentRed : BestShotTheme.dividerColor),
+                : (group.needsReview
+                      ? BestShotTheme.accentRed
+                      : BestShotTheme.dividerColor),
             width: isKeyboardGroupFocused ? 2.0 : 1.0,
           ),
         ),
@@ -116,223 +124,269 @@ class _ExpandableGroupCard extends StatelessWidget {
                       color: BestShotTheme.hoverColor,
                       textColor: BestShotTheme.accentBlue,
                     ),
-                  if (group.bestKey.isNotEmpty)
-                    const _Badge(
-                      label: '⭐ Best済',
-                      color: Color(0xFF332600),
-                      textColor: BestShotTheme.accentGold,
-                    ),
-                  if (selectedForDeleteListenable != null)
-                    ValueListenableBuilder<Set<String>>(
-                      valueListenable: selectedForDeleteListenable!,
-                      builder: (context, selected, _) {
-                        final count = group.items.where((e) => selected.contains(e.key)).length;
-                        if (count == 0) return const SizedBox.shrink();
-                        return _Badge(
-                          label: '🟡 削除予定 $count枚',
-                          color: const Color(0xFF330018),
-                          textColor: BestShotTheme.accentRed,
-                        );
-                      },
-                    )
-                  else if (deleteCountInGroup > 0)
-                    _Badge(
-                      label: '🟡 削除予定 $deleteCountInGroup枚',
-                      color: const Color(0xFF330018),
-                      textColor: BestShotTheme.accentRed,
-                    ),
-                  if (group.needsReview)
-                    const _Badge(
-                      label: '⚠ 要確認',
-                      color: Color(0xFF330018),
-                      textColor: BestShotTheme.accentRed,
-                    ),
-                ];
-
-                final idWidget = Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: isKeyboardGroupFocused
-                        ? BestShotTheme.accentBlue
-                        : BestShotTheme.hoverColor,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                  child: Text(
-                    '#${group.id}',
-                    style: TextStyle(
-                      color: isKeyboardGroupFocused
-                          ? BestShotTheme.backgroundPrimary
-                          : BestShotTheme.textPrimary,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                );
-
-                final countWidget = Text(
-                  '${group.items.length}枚',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: BestShotTheme.textPrimary,
-                  ),
-                );
-
-                final selectBestBtn = OutlinedButton.icon(
-                  onPressed: onSelectBestOnly,
-                  icon: const Icon(Icons.playlist_remove, size: 14, color: BestShotTheme.accentRed),
-                  label: const Text(
-                    'Best以外を削除候補に',
-                    style: TextStyle(fontSize: 11, color: BestShotTheme.textPrimary),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    side: const BorderSide(color: BestShotTheme.dividerColor, width: 1),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                    backgroundColor: BestShotTheme.surfaceColor,
-                  ),
-                );
-
-                final detailBtn = onOpenDetail != null
-                    ? IconButton(
-                        icon: const Icon(Icons.analytics_outlined, size: 16, color: BestShotTheme.textSecondary),
-                        tooltip: '詳細スコア・EXIF分析',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                        onPressed: onOpenDetail,
+                    if (group.bestKey.isNotEmpty)
+                      const _Badge(
+                        label: '⭐ Best済',
+                        color: Color(0xFF332600),
+                        textColor: BestShotTheme.accentGold,
+                      ),
+                    if (selectedForDeleteListenable != null)
+                      ValueListenableBuilder<Set<String>>(
+                        valueListenable: selectedForDeleteListenable!,
+                        builder: (context, selected, _) {
+                          final count = group.items
+                              .where((e) => selected.contains(e.key))
+                              .length;
+                          if (count == 0) return const SizedBox.shrink();
+                          return _Badge(
+                            label: '🟡 削除予定 $count枚',
+                            color: const Color(0xFF330018),
+                            textColor: BestShotTheme.accentRed,
+                          );
+                        },
                       )
-                    : null;
+                    else if (deleteCountInGroup > 0)
+                      _Badge(
+                        label: '🟡 削除予定 $deleteCountInGroup枚',
+                        color: const Color(0xFF330018),
+                        textColor: BestShotTheme.accentRed,
+                      ),
+                    if (group.needsReview)
+                      const _Badge(
+                        label: '⚠ 要確認',
+                        color: Color(0xFF330018),
+                        textColor: BestShotTheme.accentRed,
+                      ),
+                  ];
 
-                if (isCompact) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
+                  final idWidget = Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isKeyboardGroupFocused
+                          ? BestShotTheme.accentBlue
+                          : BestShotTheme.hoverColor,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                    child: Text(
+                      displayName ?? '#${group.id}',
+                      style: TextStyle(
+                        color: isKeyboardGroupFocused
+                            ? BestShotTheme.backgroundPrimary
+                            : BestShotTheme.textPrimary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  );
+
+                  final countWidget = Text(
+                    '${group.items.length}枚',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: BestShotTheme.textPrimary,
+                    ),
+                  );
+
+                  final selectBestBtn = OutlinedButton.icon(
+                    onPressed: onSelectBestOnly,
+                    icon: const Icon(
+                      Icons.playlist_remove,
+                      size: 14,
+                      color: BestShotTheme.accentRed,
+                    ),
+                    label: const Text(
+                      'Best以外を削除候補に',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: BestShotTheme.textPrimary,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      side: const BorderSide(
+                        color: BestShotTheme.dividerColor,
+                        width: 1,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      backgroundColor: BestShotTheme.surfaceColor,
+                    ),
+                  );
+
+                  final detailBtn = onOpenDetail != null
+                      ? IconButton(
+                          icon: const Icon(
+                            Icons.analytics_outlined,
+                            size: 16,
+                            color: BestShotTheme.textSecondary,
+                          ),
+                          tooltip: '詳細スコア・EXIF分析',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 28,
+                            minHeight: 28,
+                          ),
+                          onPressed: onOpenDetail,
+                        )
+                      : null;
+
+                  if (isCompact) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            idWidget,
+                            countWidget,
+                            selectBestBtn,
+                            ?detailBtn,
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(spacing: 6, runSpacing: 4, children: badges),
+                      ],
+                    );
+                  }
+
+                  return Row(
                     children: [
-                      Row(
-                        children: [
-                          idWidget,
-                          const SizedBox(width: 8),
-                          countWidget,
-                          const SizedBox(width: 10),
-                          selectBestBtn,
-                          const Spacer(),
-                          ?detailBtn,
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
-                        children: badges,
-                      ),
+                      idWidget,
+                      const SizedBox(width: 8),
+                      countWidget,
+                      const SizedBox(width: 10),
+                      selectBestBtn,
+                      const SizedBox(width: 8),
+                      for (final b in badges) ...[b, const SizedBox(width: 6)],
+                      const Spacer(),
+                      ?detailBtn,
                     ],
                   );
-                }
+                },
+              ),
+              const SizedBox(height: 6),
 
-                return Row(
-                  children: [
-                    idWidget,
-                    const SizedBox(width: 8),
-                    countWidget,
-                    const SizedBox(width: 10),
-                    selectBestBtn,
-                    const SizedBox(width: 8),
-                    for (final b in badges) ...[
-                      b,
-                      const SizedBox(width: 6),
-                    ],
-                    const Spacer(),
-                    ?detailBtn,
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 6),
-
-            // 2. メタデータ行 (撮影時刻, 連写秒数, 最高鮮鋭度)
-            Wrap(
-              spacing: 12,
-              runSpacing: 4,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (timeStr.isNotEmpty)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.access_time, size: 12, color: BestShotTheme.textSecondary),
-                      const SizedBox(width: 4),
-                      Text(
-                        timeStr,
-                        style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
-                      ),
-                    ],
-                  ),
-                if (group.isBurst)
-                  Text(
-                    burstStr,
-                    style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
-                  ),
-                Text(
-                  'pHash: $pHashRate%',
-                  style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
-                ),
-                Text(
-                  '最高鮮明度: ${best.sharpness.toStringAsFixed(0)}',
-                  style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-
-            // 3. 写真の水平配置リスト (各150x150、間隔8dp)
-            SizedBox(
-              height: 150,
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (final e in group.items) ...[
-                      SizedBox(
-                        width: 150,
-                        child: _PhotoTile(
-                          itemKey: e.key,
-                          selectedForDeleteListenable: selectedForDeleteListenable,
-                          bytes: e.displayBytes,
-                          sharpness: e.sharpness,
-                          exposureScore: e.exposureScore,
-                          faceQualityScore: e.faceQualityScore,
-                          exifText: e.exifText,
-                          isBest: e.key == group.bestKey,
-                          selectedForDelete: selectedForDelete.contains(e.key),
-                          isProcessing: processingKeys.contains(e.key),
-                          onChanged: (v) {
-                            onPhotoTileFocused(e.key);
-                            onToggleDelete(e.key, v);
-                          },
-                          onSetBest: () => onSetBest(e.key),
-                          onOpenLoupe: () {
-                            onPhotoTileFocused(e.key);
-                            onOpenLoupeForPhoto?.call(e.key);
-                          },
-                          loupeSelected: loupeSelection.contains(e.key),
-                          onToggleLoupe: () {
-                            onPhotoTileFocused(e.key);
-                            onToggleLoupe(e.key);
-                          },
-                          isKeyboardFocused: e.key == keyboardPhotoKey,
-                          sortFolder: selectedSortFolders[e.key],
-                          customFolders: customFolders,
-                          onSortFolderChanged: (folder) {
-                            onPhotoTileFocused(e.key);
-                            onSortFolderChanged(e.key, folder);
-                          },
+              // 2. メタデータ行 (撮影時刻, 連写秒数, 最高鮮鋭度)
+              Wrap(
+                spacing: 12,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  if (timeStr.isNotEmpty)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.access_time,
+                          size: 12,
+                          color: BestShotTheme.textSecondary,
                         ),
+                        const SizedBox(width: 4),
+                        Text(
+                          timeStr,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: BestShotTheme.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  if (group.isBurst)
+                    Text(
+                      burstStr,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: BestShotTheme.textSecondary,
                       ),
-                      if (e != group.items.last) const SizedBox(width: 8),
+                    ),
+                  Text(
+                    'pHash: $pHashRate%',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: BestShotTheme.textSecondary,
+                    ),
+                  ),
+                  Text(
+                    '最高鮮明度: ${best.sharpness.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: BestShotTheme.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              // 3. 写真の水平配置リスト (各150x150、間隔8dp)
+              SizedBox(
+                height: 150,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (var i = 0; i < group.items.length; i++) ...[
+                        if (i > 0) const SizedBox(width: 8),
+                        SizedBox(
+                          width: 150,
+                          child: _PhotoTile(
+                            reviewLabel:
+                                reviewSession?.label(group.items[i].key) ?? '',
+                            itemKey: group.items[i].key,
+                            selectedForDeleteListenable:
+                                selectedForDeleteListenable,
+                            bytes: group.items[i].displayBytes,
+                            sharpness: group.items[i].sharpness,
+                            exposureScore: group.items[i].exposureScore,
+                            faceQualityScore: group.items[i].faceQualityScore,
+                            exifText: group.items[i].exifText,
+                            isBest: group.items[i].key == group.bestKey,
+                            selectedForDelete: selectedForDelete.contains(
+                              group.items[i].key,
+                            ),
+                            isProcessing: processingKeys.contains(
+                              group.items[i].key,
+                            ),
+                            onChanged: (v) {
+                              onPhotoTileFocused(group.items[i].key);
+                              onToggleDelete(group.items[i].key, v);
+                            },
+                            onSetBest: () => onSetBest(group.items[i].key),
+                            onOpenLoupe: () {
+                              onPhotoTileFocused(group.items[i].key);
+                              onOpenLoupeForPhoto?.call(group.items[i].key);
+                            },
+                            loupeSelected: loupeSelection.contains(
+                              group.items[i].key,
+                            ),
+                            onToggleLoupe: () {
+                              onPhotoTileFocused(group.items[i].key);
+                              onToggleLoupe(group.items[i].key);
+                            },
+                            isKeyboardFocused:
+                                group.items[i].key == keyboardPhotoKey,
+                            sortFolder: selectedSortFolders[group.items[i].key],
+                            customFolders: customFolders,
+                            onSortFolderChanged: (folder) {
+                              onPhotoTileFocused(group.items[i].key);
+                              onSortFolderChanged(group.items[i].key, folder);
+                            },
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
                   ),
                 ),
               ),

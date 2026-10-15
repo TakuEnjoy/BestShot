@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
+import '../platform/ios_folder_picker.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,9 @@ import 'package:path/path.dart' as p;
 
 import '../models/photo_entry.dart';
 import '../models/photo_group.dart';
+import '../models/review_session.dart';
+import '../services/review_session_store.dart';
+import 'review_tools_screen.dart';
 import '../services/analysis/analysis_types.dart';
 import '../services/deleting/delete_service.dart';
 import '../services/sorting/sort_service.dart';
@@ -22,16 +26,19 @@ part 'groups/expandable_group_card.dart';
 part 'groups/delete_review_screen.dart';
 part 'groups/photo_tile.dart';
 part 'groups/badge.dart';
+part 'groups/portrait_card_tile.dart';
 
 class GroupsScreen extends StatefulWidget {
   const GroupsScreen({
     super.key,
     required this.groups,
     required this.detectionMode,
+    this.reviewSession,
   });
 
   final List<PhotoGroup> groups;
   final DetectionMode detectionMode;
+  final ReviewSession? reviewSession;
 
   @override
   State<GroupsScreen> createState() => _GroupsScreenState();
@@ -44,8 +51,117 @@ class _GroupsScreenState extends State<GroupsScreen> {
   Set<String> get _selectedForDelete => _selectedForDeleteNotifier.value;
   final List<String> _loupeSelection = [];
   late List<PhotoGroup> _groups;
+  late ReviewSession _review;
+  bool _savingReview = false;
+
+  void _sanitizeDeleteSelection() {
+    final safe = _selectedForDelete.where(_review.canDelete).toSet();
+    if (safe.length != _selectedForDelete.length) {
+      _selectedForDeleteNotifier.value = safe;
+    }
+  }
+
+  void _captureReview() {
+    _review.groups = _groups;
+    _review.folders
+      ..clear()
+      ..addAll(_selectedSortFolders);
+    _review.customFolders
+      ..clear()
+      ..addAll(_customFolders);
+    _review.deleteKeys
+      ..clear()
+      ..addAll(_selectedForDelete.where(_review.canDelete));
+    _review.comparisonKeys
+      ..clear()
+      ..addAll(_loupeSelection);
+    final photos = _filteredPortraitItems;
+    _review.activeKey =
+        widget.detectionMode == DetectionMode.portrait && photos.isNotEmpty
+        ? photos[_keyboardPortraitIndex.clamp(0, photos.length - 1)].key
+        : _keyboardPhotoKey;
+  }
+
+  Future<void> _saveReview() async {
+    if (_processingKeys.isNotEmpty || _savingReview) return;
+    _captureReview();
+    setState(() => _savingReview = true);
+    try {
+      final saved = await ReviewSessionStore.save(_review);
+      if (mounted && saved) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('選別作業を保存しました。写真本体は元の場所に保持してください。')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存できませんでした: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _savingReview = false);
+    }
+  }
+
+  Future<void> _editReview() async {
+    if (_processingKeys.isNotEmpty) return;
+    _captureReview();
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => ReviewToolsScreen(session: _review)),
+    );
+    if (!mounted) return;
+    setState(() {
+      _groups = _review.sortedGroups(_review.groups);
+      _selectedForDeleteNotifier.value = Set.of(
+        _review.deleteKeys.where(_review.canDelete),
+      );
+      _syncEntryByKey();
+      _lastGroupsRef = null;
+      _sortedPortraitItems = null;
+      _applyOrder(activeKey: _review.activeKey);
+      _clampKeyboardIndices();
+    });
+  }
+
+  void _applyOrder({
+    GroupOrder? groupOrder,
+    PhotoOrder? photoOrder,
+    String? activeKey,
+  }) {
+    final photos = _filteredPortraitItems;
+    final active =
+        activeKey ??
+        (widget.detectionMode == DetectionMode.portrait && photos.isNotEmpty
+            ? photos[_keyboardPortraitIndex.clamp(0, photos.length - 1)].key
+            : _keyboardPhotoKey);
+    if (groupOrder != null) _review.groupOrder = groupOrder;
+    if (photoOrder != null) _review.photoOrder = photoOrder;
+    _review.groups = _groups;
+    _groups = _review.sortedGroups(_groups);
+    _review.groups = _groups;
+    _lastGroupsRef = null;
+    _sortedPortraitItems = null;
+    if (active != null) {
+      _keyboardPhotoKey = active;
+      final groupIndex = _groups.indexWhere(
+        (g) => g.items.any((e) => e.key == active),
+      );
+      if (groupIndex >= 0) _keyboardGroupIndex = groupIndex;
+      final photoIndex = _filteredPortraitItems.indexWhere(
+        (e) => e.key == active,
+      );
+      if (photoIndex >= 0) _keyboardPortraitIndex = photoIndex;
+    }
+  }
 
   void _toggleDelete(String key, [bool? select]) {
+    if (!_review.canDelete(key)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('保護・残す・保留の写真は削除候補にできません')));
+      return;
+    }
     final current = _selectedForDeleteNotifier.value;
     final next = Set<String>.from(current);
     final shouldSelect = select ?? !next.contains(key);
@@ -68,6 +184,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       }
       _sortedPortraitItems = null;
       _lastGroupsRef = null; // force filtered groups recalculation
+      _review.groups = _groups;
     });
   }
 
@@ -93,6 +210,22 @@ class _GroupsScreenState extends State<GroupsScreen> {
   List<PhotoGroup>? _lastGroupsRef;
 
   List<PhotoGroup> get _filteredGroups {
+    return _review.sortedGroups(
+      _baseFilteredGroups.where(
+        (g) =>
+            (!_review.unreviewedOnly ||
+                !_review.reviewedGroupIds.contains(g.id)) &&
+            (_review.decisionFilter == null ||
+                g.items.any(
+                  (e) =>
+                      (_review.decisions[e.key] ?? PhotoDecision.undecided) ==
+                      _review.decisionFilter,
+                )),
+      ),
+    );
+  }
+
+  List<PhotoGroup> get _baseFilteredGroups {
     if (_cachedFilteredGroups != null &&
         identical(_lastGroupsRef, _groups) &&
         _lastFilterQuery == _filterQuery &&
@@ -113,15 +246,22 @@ class _GroupsScreenState extends State<GroupsScreen> {
       if (_filterBurstOnly && !g.isBurst) return false;
       if (_filterReviewOnly && !g.needsReview) return false;
       if (q.isNotEmpty) {
-        final matchesId = g.id.toLowerCase().contains(q);
-        final matchesItem = g.items.any((e) => (e.filePath ?? '').toLowerCase().contains(q));
+        final matchesId =
+            g.id.toLowerCase().contains(q) ||
+            _review.name(g).toLowerCase().contains(q);
+        final matchesItem = g.items.any(
+          (e) => (e.originalFilename ?? e.filePath ?? '')
+              .toLowerCase()
+              .contains(q),
+        );
         if (!matchesId && !matchesItem) return false;
       }
       return true;
     }).toList();
   }
 
-  int get _recommendedBestCount => _groups.where((g) => g.bestKey.isNotEmpty).length;
+  int get _recommendedBestCount =>
+      _groups.where((g) => g.bestKey.isNotEmpty).length;
 
   // Keyboard focus management
   late final FocusNode _focusNode;
@@ -142,6 +282,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
     });
 
     _groups = List.of(widget.groups);
+    _review =
+        widget.reviewSession ??
+        ReviewSession(groups: _groups, mode: widget.detectionMode);
+    _groups = _review.sortedGroups(_review.groups);
+    _review.groups = _groups;
+    _selectedSortFolders.addAll(_review.folders);
+    _customFolders.addAll(_review.customFolders);
+    _loupeSelection.addAll(_review.comparisonKeys);
 
     _entryByKey = {
       for (final g in _groups)
@@ -149,25 +297,57 @@ class _GroupsScreenState extends State<GroupsScreen> {
     };
     // Initially do not pre-select items for delete; let the user select manually
     _selectedForDeleteNotifier = ValueNotifier<Set<String>>(<String>{});
+    _selectedForDeleteNotifier.addListener(_sanitizeDeleteSelection);
+    _selectedForDeleteNotifier.value = Set.of(
+      _review.deleteKeys.where(_review.canDelete),
+    );
 
     // Initialize keyboard photo focus to the first bestKey
     if (_groups.isNotEmpty) {
       _keyboardPhotoKey = _groups.first.bestKey;
+      if (_review.activeKey != null &&
+          _entryByKey.containsKey(_review.activeKey)) {
+        _keyboardPhotoKey = _review.activeKey;
+        _keyboardGroupIndex = _groups.indexWhere(
+          (g) => g.items.any((e) => e.key == _keyboardPhotoKey),
+        );
+        final portraitIndex = _filteredPortraitItems.indexWhere(
+          (e) => e.key == _review.activeKey,
+        );
+        if (portraitIndex >= 0) _keyboardPortraitIndex = portraitIndex;
+      }
     }
   }
 
   @override
   void didUpdateWidget(GroupsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.groups != widget.groups) {
+    if (oldWidget.groups != widget.groups ||
+        oldWidget.reviewSession != widget.reviewSession ||
+        oldWidget.detectionMode != widget.detectionMode) {
       _groups = List.of(widget.groups);
-      _entryByKey.clear();
-      for (final g in _groups) {
-        for (final e in g.items) {
-          _entryByKey[e.key] = e;
-        }
-      }
+      _review =
+          widget.reviewSession ??
+          ReviewSession(groups: _groups, mode: widget.detectionMode);
+      _groups = _review.sortedGroups(_review.groups);
+      _selectedSortFolders
+        ..clear()
+        ..addAll(_review.folders);
+      _customFolders
+        ..clear()
+        ..addAll(_review.customFolders);
+      _loupeSelection
+        ..clear()
+        ..addAll(_review.comparisonKeys);
+      _syncEntryByKey();
+      _selectedForDeleteNotifier.value = Set.of(
+        _review.deleteKeys.where(
+          (key) => _entryByKey.containsKey(key) && _review.canDelete(key),
+        ),
+      );
+      _lastGroupsRef = null;
       _sortedPortraitItems = null;
+      _applyOrder(activeKey: _review.activeKey);
       _clampKeyboardIndices();
     }
   }
@@ -179,6 +359,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
         _entryByKey[e.key] = e;
       }
     }
+    _review.groups = _groups;
+    _review.decisions.removeWhere((key, _) => !_entryByKey.containsKey(key));
+    _review.protectedKeys.removeWhere((key) => !_entryByKey.containsKey(key));
+    _review.reviewedGroupIds.removeWhere(
+      (id) => !_groups.any((g) => g.id == id),
+    );
+    _selectedSortFolders.removeWhere((key, _) => !_entryByKey.containsKey(key));
+    _loupeSelection.removeWhere((key) => !_entryByKey.containsKey(key));
   }
 
   @override
@@ -200,14 +388,39 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (_keyboardGroupIndex >= _groups.length) {
       _keyboardGroupIndex = _groups.length - 1;
     }
-    // Note: _sortedPortraitItems is not available here easily without state,
-    // so _keyboardPortraitIndex clamp might need to happen elsewhere if needed.
+    final g = _groups[_keyboardGroupIndex];
+    if (_keyboardPhotoKey != null &&
+        !g.items.any((e) => e.key == _keyboardPhotoKey)) {
+      _keyboardPhotoKey = g.bestKey;
+    }
+    final pItems = _getPortraitItems();
+    if (pItems.isNotEmpty && _keyboardPortraitIndex >= pItems.length) {
+      _keyboardPortraitIndex = pItems.length - 1;
+    }
+  }
+
+  PhotoGroup? _findGroupByPhotoKey(String photoKey) {
+    for (final g in _groups) {
+      for (final it in g.items) {
+        if (it.key == photoKey) return g;
+      }
+    }
+    return null;
+  }
+
+  int _getPortraitCrossAxisCount(double width) {
+    if (width >= 1400) return 5;
+    if (width >= 1100) return 4;
+    if (width >= 750) return 3;
+    return 2;
   }
 
   List<PhotoEntry> _getPortraitItems() {
-    if (widget.detectionMode != DetectionMode.portrait) return const <PhotoEntry>[];
+    if (widget.detectionMode != DetectionMode.portrait) {
+      return const <PhotoEntry>[];
+    }
     if (_sortedPortraitItems != null) return _sortedPortraitItems!;
-    
+
     final items = _entryByKey.values.toList();
     items.sort((a, b) {
       final fa = a.portrait.hasFace ? 0 : 1;
@@ -222,8 +435,49 @@ class _GroupsScreenState extends State<GroupsScreen> {
     return items;
   }
 
+  List<PhotoEntry> get _filteredPortraitItems {
+    final all = _review
+        .sortedPhotos(_getPortraitItems())
+        .where(
+          (e) =>
+              (!_review.unreviewedOnly ||
+                  !_review.reviewedGroupIds.contains(
+                    _findGroupByPhotoKey(e.key)?.id,
+                  )) &&
+              (_review.decisionFilter == null ||
+                  (_review.decisions[e.key] ?? PhotoDecision.undecided) ==
+                      _review.decisionFilter),
+        )
+        .toList();
+    if (_filterQuery.isEmpty && !_filterBurstOnly && !_filterReviewOnly) {
+      return all;
+    }
+    return all.where((e) {
+      if (_filterBurstOnly) {
+        final group = _findGroupByPhotoKey(e.key);
+        if (group == null || !group.isBurst) return false;
+      }
+      if (_filterReviewOnly) {
+        final group = _findGroupByPhotoKey(e.key);
+        final needsReview =
+            e.portrait.eyesClosed || (group != null && group.needsReview);
+        if (!needsReview) return false;
+      }
+      if (_filterQuery.isNotEmpty) {
+        final q = _filterQuery.toLowerCase();
+        final matchesName =
+            (e.originalFilename ?? e.filePath ?? '').toLowerCase().contains(
+              q,
+            ) ||
+            e.key.toLowerCase().contains(q);
+        if (!matchesName) return false;
+      }
+      return true;
+    }).toList();
+  }
+
   Future<void> _exportBestShots() async {
-    final selectedDirectory = await FilePicker.getDirectoryPath();
+    final selectedDirectory = await IosFolderPicker.pick();
     if (selectedDirectory == null) return; // Cancelled
 
     if (!mounted) return;
@@ -255,8 +509,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
           orElse: () => group.items.first,
         );
 
-        final sourcePath = bestItem.filePath;
-        if (sourcePath == null) continue;
+        final asset = bestItem.assetId == null
+            ? null
+            : await AssetEntity.fromId(bestItem.assetId!);
+        final sourcePath = bestItem.filePath ?? (await asset?.originFile)?.path;
+        if (sourcePath == null) {
+          throw StateError('書き出す元の写真を読み込めませんでした。iCloud接続を確認してください。');
+        }
         final file = File(sourcePath);
         if (await file.exists()) {
           final filename = p.basename(sourcePath);
@@ -267,7 +526,10 @@ class _GroupsScreenState extends State<GroupsScreen> {
           final nameWithoutExt = p.basenameWithoutExtension(sourcePath);
           final ext = p.extension(sourcePath);
           while (await File(finalDestPath).exists()) {
-            finalDestPath = p.join(selectedDirectory, '${nameWithoutExt}_$suffix$ext');
+            finalDestPath = p.join(
+              selectedDirectory,
+              '${nameWithoutExt}_$suffix$ext',
+            );
             suffix++;
           }
 
@@ -303,7 +565,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
   Future<void> _reviewAndDelete() async {
     // 処理中のファイルを除外した削除候補を抽出
     final targets = _selectedForDelete
-        .where((k) => !_processingKeys.contains(k))
+        .where((k) => !_processingKeys.contains(k) && _review.canDelete(k))
         .toList();
 
     if (targets.isEmpty) return;
@@ -311,7 +573,10 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final result = await Navigator.of(context).push<bool>(
       FastRoute<bool>(
         builder: (context) => DeleteReviewScreen(
-          items: targets.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList(),
+          items: targets
+              .map((k) => _entryByKey[k])
+              .whereType<PhotoEntry>()
+              .toList(),
           onRemoveFromDelete: (key) {
             _toggleDelete(key, false);
           },
@@ -323,14 +588,19 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (result == true) {
       // 念のため、実行直前に再度処理中のキーが混入していないかダブルチェック
       final finalTargets = targets
-          .where((k) => !_processingKeys.contains(k))
+          .where(
+            (k) =>
+                !_processingKeys.contains(k) &&
+                _selectedForDelete.contains(k) &&
+                _review.canDelete(k),
+          )
           .toList();
 
       if (finalTargets.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('選択された写真はすでに処理中です。')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('選択された写真はすでに処理中です。')));
         }
         return;
       }
@@ -338,7 +608,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
       setState(() {
         _processingKeys.addAll(finalTargets);
       });
-      _selectedForDeleteNotifier.value = Set<String>.from(_selectedForDelete)..removeAll(finalTargets);
+      _selectedForDeleteNotifier.value = Set<String>.from(_selectedForDelete)
+        ..removeAll(finalTargets);
 
       final taskId = 'delete_${DateTime.now().millisecondsSinceEpoch}';
       final task = _BackgroundTask(
@@ -361,6 +632,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     List<String> targets,
   ) async {
     final entries = targets
+        .where(_review.canDelete)
         .map((k) => _entryByKey[k])
         .whereType<PhotoEntry>()
         .toList();
@@ -375,19 +647,35 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
       if (mounted) {
         setState(() {
-          for (final entry in result.success) {
-            for (var i = 0; i < _groups.length; i++) {
-              final g = _groups[i];
-              if (g.items.any((item) => item.key == entry.key)) {
-                final newItems = g.items.where((item) => item.key != entry.key).toList();
-                _groups[i] = g.copyWith(items: newItems);
+          final removedKeys = result.success.map((e) => e.key).toSet();
+          if (removedKeys.isNotEmpty) {
+            final updatedGroups = <PhotoGroup>[];
+            for (final g in _groups) {
+              final remainingItems = g.items
+                  .where((item) => !removedKeys.contains(item.key))
+                  .toList();
+              if (remainingItems.isNotEmpty) {
+                final newBestKey =
+                    remainingItems.any((item) => item.key == g.bestKey)
+                    ? g.bestKey
+                    : remainingItems.first.key;
+                final remainingDeleteCandidates = g.deleteCandidateKeys
+                    .where((k) => !removedKeys.contains(k))
+                    .toSet();
+                updatedGroups.add(
+                  g.copyWith(
+                    items: remainingItems,
+                    bestKey: newBestKey,
+                    deleteCandidateKeys: remainingDeleteCandidates,
+                  ),
+                );
               }
             }
+            _groups = updatedGroups;
+            _syncEntryByKey();
+            _sortedPortraitItems = null;
+            _clampKeyboardIndices();
           }
-          _groups.removeWhere((g) => g.items.isEmpty);
-          _syncEntryByKey();
-          _sortedPortraitItems = null;
-          _clampKeyboardIndices();
         });
 
         if (result.isAllSuccess) {
@@ -396,7 +684,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
           );
         } else {
           final failedTotal = result.failed.length + result.unprocessed.length;
-          final detail = result.errorMessage != null ? '\n詳細: ${result.errorMessage}' : '';
+          final detail = result.errorMessage != null
+              ? '\n詳細: ${result.errorMessage}'
+              : '';
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
@@ -410,9 +700,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('削除処理エラー: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('削除処理エラー: $e')));
       }
     } finally {
       _processingKeys.removeAll(targets);
@@ -428,28 +718,20 @@ class _GroupsScreenState extends State<GroupsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scrollController.hasClients) return;
       final size = MediaQuery.of(context).size;
-      final isWide = size.width >= 750;
-      final isMobile = size.width < 600;
-      final crossAxisCount = size.width >= 1100 ? 3 : (size.width >= 750 ? 2 : 1);
+      final crossAxisCount = size.width >= 1100
+          ? 3
+          : (size.width >= 750 ? 2 : 1);
 
       if (isPortrait) {
-        double targetOffset;
-        if (isWide) {
-          final itemWidth = (size.width - 32 - (crossAxisCount - 1) * 16) / crossAxisCount;
-          final itemHeight = itemWidth / 0.82 + 16;
-          final rowIndex = _keyboardPortraitIndex ~/ crossAxisCount;
-          targetOffset = rowIndex * itemHeight;
-        } else if (isMobile) {
-          final itemWidth = (size.width - 24 - 12) / 2;
-          final itemHeight = itemWidth / 0.82 + 12;
-          final rowIndex = _keyboardPortraitIndex ~/ 2;
-          targetOffset = rowIndex * itemHeight;
-        } else {
-          targetOffset = _keyboardPortraitIndex * 130.0;
-        }
+        final cols = _getPortraitCrossAxisCount(size.width);
+        final itemWidth = (size.width - 32 - (cols - 1) * 12) / cols;
+        final itemHeight = itemWidth / 0.80 + 12;
+        final rowIndex = _keyboardPortraitIndex ~/ cols;
+        final targetOffset = rowIndex * itemHeight;
         final currentOffset = _scrollController.offset;
         final viewHeight = size.height;
-        if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 200) {
+        if (targetOffset < currentOffset ||
+            targetOffset > currentOffset + viewHeight - 200) {
           _scrollController.animateTo(
             targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
             duration: const Duration(milliseconds: 150),
@@ -457,16 +739,21 @@ class _GroupsScreenState extends State<GroupsScreen> {
           );
         }
       } else {
+        final visibleIndex = _filteredGroups.indexWhere(
+          (g) => g.items.any((e) => e.key == _keyboardPhotoKey),
+        );
+        if (visibleIndex < 0) return;
         double targetOffset;
         if (crossAxisCount > 1) {
-          final rowIndex = _keyboardGroupIndex ~/ crossAxisCount;
+          final rowIndex = visibleIndex ~/ crossAxisCount;
           targetOffset = rowIndex * (370.0 + 8.0);
         } else {
-          targetOffset = _keyboardGroupIndex * 220.0;
+          targetOffset = visibleIndex * 220.0;
         }
         final currentOffset = _scrollController.offset;
         final viewHeight = size.height;
-        if (targetOffset < currentOffset || targetOffset > currentOffset + viewHeight - 300) {
+        if (targetOffset < currentOffset ||
+            targetOffset > currentOffset + viewHeight - 300) {
           _scrollController.animateTo(
             targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent),
             duration: const Duration(milliseconds: 150),
@@ -482,27 +769,60 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     final key = event.logicalKey;
     final isPortrait = widget.detectionMode == DetectionMode.portrait;
-    final portraitItems = _getPortraitItems();
+    final portraitItems = _filteredPortraitItems;
+
+    final visibleGroups = _filteredGroups;
+    if (isPortrait ? portraitItems.isEmpty : visibleGroups.isEmpty) {
+      return KeyEventResult.ignored;
+    }
+    var visibleIndex = visibleGroups.indexWhere(
+      (g) => g.items.any((e) => e.key == _keyboardPhotoKey),
+    );
+    if (!isPortrait && visibleIndex < 0) {
+      visibleIndex = 0;
+      _keyboardPhotoKey = visibleGroups.first.bestKey;
+      _keyboardGroupIndex = _groups.indexOf(visibleGroups.first);
+    }
+
+    _keyboardPortraitIndex = portraitItems.isEmpty
+        ? 0
+        : _keyboardPortraitIndex.clamp(0, portraitItems.length - 1);
+    _keyboardGroupIndex = _groups.isEmpty
+        ? 0
+        : _keyboardGroupIndex.clamp(0, _groups.length - 1);
 
     // 編集用キーボードショートカットの場合は処理中のファイルを保護
-    final bool isEditKey = key == LogicalKeyboardKey.keyB ||
+    final bool isEditKey =
+        key == LogicalKeyboardKey.keyB ||
         key == LogicalKeyboardKey.keyL ||
         key == LogicalKeyboardKey.space ||
         key == LogicalKeyboardKey.delete ||
-        key == LogicalKeyboardKey.digit1 || key == LogicalKeyboardKey.numpad1 ||
-        key == LogicalKeyboardKey.digit2 || key == LogicalKeyboardKey.numpad2 ||
-        key == LogicalKeyboardKey.digit3 || key == LogicalKeyboardKey.numpad3 ||
-        key == LogicalKeyboardKey.digit4 || key == LogicalKeyboardKey.numpad4 ||
-        key == LogicalKeyboardKey.digit5 || key == LogicalKeyboardKey.numpad5 ||
-        key == LogicalKeyboardKey.digit6 || key == LogicalKeyboardKey.numpad6 ||
-        key == LogicalKeyboardKey.digit7 || key == LogicalKeyboardKey.numpad7 ||
-        key == LogicalKeyboardKey.digit8 || key == LogicalKeyboardKey.numpad8 ||
-        key == LogicalKeyboardKey.digit9 || key == LogicalKeyboardKey.numpad9 ||
-        key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0;
+        key == LogicalKeyboardKey.digit1 ||
+        key == LogicalKeyboardKey.numpad1 ||
+        key == LogicalKeyboardKey.digit2 ||
+        key == LogicalKeyboardKey.numpad2 ||
+        key == LogicalKeyboardKey.digit3 ||
+        key == LogicalKeyboardKey.numpad3 ||
+        key == LogicalKeyboardKey.digit4 ||
+        key == LogicalKeyboardKey.numpad4 ||
+        key == LogicalKeyboardKey.digit5 ||
+        key == LogicalKeyboardKey.numpad5 ||
+        key == LogicalKeyboardKey.digit6 ||
+        key == LogicalKeyboardKey.numpad6 ||
+        key == LogicalKeyboardKey.digit7 ||
+        key == LogicalKeyboardKey.numpad7 ||
+        key == LogicalKeyboardKey.digit8 ||
+        key == LogicalKeyboardKey.numpad8 ||
+        key == LogicalKeyboardKey.digit9 ||
+        key == LogicalKeyboardKey.numpad9 ||
+        key == LogicalKeyboardKey.digit0 ||
+        key == LogicalKeyboardKey.numpad0;
 
     if (isEditKey) {
       final targetKey = isPortrait
-          ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
+          ? (portraitItems.isNotEmpty
+                ? portraitItems[_keyboardPortraitIndex].key
+                : null)
           : _keyboardPhotoKey;
       if (targetKey != null && _processingKeys.contains(targetKey)) {
         return KeyEventResult.handled; // 現在処理中の写真なので操作を無効化
@@ -512,14 +832,21 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (key == LogicalKeyboardKey.arrowDown) {
       setState(() {
         if (isPortrait) {
-          if (portraitItems.isNotEmpty && _keyboardPortraitIndex < portraitItems.length - 1) {
-            _keyboardPortraitIndex++;
+          final cols = _getPortraitCrossAxisCount(
+            MediaQuery.of(context).size.width,
+          );
+          if (portraitItems.isNotEmpty &&
+              _keyboardPortraitIndex < portraitItems.length - 1) {
+            _keyboardPortraitIndex = (_keyboardPortraitIndex + cols).clamp(
+              0,
+              portraitItems.length - 1,
+            );
             _scrollToActiveGroup(true);
           }
         } else {
-          if (_groups.isNotEmpty && _keyboardGroupIndex < _groups.length - 1) {
-            _keyboardGroupIndex++;
-            final g = _groups[_keyboardGroupIndex];
+          if (visibleIndex < visibleGroups.length - 1) {
+            final g = visibleGroups[visibleIndex + 1];
+            _keyboardGroupIndex = _groups.indexOf(g);
             if (g.items.isNotEmpty) {
               _keyboardPhotoKey = g.bestKey;
             }
@@ -533,14 +860,20 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (key == LogicalKeyboardKey.arrowUp) {
       setState(() {
         if (isPortrait) {
+          final cols = _getPortraitCrossAxisCount(
+            MediaQuery.of(context).size.width,
+          );
           if (_keyboardPortraitIndex > 0) {
-            _keyboardPortraitIndex--;
+            _keyboardPortraitIndex = (_keyboardPortraitIndex - cols).clamp(
+              0,
+              portraitItems.length - 1,
+            );
             _scrollToActiveGroup(true);
           }
         } else {
-          if (_keyboardGroupIndex > 0) {
-            _keyboardGroupIndex--;
-            final g = _groups[_keyboardGroupIndex];
+          if (visibleIndex > 0) {
+            final g = visibleGroups[visibleIndex - 1];
+            _keyboardGroupIndex = _groups.indexOf(g);
             if (g.items.isNotEmpty) {
               _keyboardPhotoKey = g.bestKey;
             }
@@ -551,12 +884,23 @@ class _GroupsScreenState extends State<GroupsScreen> {
       return KeyEventResult.handled;
     }
 
-    if (!isPortrait && _groups.isNotEmpty) {
-      final g = _groups[_keyboardGroupIndex];
-      final items = g.items;
-      final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
-
-      if (key == LogicalKeyboardKey.arrowRight) {
+    if (key == LogicalKeyboardKey.arrowRight) {
+      if (isPortrait) {
+        if (portraitItems.isNotEmpty &&
+            _keyboardPortraitIndex < portraitItems.length - 1) {
+          setState(() {
+            _keyboardPortraitIndex++;
+            _scrollToActiveGroup(true);
+          });
+        }
+        return KeyEventResult.handled;
+      }
+      if (_groups.isNotEmpty) {
+        final g = _groups[_keyboardGroupIndex];
+        final items = _review.sortedPhotos(g.items);
+        final currentIndex = items.indexWhere(
+          (e) => e.key == _keyboardPhotoKey,
+        );
         if (currentIndex != -1 && currentIndex < items.length - 1) {
           setState(() {
             _keyboardPhotoKey = items[currentIndex + 1].key;
@@ -564,8 +908,24 @@ class _GroupsScreenState extends State<GroupsScreen> {
         }
         return KeyEventResult.handled;
       }
+    }
 
-      if (key == LogicalKeyboardKey.arrowLeft) {
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      if (isPortrait) {
+        if (portraitItems.isNotEmpty && _keyboardPortraitIndex > 0) {
+          setState(() {
+            _keyboardPortraitIndex--;
+            _scrollToActiveGroup(true);
+          });
+        }
+        return KeyEventResult.handled;
+      }
+      if (_groups.isNotEmpty) {
+        final g = _groups[_keyboardGroupIndex];
+        final items = _review.sortedPhotos(g.items);
+        final currentIndex = items.indexWhere(
+          (e) => e.key == _keyboardPhotoKey,
+        );
         if (currentIndex > 0) {
           setState(() {
             _keyboardPhotoKey = items[currentIndex - 1].key;
@@ -573,8 +933,18 @@ class _GroupsScreenState extends State<GroupsScreen> {
         }
         return KeyEventResult.handled;
       }
+    }
 
-      if (key == LogicalKeyboardKey.keyB) {
+    if (key == LogicalKeyboardKey.keyB) {
+      if (isPortrait) {
+        if (portraitItems.isNotEmpty &&
+            _keyboardPortraitIndex < portraitItems.length) {
+          final targetKey = portraitItems[_keyboardPortraitIndex].key;
+          _updateGroupBestKey(targetKey);
+        }
+        return KeyEventResult.handled;
+      }
+      if (_groups.isNotEmpty) {
         if (_keyboardPhotoKey != null) {
           _updateGroupBestKey(_keyboardPhotoKey!);
         }
@@ -585,7 +955,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (key == LogicalKeyboardKey.enter ||
         key == LogicalKeyboardKey.numpadEnter) {
       final activeKey = isPortrait
-          ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
+          ? (portraitItems.isNotEmpty
+                ? portraitItems[_keyboardPortraitIndex].key
+                : null)
           : _keyboardPhotoKey;
       if (activeKey != null) {
         final targetKeys = _loupeSelection.isNotEmpty
@@ -612,7 +984,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     if (key == LogicalKeyboardKey.keyL) {
       final targetKey = isPortrait
-          ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
+          ? (portraitItems.isNotEmpty
+                ? portraitItems[_keyboardPortraitIndex].key
+                : null)
           : _keyboardPhotoKey;
       if (targetKey != null) {
         setState(() {
@@ -632,7 +1006,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
         key == LogicalKeyboardKey.keyD ||
         key == LogicalKeyboardKey.keyX) {
       final targetKey = isPortrait
-          ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
+          ? (portraitItems.isNotEmpty
+                ? portraitItems[_keyboardPortraitIndex].key
+                : null)
           : _keyboardPhotoKey;
       if (targetKey != null) {
         _toggleDelete(targetKey);
@@ -646,23 +1022,55 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
 
     int? getFolderIndex(LogicalKeyboardKey key) {
-      if (key == LogicalKeyboardKey.digit1 || key == LogicalKeyboardKey.numpad1) return 0;
-      if (key == LogicalKeyboardKey.digit2 || key == LogicalKeyboardKey.numpad2) return 1;
-      if (key == LogicalKeyboardKey.digit3 || key == LogicalKeyboardKey.numpad3) return 2;
-      if (key == LogicalKeyboardKey.digit4 || key == LogicalKeyboardKey.numpad4) return 3;
-      if (key == LogicalKeyboardKey.digit5 || key == LogicalKeyboardKey.numpad5) return 4;
-      if (key == LogicalKeyboardKey.digit6 || key == LogicalKeyboardKey.numpad6) return 5;
-      if (key == LogicalKeyboardKey.digit7 || key == LogicalKeyboardKey.numpad7) return 6;
-      if (key == LogicalKeyboardKey.digit8 || key == LogicalKeyboardKey.numpad8) return 7;
-      if (key == LogicalKeyboardKey.digit9 || key == LogicalKeyboardKey.numpad9) return 8;
-      if (key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0) return 9;
+      if (key == LogicalKeyboardKey.digit1 ||
+          key == LogicalKeyboardKey.numpad1) {
+        return 0;
+      }
+      if (key == LogicalKeyboardKey.digit2 ||
+          key == LogicalKeyboardKey.numpad2) {
+        return 1;
+      }
+      if (key == LogicalKeyboardKey.digit3 ||
+          key == LogicalKeyboardKey.numpad3) {
+        return 2;
+      }
+      if (key == LogicalKeyboardKey.digit4 ||
+          key == LogicalKeyboardKey.numpad4) {
+        return 3;
+      }
+      if (key == LogicalKeyboardKey.digit5 ||
+          key == LogicalKeyboardKey.numpad5) {
+        return 4;
+      }
+      if (key == LogicalKeyboardKey.digit6 ||
+          key == LogicalKeyboardKey.numpad6) {
+        return 5;
+      }
+      if (key == LogicalKeyboardKey.digit7 ||
+          key == LogicalKeyboardKey.numpad7) {
+        return 6;
+      }
+      if (key == LogicalKeyboardKey.digit8 ||
+          key == LogicalKeyboardKey.numpad8) {
+        return 7;
+      }
+      if (key == LogicalKeyboardKey.digit9 ||
+          key == LogicalKeyboardKey.numpad9) {
+        return 8;
+      }
+      if (key == LogicalKeyboardKey.digit0 ||
+          key == LogicalKeyboardKey.numpad0) {
+        return 9;
+      }
       return null;
     }
 
     final folderIndex = getFolderIndex(key);
     if (folderIndex != null && folderIndex < _customFolders.length) {
       final targetKey = isPortrait
-          ? (portraitItems.isNotEmpty ? portraitItems[_keyboardPortraitIndex].key : null)
+          ? (portraitItems.isNotEmpty
+                ? portraitItems[_keyboardPortraitIndex].key
+                : null)
           : _keyboardPhotoKey;
       if (targetKey != null) {
         setState(() {
@@ -685,7 +1093,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
         } else {
           final g = _groups[_keyboardGroupIndex];
           final items = g.items;
-          final currentIndex = items.indexWhere((e) => e.key == _keyboardPhotoKey);
+          final currentIndex = items.indexWhere(
+            (e) => e.key == _keyboardPhotoKey,
+          );
           if (currentIndex != -1 && currentIndex < items.length - 1) {
             setState(() {
               _keyboardPhotoKey = items[currentIndex + 1].key;
@@ -712,6 +1122,19 @@ class _GroupsScreenState extends State<GroupsScreen> {
       return;
     }
 
+    if (targets.any(
+      (target) => _entryByKey[target.key]?.origin == PhotoOrigin.deviceAsset,
+    )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'フォルダーへの仕分けは「ファイル」から読み込んだ写真で利用できます。写真ライブラリの写真は選別・削除できます。',
+          ),
+        ),
+      );
+      return;
+    }
+
     final bool? isCopy = await showDialog<bool>(
       context: context,
       builder: (context) {
@@ -725,8 +1148,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
               const SizedBox(height: 12),
               const Text('処理方法を選択してください：'),
               const SizedBox(height: 8),
-              const Text('• 移動：ファイルを新しいフォルダに移動します（元の場所からは削除されます）。', style: TextStyle(fontSize: 12)),
-              const Text('• コピー：ファイルを新しいフォルダに複製します（元の場所にも残ります）。', style: TextStyle(fontSize: 12)),
+              const Text(
+                '• 移動：ファイルを新しいフォルダに移動します（元の場所からは削除されます）。',
+                style: TextStyle(fontSize: 12),
+              ),
+              const Text(
+                '• コピー：ファイルを新しいフォルダに複製します（元の場所にも残ります）。',
+                style: TextStyle(fontSize: 12),
+              ),
             ],
           ),
           actions: [
@@ -751,25 +1180,31 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     // 念のため、実行直前に再度処理中のキーが混入していないかダブルチェック
     final finalTargets = targets
-        .where((e) => !_processingKeys.contains(e.key))
+        .where(
+          (e) =>
+              !_processingKeys.contains(e.key) &&
+              (isCopy || _review.canMove(e.key)),
+        )
         .toList();
 
     if (finalTargets.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('選択された写真はすでに処理中です。')),
+          const SnackBar(content: Text('対象写真は処理中、または移動から保護されています。')),
         );
       }
       return;
     }
 
     final Map<String, String> currentSortMap = {
-      for (final e in finalTargets) e.key: e.value
+      for (final e in finalTargets) e.key: e.value,
     };
 
     setState(() {
       _processingKeys.addAll(currentSortMap.keys);
-      _selectedSortFolders.removeWhere((key, _) => currentSortMap.containsKey(key));
+      _selectedSortFolders.removeWhere(
+        (key, _) => currentSortMap.containsKey(key),
+      );
     });
 
     final taskId = 'sort_${DateTime.now().millisecondsSinceEpoch}';
@@ -812,7 +1247,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
         },
       );
 
-      final entryMapByPath = {for (final e in _entryByKey.values) e.filePath: e};
+      final entryMapByPath = {
+        for (final e in _entryByKey.values) e.filePath: e,
+      };
       final failedKeys = result.failedFiles
           .map((path) => entryMapByPath[path]?.key)
           .whereType<String>()
@@ -825,26 +1262,44 @@ class _GroupsScreenState extends State<GroupsScreen> {
       if (mounted) {
         setState(() {
           if (!isCopy && successKeys.isNotEmpty) {
-            for (final key in successKeys) {
-              for (var i = 0; i < _groups.length; i++) {
-                final g = _groups[i];
-                if (g.items.any((item) => item.key == key)) {
-                  final newItems = g.items.where((item) => item.key != key).toList();
-                  _groups[i] = g.copyWith(items: newItems);
-                }
+            final updatedGroups = <PhotoGroup>[];
+            for (final g in _groups) {
+              final remainingItems = g.items
+                  .where((item) => !successKeys.contains(item.key))
+                  .toList();
+              if (remainingItems.isNotEmpty) {
+                final newBestKey =
+                    remainingItems.any((item) => item.key == g.bestKey)
+                    ? g.bestKey
+                    : remainingItems.first.key;
+                final remainingDeleteCandidates = g.deleteCandidateKeys
+                    .where((k) => !successKeys.contains(k))
+                    .toSet();
+                updatedGroups.add(
+                  g.copyWith(
+                    items: remainingItems,
+                    bestKey: newBestKey,
+                    deleteCandidateKeys: remainingDeleteCandidates,
+                  ),
+                );
               }
             }
-            _groups.removeWhere((g) => g.items.isEmpty);
+            _groups = updatedGroups;
             _syncEntryByKey();
             _sortedPortraitItems = null;
             _clampKeyboardIndices();
+            _selectedForDeleteNotifier.value = Set<String>.from(
+              _selectedForDelete,
+            )..removeAll(successKeys);
           }
         });
 
         if (result.failedFiles.isEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('${result.successCount} 枚の写真を${isCopy ? "コピー" : "移動"}しました。'),
+              content: Text(
+                '${result.successCount} 枚の写真を${isCopy ? "コピー" : "移動"}しました。',
+              ),
               backgroundColor: Colors.green,
             ),
           );
@@ -854,7 +1309,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
             builder: (context) {
               return AlertDialog(
                 title: const Text('仕分け完了（一部失敗）'),
-                content: Text('${result.successCount} 枚の処理は成功しましたが、${result.failedFiles.length} 枚の処理に失敗しました。\n\n原因の例: ファイルのロック、容量不足、権限の喪失など。'),
+                content: Text(
+                  '${result.successCount} 枚の処理は成功しましたが、${result.failedFiles.length} 枚の処理に失敗しました。\n\n原因の例: ファイルのロック、容量不足、権限の喪失など。',
+                ),
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
@@ -885,12 +1342,16 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
-  Future<void> _addNewFolder(BuildContext context, String key, bool isGrid) async {
+  Future<void> _addNewFolder(
+    BuildContext context,
+    String key,
+    bool isGrid,
+  ) async {
     if (_customFolders.length >= 10) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('フォルダは最大10個までしか作成できません。')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('フォルダは最大10個までしか作成できません。')));
       }
       return;
     }
@@ -904,9 +1365,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
           content: TextField(
             controller: textController,
             autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'フォルダ名を入力してください',
-            ),
+            decoration: const InputDecoration(hintText: 'フォルダ名を入力してください'),
             maxLength: 30,
           ),
           actions: [
@@ -942,9 +1401,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
       if (_customFolders.contains(newFolder)) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('同名のフォルダが既に存在します。')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('同名のフォルダが既に存在します。')));
         }
         return;
       }
@@ -954,92 +1413,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
         _selectedSortFolders[key] = newFolder;
       });
     }
-  }
-
-  Widget _buildSortFolderButtonForGrid(String key, ThemeData theme) {
-    final sortFolder = _selectedSortFolders[key];
-    final hasFolder = sortFolder != null;
-    return Material(
-      color: Colors.transparent,
-      child: PopupMenuButton<String?>(
-        tooltip: 'フォルダに仕分ける',
-        onSelected: (folder) {
-          if (folder == '__NEW_FOLDER__') {
-            _addNewFolder(context, key, true);
-          } else if (folder == null) {
-            setState(() {
-              _selectedSortFolders.remove(key);
-            });
-          } else {
-            setState(() {
-              _selectedSortFolders[key] = folder;
-            });
-          }
-        },
-        offset: const Offset(0, 30),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          decoration: BoxDecoration(
-            color: hasFolder ? getFolderColor(sortFolder, _customFolders) : Colors.black.withValues(alpha: 0.5),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white24),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                hasFolder ? Icons.folder : Icons.folder_open,
-                size: 16,
-                color: Colors.white,
-              ),
-              if (hasFolder) ...[
-                const SizedBox(width: 4),
-                Text(
-                  sortFolder,
-                  style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ],
-          ),
-        ),
-        itemBuilder: (context) {
-          return [
-            PopupMenuItem<String?>(
-              value: '__NEW_FOLDER__',
-              child: Row(
-                children: [
-                  Icon(Icons.create_new_folder, size: 16, color: theme.colorScheme.primary),
-                  const SizedBox(width: 8),
-                  const Text('新規フォルダを追加...'),
-                ],
-              ),
-            ),
-            PopupMenuItem<String?>(
-              value: null,
-              child: Row(
-                children: [
-                  Icon(Icons.folder_off, size: 16, color: theme.hintColor),
-                  const SizedBox(width: 8),
-                  const Text('仕分けを解除'),
-                ],
-              ),
-            ),
-            ..._customFolders.map((folder) {
-              return PopupMenuItem<String?>(
-                value: folder,
-                child: Row(
-                  children: [
-                    Icon(Icons.folder, size: 16, color: getFolderColor(folder, _customFolders)),
-                    const SizedBox(width: 8),
-                    Text(folder),
-                  ],
-                ),
-              );
-            }),
-          ];
-        },
-      ),
-    );
   }
 
   void _openLoupe(List<PhotoEntry> items) {
@@ -1165,484 +1538,183 @@ class _GroupsScreenState extends State<GroupsScreen> {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              description,
-              style: const TextStyle(fontSize: 13),
-            ),
+            child: Text(description, style: const TextStyle(fontSize: 13)),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildPortraitBody(BuildContext context, List<PhotoEntry> portraitItems, bool isWide, double width, int crossAxisCount) {
-    Widget buildItem(int index) {
-      final e = portraitItems[index];
-      final t = e.capturedAt;
-      final timeStr = t == null
-          ? ''
-          : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
-      final eyeText = e.portrait.bothEyesDetected
-          ? '目閉じなし'
-          : (e.portrait.eyesClosed ? '目閉じ' : '');
+  Widget _buildPortraitBody(
+    BuildContext context,
+    List<PhotoEntry> portraitItems,
+    double width,
+  ) {
+    if (portraitItems.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.face_retouching_off,
+              size: 48,
+              color: BestShotTheme.textSecondary,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '該当するポートレート写真がありません',
+              style: TextStyle(
+                fontSize: 14,
+                color: BestShotTheme.textSecondary,
+              ),
+            ),
+            if (_filterQuery.isNotEmpty ||
+                _filterBurstOnly ||
+                _filterReviewOnly) ...[
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _filterQuery = '';
+                    _filterBurstOnly = false;
+                    _filterReviewOnly = false;
+                  });
+                },
+                child: const Text('フィルターをリセット'),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
 
-      final loupeSelected = _loupeSelection.contains(e.key);
-      final selectedForDelete = _selectedForDelete.contains(e.key);
-      final isKeyboardFocused = index == _keyboardPortraitIndex;
-      final theme = Theme.of(context);
-      final sortFolder = _selectedSortFolders[e.key];
-      final hasFolder = sortFolder != null;
+    final cols = _getPortraitCrossAxisCount(width);
 
-      return GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          setState(() {
-            _keyboardPortraitIndex = index;
+    return ValueListenableBuilder<Set<String>>(
+      valueListenable: _selectedForDeleteNotifier,
+      builder: (context, selectedSet, _) {
+        return GridView.builder(
+          controller: _scrollController,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cols,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            childAspectRatio: 0.80,
+          ),
+          itemCount: portraitItems.length,
+          itemBuilder: (context, index) {
+            final e = portraitItems[index];
+            final t = e.capturedAt;
+            final timeStr = t == null
+                ? ''
+                : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
+
+            final loupeSelected = _loupeSelection.contains(e.key);
+            final selectedForDelete = selectedSet.contains(e.key);
+            final isKeyboardFocused = index == _keyboardPortraitIndex;
+            final sortFolder = _selectedSortFolders[e.key];
+            final hasFolder = sortFolder != null;
+            final isProcessing = _processingKeys.contains(e.key);
+
+            final group = _findGroupByPhotoKey(e.key);
+            final isBest = group != null && group.bestKey == e.key;
+
+            Color borderColor = BestShotTheme.dividerColor;
+            double borderWidth = 1.0;
             if (loupeSelected) {
-              _loupeSelection.remove(e.key);
-            } else {
-              if (_loupeSelection.length >= 4) {
-                _loupeSelection.removeAt(0);
-              }
-              _loupeSelection.add(e.key);
+              borderColor = BestShotTheme.accentBlue;
+              borderWidth = 2.5;
+            } else if (isKeyboardFocused) {
+              borderColor = BestShotTheme.accentBlue;
+              borderWidth = 2.0;
+            } else if (selectedForDelete) {
+              borderColor = BestShotTheme.accentRed;
+              borderWidth = 2.0;
+            } else if (hasFolder) {
+              borderColor = getFolderColor(sortFolder, _customFolders);
+              borderWidth = 2.0;
             }
-          });
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: selectedForDelete
-                ? theme.colorScheme.error.withValues(alpha: 0.08)
-                : theme.colorScheme.surface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isKeyboardFocused
-                  ? theme.colorScheme.primary
-                  : (selectedForDelete
-                      ? theme.colorScheme.error
-                      : (hasFolder
-                          ? getFolderColor(sortFolder, _customFolders)
-                          : (loupeSelected
-                              ? theme.colorScheme.primary.withValues(alpha: 0.5)
-                              : theme.dividerColor.withValues(alpha: 0.12)))),
-              width: isKeyboardFocused ? 2.5 : (selectedForDelete || hasFolder || loupeSelected ? 2 : 1),
-            ),
-            boxShadow: isKeyboardFocused
-                ? [
-                    BoxShadow(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.25),
-                      blurRadius: 8,
-                      spreadRadius: 1,
-                    )
-                  ]
-                : null,
-          ),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
-                child: Stack(
-                  children: [
-                    Opacity(
-                      opacity: selectedForDelete ? 0.45 : 1.0,
-                      child: ColorFiltered(
-                        colorFilter: ColorFilter.mode(
-                          selectedForDelete ? Colors.grey : Colors.transparent,
-                          BlendMode.saturation,
-                        ),
-                        child: Image.memory(
-                          e.displayBytes,
-                          width: 120,
-                          height: 120,
-                          cacheWidth: 320,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                        ),
-                      ),
-                    ),
-                    if (loupeSelected)
-                      Positioned(
-                        top: 8,
-                        left: 8,
-                        child: Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.primary,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Text(
-                            '${_loupeSelection.indexOf(e.key) + 1}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                    // Checkbox (Top Right)
-                    Positioned(
-                      right: 4,
-                      top: 4,
-                      child: Checkbox(
-                        value: selectedForDelete,
-                        onChanged: (v) {
-                          HapticFeedback.selectionClick();
-                          setState(() {
-                            _keyboardPortraitIndex = index;
-                          });
-                          _toggleDelete(e.key, v);
-                        },
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        side: const BorderSide(color: Colors.white, width: 1.5),
-                      ),
-                    ),
-                    // Loupe Button (Bottom Right)
-                    Positioned(
-                      right: 4,
-                      bottom: 4,
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () {
-                            setState(() {
-                              _keyboardPortraitIndex = index;
-                            });
-                            _openLoupe([e]);
-                          },
-                          borderRadius: BorderRadius.circular(20),
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: loupeSelected
-                                  ? theme.colorScheme.primary
-                                  : Colors.black.withValues(alpha: 0.5),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
-                              size: 16,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    // Folder Button (Bottom Left)
-                    Positioned(
-                      left: 4,
-                      bottom: 4,
-                      child: _buildSortFolderButtonForGrid(e.key, theme),
-                    ),
-                  ],
-                ),
+            return RepaintBoundary(
+              child: _PortraitCardTile(
+                reviewLabel: _review.label(e.key),
+                entry: e,
+                index: index,
+                timeStr: timeStr,
+                isBest: isBest,
+                selectedForDelete: selectedForDelete,
+                loupeSelected: loupeSelected,
+                isKeyboardFocused: isKeyboardFocused,
+                sortFolder: sortFolder,
+                customFolders: _customFolders,
+                isProcessing: isProcessing,
+                borderColor: borderColor,
+                borderWidth: borderWidth,
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  setState(() {
+                    _keyboardPortraitIndex = index;
+                    if (loupeSelected) {
+                      _loupeSelection.remove(e.key);
+                    } else {
+                      if (_loupeSelection.length >= 4) {
+                        _loupeSelection.removeAt(0);
+                      }
+                      _loupeSelection.add(e.key);
+                    }
+                  });
+                },
+                onDoubleTap: () {
+                  HapticFeedback.selectionClick();
+                  _updateGroupBestKey(e.key);
+                },
+                onSetBest: () {
+                  HapticFeedback.selectionClick();
+                  _updateGroupBestKey(e.key);
+                },
+                onToggleDelete: (v) {
+                  HapticFeedback.selectionClick();
+                  setState(() {
+                    _keyboardPortraitIndex = index;
+                  });
+                  _toggleDelete(e.key, v);
+                },
+                onOpenLoupe: () {
+                  _keyboardPortraitIndex = index;
+                  if (group != null) {
+                    _openLoupeForPhoto(group, e.key);
+                  } else {
+                    _openLoupe([e]);
+                  }
+                },
+                onSortFolderChanged: (folder) {
+                  if (folder == '__NEW_FOLDER__') {
+                    _addNewFolder(context, e.key, false);
+                  } else {
+                    setState(() {
+                      _keyboardPortraitIndex = index;
+                      if (folder == null) {
+                        _selectedSortFolders.remove(e.key);
+                      } else {
+                        _selectedSortFolders[e.key] = folder;
+                      }
+                    });
+                  }
+                },
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        timeStr.isEmpty ? '（時刻不明）' : timeStr,
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '鮮明度: ${e.sharpness.toStringAsFixed(0)}（顔ROI: ${e.portrait.faceSharpness.toStringAsFixed(0)}）',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      if (eyeText.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          eyeText,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: e.portrait.bothEyesDetected
-                                    ? const Color(0xFF16A34A)
-                                    : const Color(0xFFDC2626),
-                              ),
-                        ),
-                      ],
-                      if ((e.portrait.eyeOpenAvg ?? -1.0) >= 0) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          '目開き平均: ${(e.portrait.eyeOpenAvg ?? 0.0).toStringAsFixed(2)}',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-            ],
-          ),
-        ),
-      );
-    }
-
-    Widget buildGridItem(int index) {
-      final e = portraitItems[index];
-      final t = e.capturedAt;
-      final timeStr = t == null
-          ? ''
-          : '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
-      final eyeText = e.portrait.bothEyesDetected
-          ? '目閉じなし'
-          : (e.portrait.eyesClosed ? '目閉じ' : '');
-
-      final loupeSelected = _loupeSelection.contains(e.key);
-      final selectedForDelete = _selectedForDelete.contains(e.key);
-      final isKeyboardFocused = index == _keyboardPortraitIndex;
-      final theme = Theme.of(context);
-      final sortFolder = _selectedSortFolders[e.key];
-      final hasFolder = sortFolder != null;
-
-      return GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          _keyboardPortraitIndex = index;
-          _toggleDelete(e.key);
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: selectedForDelete
-                ? theme.colorScheme.error.withValues(alpha: 0.08)
-                : theme.colorScheme.surface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isKeyboardFocused
-                  ? theme.colorScheme.primary
-                  : (selectedForDelete
-                      ? theme.colorScheme.error
-                      : (hasFolder
-                          ? getFolderColor(sortFolder, _customFolders)
-                          : (loupeSelected
-                              ? theme.colorScheme.primary.withValues(alpha: 0.5)
-                              : theme.dividerColor.withValues(alpha: 0.12)))),
-              width: isKeyboardFocused ? 2.5 : (selectedForDelete || hasFolder || loupeSelected ? 2 : 1),
-            ),
-            boxShadow: isKeyboardFocused
-                ? [
-                    BoxShadow(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.25),
-                      blurRadius: 8,
-                      spreadRadius: 1,
-                    )
-                  ]
-                : null,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Opacity(
-                        opacity: selectedForDelete ? 0.45 : 1.0,
-                        child: ColorFiltered(
-                          colorFilter: ColorFilter.mode(
-                            selectedForDelete ? Colors.grey : Colors.transparent,
-                            BlendMode.saturation,
-                          ),
-                          child: Image.memory(
-                            e.displayBytes,
-                            fit: BoxFit.cover,
-                            gaplessPlayback: true,
-                          ),
-                        ),
-                      ),
-                      if (loupeSelected)
-                        Positioned(
-                          top: 8,
-                          left: 8,
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primary,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Text(
-                              '${_loupeSelection.indexOf(e.key) + 1}',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                      // Checkbox (Top Right)
-                      Positioned(
-                        right: 4,
-                        top: 4,
-                        child: Checkbox(
-                          value: selectedForDelete,
-                          onChanged: (v) {
-                            HapticFeedback.selectionClick();
-                            setState(() {
-                              _keyboardPortraitIndex = index;
-                            });
-                            _toggleDelete(e.key, v);
-                          },
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          side: const BorderSide(color: Colors.white, width: 1.5),
-                        ),
-                      ),
-                      // Loupe Button (Bottom Right)
-                      Positioned(
-                        right: 4,
-                        bottom: 4,
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: () {
-                              setState(() {
-                                _keyboardPortraitIndex = index;
-                                if (loupeSelected) {
-                                  _loupeSelection.remove(e.key);
-                                } else {
-                                  if (_loupeSelection.length >= 4) {
-                                    _loupeSelection.removeAt(0);
-                                  }
-                                  _loupeSelection.add(e.key);
-                                }
-                              });
-                            },
-                            borderRadius: BorderRadius.circular(20),
-                            child: Container(
-                              padding: const EdgeInsets.all(6),
-                              decoration: BoxDecoration(
-                                color: loupeSelected
-                                    ? theme.colorScheme.primary
-                                    : Colors.black.withValues(alpha: 0.5),
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                loupeSelected ? Icons.zoom_in_map : Icons.zoom_in,
-                                size: 16,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      // Folder Button (Bottom Left)
-                      Positioned(
-                        left: 4,
-                        bottom: 4,
-                        child: _buildSortFolderButtonForGrid(e.key, theme),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          timeStr.isEmpty ? '（時刻不明）' : timeStr,
-                          style: theme.textTheme.labelMedium?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                        ),
-                        Text(
-                          'S: ${e.sharpness.toStringAsFixed(0)}',
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: theme.colorScheme.primary,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '顔ROI: ${e.portrait.faceSharpness.toStringAsFixed(0)}',
-                      style: theme.textTheme.bodySmall?.copyWith(fontSize: 10),
-                    ),
-                    if (eyeText.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        eyeText,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: e.portrait.bothEyesDetected
-                                  ? const Color(0xFF16A34A)
-                                  : const Color(0xFFDC2626),
-                            ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final isMobile = width < 600;
-
-    if (isWide) {
-      return GridView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: crossAxisCount,
-          mainAxisSpacing: 16,
-          crossAxisSpacing: 16,
-          childAspectRatio: 0.82,
-        ),
-        itemCount: portraitItems.length,
-        itemBuilder: (context, i) => buildGridItem(i),
-      );
-    } else if (isMobile) {
-      return GridView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.all(12),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 0.82,
-        ),
-        itemCount: portraitItems.length,
-        itemBuilder: (context, index) {
-          return buildGridItem(index);
-        },
-      );
-    } else {
-      return ListView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        itemCount: portraitItems.length,
-        itemBuilder: (context, index) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: buildItem(index),
-          );
-        },
-      );
-    }
+            );
+          },
+        );
+      },
+    );
   }
 
-  Widget _buildGroupBody(BuildContext context, bool isWide, double width, int crossAxisCount) {
+  Widget _buildGroupBody(
+    BuildContext context,
+    bool isWide,
+    double width,
+    int crossAxisCount,
+  ) {
     final displayGroups = _filteredGroups;
 
     if (displayGroups.isEmpty) {
@@ -1650,13 +1722,22 @@ class _GroupsScreenState extends State<GroupsScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.filter_list_off, size: 48, color: BestShotTheme.textSecondary),
+            const Icon(
+              Icons.filter_list_off,
+              size: 48,
+              color: BestShotTheme.textSecondary,
+            ),
             const SizedBox(height: 12),
             const Text(
               '該当するグループがありません',
-              style: TextStyle(fontSize: 14, color: BestShotTheme.textSecondary),
+              style: TextStyle(
+                fontSize: 14,
+                color: BestShotTheme.textSecondary,
+              ),
             ),
-            if (_filterQuery.isNotEmpty || _filterBurstOnly || _filterReviewOnly) ...[
+            if (_filterQuery.isNotEmpty ||
+                _filterBurstOnly ||
+                _filterReviewOnly) ...[
               const SizedBox(height: 8),
               TextButton(
                 onPressed: () {
@@ -1680,18 +1761,21 @@ class _GroupsScreenState extends State<GroupsScreen> {
       final isKeyboardGroupFocused = globalIndex == _keyboardGroupIndex;
 
       return _ExpandableGroupCard(
-        group: g,
+        group: g.copyWith(items: _review.sortedPhotos(g.items)),
+        displayName:
+            '${_review.name(g)}${_review.reviewedGroupIds.contains(g.id) ? "・確認済み" : ""}',
+        reviewSession: _review,
         selectedForDelete: _selectedForDelete,
         selectedForDeleteListenable: _selectedForDeleteNotifier,
         onToggleDelete: (key, v) {
-          _keyboardGroupIndex = index;
+          _keyboardGroupIndex = globalIndex;
           _keyboardPhotoKey = key;
           _toggleDelete(key, v);
         },
         loupeSelection: _loupeSelection,
         onToggleLoupe: (key) {
           setState(() {
-            _keyboardGroupIndex = index;
+            _keyboardGroupIndex = globalIndex;
             _keyboardPhotoKey = key;
             if (_loupeSelection.contains(key)) {
               _loupeSelection.remove(key);
@@ -1745,14 +1829,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
             });
           }
         },
-        onOpenDetail: () {
+        onOpenDetail: () async {
           for (final photo in g.items.take(6)) {
             precacheImage(MemoryImage(photo.displayBytes), context);
           }
-          Navigator.of(context).push(
+          await Navigator.of(context).push(
             FastRoute(
               builder: (context) => GroupDetailScreen(
                 group: g,
+                reviewSession: _review,
                 selectedForDelete: _selectedForDelete,
                 selectedForDeleteNotifier: _selectedForDeleteNotifier,
                 onUpdateDeleteSelection: (keys) {
@@ -1792,6 +1877,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
               ),
             ),
           );
+          if (mounted) setState(() => _applyOrder());
         },
         onOpenLoupeForPhoto: (key) => _openLoupeForPhoto(g, key),
       );
@@ -1825,7 +1911,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
     );
   }
 
-
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
@@ -1834,10 +1919,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final crossAxisCount = size.width >= 1100 ? 3 : (size.width >= 750 ? 2 : 1);
 
     final isPortrait = widget.detectionMode == DetectionMode.portrait;
-    final portraitItems = _getPortraitItems();
+    final portraitItems = _filteredPortraitItems;
 
-    final bool canSort = _selectedSortFolders.keys.any((k) => !_processingKeys.contains(k));
-    final bool canDelete = _selectedForDelete.any((k) => !_processingKeys.contains(k));
+    final bool canSort = _selectedSortFolders.keys.any(
+      (k) => !_processingKeys.contains(k),
+    );
+    final bool canDelete = _selectedForDelete.any(
+      (k) => !_processingKeys.contains(k),
+    );
     final bool canExport = _backgroundTasks.isEmpty;
 
     return Focus(
@@ -1851,7 +1940,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               // 1. トップバー (高さ56dp, Section 2.1)
-              _buildTopBar(context, canExport, canSort, canDelete, isMobile),
+              _buildTopBar(
+                context,
+                canExport,
+                canSort,
+                canDelete,
+                size.width < 1000,
+              ),
 
               // 2. フィルターバー (高さ48dp, Section 2.1 & 4.1)
               _buildFilterBar(context, isMobile),
@@ -1862,8 +1957,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   children: [
                     Positioned.fill(
                       child: isPortrait
-                          ? _buildPortraitBody(context, portraitItems, isWide, size.width, crossAxisCount)
-                          : _buildGroupBody(context, isWide, size.width, crossAxisCount),
+                          ? _buildPortraitBody(
+                              context,
+                              portraitItems,
+                              size.width,
+                            )
+                          : _buildGroupBody(
+                              context,
+                              isWide,
+                              size.width,
+                              crossAxisCount,
+                            ),
                     ),
 
                     // フィルタードロワー (スライド幅280dp, 250ms, easeOut, オーバーレイOpacity 0.3)
@@ -1876,10 +1980,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                         child: IgnorePointer(
                           ignoring: !_isFilterDrawerOpen,
                           child: GestureDetector(
-                            onTap: () => setState(() => _isFilterDrawerOpen = false),
-                            child: Container(
-                              color: Colors.black,
-                            ),
+                            onTap: () =>
+                                setState(() => _isFilterDrawerOpen = false),
+                            child: Container(color: Colors.black),
                           ),
                         ),
                       ),
@@ -1927,66 +2030,106 @@ class _GroupsScreenState extends State<GroupsScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: const BoxDecoration(
         color: BestShotTheme.backgroundPrimary,
-        border: Border(bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+        border: Border(
+          bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1),
+        ),
       ),
       child: Row(
         children: [
           // [ロゴ] BestShot
           const Icon(Icons.camera, size: 22, color: BestShotTheme.accentBlue),
           const SizedBox(width: 8),
-          const Text(
-            'BestShot',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: BestShotTheme.textPrimary,
-              letterSpacing: 0.5,
+          Flexible(
+            fit: isMobile ? FlexFit.tight : FlexFit.loose,
+            child: const Text(
+              'BestShot',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: BestShotTheme.textPrimary,
+                letterSpacing: 0.5,
+              ),
             ),
           ),
           const SizedBox(width: 16),
 
           // ⭐ N件推薦
           if (!isMobile) ...[
+            if (widget.detectionMode == DetectionMode.portrait) ...[
+              const _Badge(
+                label: '👤 ポートレート優先',
+                color: BestShotTheme.hoverColor,
+                textColor: BestShotTheme.accentBlue,
+              ),
+              const SizedBox(width: 8),
+            ],
             _Badge(
               label: '⭐ $_recommendedBestCount件推薦',
               color: const Color(0xFF332600),
               textColor: BestShotTheme.accentGold,
             ),
             const SizedBox(width: 12),
-            // 📊 全グループ M件
+            // 📊 全グループ M件 (ポートレート時は写真総数も)
             Text(
-              '📊 全グループ ${_groups.length}件',
-              style: const TextStyle(fontSize: 12, color: BestShotTheme.textSecondary),
+              widget.detectionMode == DetectionMode.portrait
+                  ? '📊 ${_groups.length}グループ / ${_entryByKey.length}枚'
+                  : '📊 全グループ ${_groups.length}件',
+              style: const TextStyle(
+                fontSize: 12,
+                color: BestShotTheme.textSecondary,
+              ),
             ),
           ],
 
-          const Spacer(),
+          if (!isMobile) const Spacer(),
 
           // キーボードガイド
-          if (!isMobile && !Platform.isAndroid && !Platform.isIOS)
+          if (!isMobile)
             IconButton(
               tooltip: 'キーボード操作ガイド',
-              icon: const Icon(Icons.keyboard_command_key_rounded, size: 20, color: BestShotTheme.textSecondary),
+              icon: const Icon(
+                Icons.keyboard_command_key_rounded,
+                size: 20,
+                color: BestShotTheme.textSecondary,
+              ),
               onPressed: () => _showKeyboardShortcutsDialog(context),
             ),
 
           // 再インポート / フォルダ変更
           IconButton(
             tooltip: 'フォルダ変更 / 再インポート',
-            visualDensity: isMobile ? VisualDensity.compact : VisualDensity.standard,
+            visualDensity: isMobile
+                ? VisualDensity.compact
+                : VisualDensity.standard,
             padding: isMobile ? const EdgeInsets.all(4) : null,
-            constraints: isMobile ? const BoxConstraints(minWidth: 34, minHeight: 34) : null,
-            icon: const Icon(Icons.folder_open, size: 20, color: BestShotTheme.textSecondary),
+            constraints: isMobile
+                ? const BoxConstraints(minWidth: 44, minHeight: 44)
+                : null,
+            icon: const Icon(
+              Icons.folder_open,
+              size: 20,
+              color: BestShotTheme.textSecondary,
+            ),
             onPressed: () => Navigator.of(context).pop(),
           ),
 
           // エクスポート
           IconButton(
             tooltip: 'ベストショットをエクスポート',
-            visualDensity: isMobile ? VisualDensity.compact : VisualDensity.standard,
+            visualDensity: isMobile
+                ? VisualDensity.compact
+                : VisualDensity.standard,
             padding: isMobile ? const EdgeInsets.all(4) : null,
-            constraints: isMobile ? const BoxConstraints(minWidth: 34, minHeight: 34) : null,
-            icon: const Icon(Icons.folder_shared, size: 20, color: BestShotTheme.textSecondary),
+            constraints: isMobile
+                ? const BoxConstraints(minWidth: 44, minHeight: 44)
+                : null,
+            icon: const Icon(
+              Icons.folder_shared,
+              size: 20,
+              color: BestShotTheme.textSecondary,
+            ),
             onPressed: canExport ? _exportBestShots : null,
           ),
 
@@ -1996,10 +2139,18 @@ class _GroupsScreenState extends State<GroupsScreen> {
             isLabelVisible: _selectedSortFolders.isNotEmpty,
             child: IconButton(
               tooltip: '仕分けを実行',
-              visualDensity: isMobile ? VisualDensity.compact : VisualDensity.standard,
+              visualDensity: isMobile
+                  ? VisualDensity.compact
+                  : VisualDensity.standard,
               padding: isMobile ? const EdgeInsets.all(4) : null,
-              constraints: isMobile ? const BoxConstraints(minWidth: 34, minHeight: 34) : null,
-              icon: const Icon(Icons.folder_copy, size: 20, color: BestShotTheme.textSecondary),
+              constraints: isMobile
+                  ? const BoxConstraints(minWidth: 44, minHeight: 44)
+                  : null,
+              icon: const Icon(
+                Icons.folder_copy,
+                size: 20,
+                color: BestShotTheme.textSecondary,
+              ),
               onPressed: canSort ? _runSortAndProcess : null,
             ),
           ),
@@ -2009,17 +2160,41 @@ class _GroupsScreenState extends State<GroupsScreen> {
             valueListenable: _selectedForDeleteNotifier,
             builder: (context, selected, _) {
               if (selected.isEmpty) return const SizedBox.shrink();
+              if (isMobile) {
+                return Badge(
+                  label: Text('${selected.length}'),
+                  child: IconButton(
+                    tooltip: '${selected.length}枚の削除候補を確認',
+                    constraints: const BoxConstraints(
+                      minWidth: 44,
+                      minHeight: 44,
+                    ),
+                    onPressed: canDelete ? _reviewAndDelete : null,
+                    icon: const Icon(
+                      Icons.delete_outline,
+                      color: BestShotTheme.accentRed,
+                    ),
+                  ),
+                );
+              }
               return Padding(
                 padding: const EdgeInsets.only(left: 8),
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: BestShotTheme.accentRed,
                     foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 12, vertical: 8),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isMobile ? 8 : 12,
+                      vertical: 8,
+                    ),
                   ),
                   onPressed: canDelete ? _reviewAndDelete : null,
                   icon: const Icon(Icons.delete_outline, size: 16),
-                  label: Text(isMobile ? '${selected.length}枚 削除' : '${selected.length}枚 削除確認'),
+                  label: Text(
+                    isMobile
+                        ? '${selected.length}枚 削除'
+                        : '${selected.length}枚 削除確認',
+                  ),
                 ),
               );
             },
@@ -2035,7 +2210,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: const BoxDecoration(
         color: BestShotTheme.surfaceColor,
-        border: Border(bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+        border: Border(
+          bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1),
+        ),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -2049,29 +2226,127 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      TextButton.icon(
+                        onPressed: _processingKeys.isEmpty ? _editReview : null,
+                        icon: const Icon(Icons.edit_note),
+                        label: const Text('選別・グループ編集'),
+                      ),
+                      IconButton(
+                        tooltip: '作業を保存',
+                        onPressed: _processingKeys.isEmpty && !_savingReview
+                            ? _saveReview
+                            : null,
+                        icon: Icon(
+                          _savingReview ? Icons.hourglass_empty : Icons.save,
+                        ),
+                      ),
+                      PopupMenuButton<GroupOrder>(
+                        tooltip: 'グループの並べ替え',
+                        onSelected: (value) =>
+                            setState(() => _applyOrder(groupOrder: value)),
+                        itemBuilder: (_) => [
+                          for (final order in GroupOrder.values)
+                            PopupMenuItem(
+                              value: order,
+                              child: Text(groupOrderLabels[order.index]),
+                            ),
+                        ],
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Text(
+                            'グループ: ${groupOrderLabels[_review.groupOrder.index]}',
+                          ),
+                        ),
+                      ),
+                      PopupMenuButton<PhotoOrder>(
+                        tooltip: '写真の並べ替え',
+                        onSelected: (value) =>
+                            setState(() => _applyOrder(photoOrder: value)),
+                        itemBuilder: (_) => [
+                          for (final order in PhotoOrder.values)
+                            if (widget.detectionMode ==
+                                    DetectionMode.portrait ||
+                                (order != PhotoOrder.faceQuality &&
+                                    order != PhotoOrder.subject))
+                              PopupMenuItem(
+                                value: order,
+                                child: Text(photoOrderLabels[order.index]),
+                              ),
+                        ],
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Text(
+                            '写真: ${photoOrderLabels[_review.photoOrder.index]}',
+                          ),
+                        ),
+                      ),
+                      FilterChip(
+                        label: const Text('未確認のみ'),
+                        selected: _review.unreviewedOnly,
+                        onSelected: (value) =>
+                            setState(() => _review.unreviewedOnly = value),
+                      ),
+                      PopupMenuButton<String>(
+                        tooltip: '選別状態で絞り込み',
+                        onSelected: (value) => setState(
+                          () => _review.decisionFilter = value == 'all'
+                              ? null
+                              : PhotoDecision.values.byName(value),
+                        ),
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(
+                            value: 'all',
+                            child: Text('選別状態: すべて'),
+                          ),
+                          for (final value in PhotoDecision.values)
+                            PopupMenuItem(
+                              value: value.name,
+                              child: Text(decisionLabels[value.index]),
+                            ),
+                        ],
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Text(
+                            _review.decisionFilter == null
+                                ? '選別状態: すべて'
+                                : decisionLabels[_review.decisionFilter!.index],
+                          ),
+                        ),
+                      ),
                       // [ 🔍 フィルター ] ボタン
                       OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           minimumSize: const Size(0, 32),
                           side: BorderSide(
-                            color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+                            color: _isFilterDrawerOpen
+                                ? BestShotTheme.accentBlue
+                                : BestShotTheme.dividerColor,
                           ),
                           backgroundColor: _isFilterDrawerOpen
                               ? BestShotTheme.accentBlue.withValues(alpha: 0.15)
                               : Colors.transparent,
                         ),
-                        onPressed: () => setState(() => _isFilterDrawerOpen = !_isFilterDrawerOpen),
+                        onPressed: () => setState(
+                          () => _isFilterDrawerOpen = !_isFilterDrawerOpen,
+                        ),
                         icon: Icon(
                           Icons.tune,
                           size: 14,
-                          color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
+                          color: _isFilterDrawerOpen
+                              ? BestShotTheme.accentBlue
+                              : BestShotTheme.textSecondary,
                         ),
                         label: Text(
                           'フィルター',
                           style: TextStyle(
                             fontSize: 12,
-                            color: _isFilterDrawerOpen ? BestShotTheme.accentBlue : BestShotTheme.textPrimary,
+                            color: _isFilterDrawerOpen
+                                ? BestShotTheme.accentBlue
+                                : BestShotTheme.textPrimary,
                           ),
                         ),
                       ),
@@ -2079,31 +2354,56 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
                       // [ 📷 連写のみ ] チップ
                       FilterChip(
-                        label: const Text('連写のみ', style: TextStyle(fontSize: 11)),
+                        label: const Text(
+                          '連写のみ',
+                          style: TextStyle(fontSize: 11),
+                        ),
                         selected: _filterBurstOnly,
                         onSelected: (v) => setState(() => _filterBurstOnly = v),
-                        selectedColor: BestShotTheme.accentBlue.withValues(alpha: 0.2),
-                        checkmarkColor: BestShotTheme.accentBlue,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                        side: BorderSide(
-                          color: _filterBurstOnly ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+                        selectedColor: BestShotTheme.accentBlue.withValues(
+                          alpha: 0.2,
                         ),
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                        checkmarkColor: BestShotTheme.accentBlue,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        side: BorderSide(
+                          color: _filterBurstOnly
+                              ? BestShotTheme.accentBlue
+                              : BestShotTheme.dividerColor,
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 0,
+                        ),
                       ),
                       const SizedBox(width: 6),
 
                       // [ ⚠ 要確認のみ ] チップ
                       FilterChip(
-                        label: const Text('要確認のみ', style: TextStyle(fontSize: 11)),
-                        selected: _filterReviewOnly,
-                        onSelected: (v) => setState(() => _filterReviewOnly = v),
-                        selectedColor: BestShotTheme.accentRed.withValues(alpha: 0.2),
-                        checkmarkColor: BestShotTheme.accentRed,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                        side: BorderSide(
-                          color: _filterReviewOnly ? BestShotTheme.accentRed : BestShotTheme.dividerColor,
+                        label: const Text(
+                          '要確認のみ',
+                          style: TextStyle(fontSize: 11),
                         ),
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                        selected: _filterReviewOnly,
+                        onSelected: (v) =>
+                            setState(() => _filterReviewOnly = v),
+                        selectedColor: BestShotTheme.accentRed.withValues(
+                          alpha: 0.2,
+                        ),
+                        checkmarkColor: BestShotTheme.accentRed,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        side: BorderSide(
+                          color: _filterReviewOnly
+                              ? BestShotTheme.accentRed
+                              : BestShotTheme.dividerColor,
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 0,
+                        ),
                       ),
                     ],
                   ),
@@ -2118,11 +2418,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: BestShotTheme.accentBlue,
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
                             minimumSize: const Size(0, 30),
                           ),
                           onPressed: () {
-                            final items = _loupeSelection.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList();
+                            final items = _loupeSelection
+                                .map((k) => _entryByKey[k])
+                                .whereType<PhotoEntry>()
+                                .toList();
                             if (items.length == 1) {
                               final single = items.first;
                               final group = _groups.firstWhere(
@@ -2137,7 +2443,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                                 _openLoupe([best, single]);
                                 return;
                               } else if (group.items.length > 1) {
-                                final second = group.items.firstWhere((e) => e.key != best.key);
+                                final second = group.items.firstWhere(
+                                  (e) => e.key != best.key,
+                                );
                                 _openLoupe([best, second]);
                                 return;
                               }
@@ -2145,16 +2453,29 @@ class _GroupsScreenState extends State<GroupsScreen> {
                             _openLoupe(items);
                           },
                           icon: const Icon(Icons.zoom_in, size: 14),
-                          label: Text('比較 (${_loupeSelection.length}/4)', style: const TextStyle(fontSize: 11)),
+                          label: Text(
+                            '比較 (${_loupeSelection.length}/4)',
+                            style: const TextStyle(fontSize: 11),
+                          ),
                         ),
                         const SizedBox(width: 6),
                         TextButton(
                           style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             minimumSize: const Size(0, 30),
                           ),
-                          onPressed: () => setState(() => _loupeSelection.clear()),
-                          child: const Text('解除', style: TextStyle(fontSize: 11, color: BestShotTheme.textSecondary)),
+                          onPressed: () =>
+                              setState(() => _loupeSelection.clear()),
+                          child: const Text(
+                            '解除',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: BestShotTheme.textSecondary,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -2169,90 +2490,131 @@ class _GroupsScreenState extends State<GroupsScreen> {
   }
 
   Widget _buildFilterDrawer() {
-    return Container(
-      decoration: const BoxDecoration(
-        color: BestShotTheme.surfaceColor,
-        border: Border(right: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'フィルター設定',
+    return Material(
+      color: BestShotTheme.surfaceColor,
+      child: Container(
+        decoration: const BoxDecoration(
+          border: Border(
+            right: BorderSide(color: BestShotTheme.dividerColor, width: 1),
+          ),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'フィルター設定',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: BestShotTheme.textPrimary,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(
+                    Icons.close,
+                    size: 18,
+                    color: BestShotTheme.textSecondary,
+                  ),
+                  onPressed: () => setState(() => _isFilterDrawerOpen = false),
+                ),
+              ],
+            ),
+            const Divider(color: BestShotTheme.dividerColor, height: 20),
+
+            // 検索入力
+            const Text(
+              '🔍 グループ検索',
+              style: TextStyle(
+                fontSize: 12,
+                color: BestShotTheme.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              style: const TextStyle(
+                fontSize: 13,
+                color: BestShotTheme.textPrimary,
+              ),
+              decoration: const InputDecoration(
+                hintText: 'グループID / ファイル名...',
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+              ),
+              onChanged: (v) {
+                _filterDebounceTimer?.cancel();
+                _filterDebounceTimer = Timer(
+                  const Duration(milliseconds: 200),
+                  () {
+                    if (mounted) {
+                      setState(() => _filterQuery = v);
+                    }
+                  },
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+
+            // 撮影モードフィルター
+            const Text(
+              '📷 撮影モード',
+              style: TextStyle(
+                fontSize: 12,
+                color: BestShotTheme.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            CheckboxListTile(
+              title: const Text(
+                '連写グループのみ',
                 style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
                   color: BestShotTheme.textPrimary,
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 18, color: BestShotTheme.textSecondary),
-                onPressed: () => setState(() => _isFilterDrawerOpen = false),
+              value: _filterBurstOnly,
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              onChanged: (v) => setState(() => _filterBurstOnly = v ?? false),
+            ),
+            CheckboxListTile(
+              title: const Text(
+                '要確認グループのみ',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: BestShotTheme.textPrimary,
+                ),
               ),
-            ],
-          ),
-          const Divider(color: BestShotTheme.dividerColor, height: 20),
-
-          // 検索入力
-          const Text('🔍 グループ検索', style: TextStyle(fontSize: 12, color: BestShotTheme.textSecondary)),
-          const SizedBox(height: 6),
-          TextField(
-            style: const TextStyle(fontSize: 13, color: BestShotTheme.textPrimary),
-            decoration: const InputDecoration(
-              hintText: 'グループID / ファイル名...',
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              value: _filterReviewOnly,
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              onChanged: (v) => setState(() => _filterReviewOnly = v ?? false),
             ),
-            onChanged: (v) {
-              _filterDebounceTimer?.cancel();
-              _filterDebounceTimer = Timer(const Duration(milliseconds: 200), () {
-                if (mounted) {
-                  setState(() => _filterQuery = v);
-                }
-              });
-            },
-          ),
-          const SizedBox(height: 16),
+            const Spacer(),
 
-          // 撮影モードフィルター
-          const Text('📷 撮影モード', style: TextStyle(fontSize: 12, color: BestShotTheme.textSecondary)),
-          const SizedBox(height: 6),
-          CheckboxListTile(
-            title: const Text('連写グループのみ', style: TextStyle(fontSize: 13, color: BestShotTheme.textPrimary)),
-            value: _filterBurstOnly,
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            onChanged: (v) => setState(() => _filterBurstOnly = v ?? false),
-          ),
-          CheckboxListTile(
-            title: const Text('要確認グループのみ', style: TextStyle(fontSize: 13, color: BestShotTheme.textPrimary)),
-            value: _filterReviewOnly,
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            onChanged: (v) => setState(() => _filterReviewOnly = v ?? false),
-          ),
-          const Spacer(),
-
-          // リセットボタン
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: () {
-                setState(() {
-                  _filterQuery = '';
-                  _filterBurstOnly = false;
-                  _filterReviewOnly = false;
-                  _isFilterDrawerOpen = false;
-                });
-              },
-              child: const Text('すべてのフィルターを解除'),
+            // リセットボタン
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () {
+                  setState(() {
+                    _filterQuery = '';
+                    _filterBurstOnly = false;
+                    _filterReviewOnly = false;
+                    _isFilterDrawerOpen = false;
+                  });
+                },
+                child: const Text('すべてのフィルターを解除'),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -2262,7 +2624,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
       height: 64,
       decoration: const BoxDecoration(
         color: BestShotTheme.surfaceColor,
-        border: Border(top: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+        border: Border(
+          top: BorderSide(color: BestShotTheme.dividerColor, width: 1),
+        ),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -2280,8 +2644,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
             isSelected: false,
             onTap: () {
               final targets = _loupeSelection.isNotEmpty
-                  ? _loupeSelection.map((k) => _entryByKey[k]).whereType<PhotoEntry>().toList()
-                  : (_groups.isNotEmpty ? _groups.first.items.take(4).toList() : <PhotoEntry>[]);
+                  ? _loupeSelection
+                        .map((k) => _entryByKey[k])
+                        .whereType<PhotoEntry>()
+                        .toList()
+                  : (_groups.isNotEmpty
+                        ? _groups.first.items.take(4).toList()
+                        : <PhotoEntry>[]);
               if (targets.isNotEmpty) {
                 _openLoupe(targets);
               }
@@ -2315,7 +2684,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
     required VoidCallback onTap,
     VoidCallback? onLongPress,
   }) {
-    final color = isSelected ? BestShotTheme.accentBlue : BestShotTheme.textSecondary;
+    final color = isSelected
+        ? BestShotTheme.accentBlue
+        : BestShotTheme.textSecondary;
     return GestureDetector(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -2360,7 +2731,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   height: 16,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(BestShotTheme.accentBlue),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      BestShotTheme.accentBlue,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -2395,7 +2768,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     child: LinearProgressIndicator(
                       value: task.progress,
                       backgroundColor: BestShotTheme.dividerColor,
-                      valueColor: const AlwaysStoppedAnimation<Color>(BestShotTheme.accentBlue),
+                      valueColor: const AlwaysStoppedAnimation<Color>(
+                        BestShotTheme.accentBlue,
+                      ),
                     ),
                   ),
                 ),
@@ -2409,4 +2784,3 @@ class _GroupsScreenState extends State<GroupsScreen> {
     );
   }
 }
-

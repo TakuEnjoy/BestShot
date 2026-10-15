@@ -24,7 +24,10 @@ class ExifSummary {
   final int? imageHeight;
 
   String? get resolution {
-    if (imageWidth != null && imageHeight != null && imageWidth! > 0 && imageHeight! > 0) {
+    if (imageWidth != null &&
+        imageHeight != null &&
+        imageWidth! > 0 &&
+        imageHeight! > 0) {
       return '$imageWidth×$imageHeight';
     }
     return null;
@@ -48,15 +51,15 @@ class ExifSummary {
 
   @override
   int get hashCode => Object.hash(
-        fNumber,
-        shutter,
-        iso,
-        capturedAt,
-        focalLength,
-        cameraModel,
-        lensModel,
-        exposureBias,
-        imageWidth,
-        imageHeight,
-      );
+    fNumber,
+    shutter,
+    iso,
+    capturedAt,
+    focalLength,
+    cameraModel,
+    lensModel,
+    exposureBias,
+    imageWidth,
+    imageHeight,
+  );
 }

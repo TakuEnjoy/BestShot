@@ -27,19 +27,20 @@ void main() {
       expect(SortService.validateFolderName('myfolder.').isValid, isFalse);
     });
 
-    test('rejects Windows reserved device names case-insensitively', () {
-      for (final reserved in ['CON', 'con', 'PRN', 'prn', 'AUX', 'aux', 'NUL', 'nul',
-                              'COM1', 'com1', 'COM9', 'com9', 'LPT1', 'lpt1', 'LPT9', 'lpt9']) {
-        final res = SortService.validateFolderName(reserved);
-        expect(res.isValid, isFalse, reason: '$reserved must be rejected');
-        expect(res.errorMessage, contains('システム予約語'));
+    test('accepts ordinary iOS folder names', () {
+      for (final name in ['CON', 'AUX', 'NUL', '家族写真']) {
+        expect(SortService.validateFolderName(name).isValid, isTrue);
       }
     });
 
     test('rejects invalid filesystem characters', () {
       for (final ch in ['<', '>', ':', '"', '|', '?', '*']) {
         final res = SortService.validateFolderName('photo${ch}test');
-        expect(res.isValid, isFalse, reason: 'Folder with $ch must be rejected');
+        expect(
+          res.isValid,
+          isFalse,
+          reason: 'Folder with $ch must be rejected',
+        );
       }
     });
 
@@ -50,21 +51,24 @@ void main() {
       expect(res.errorMessage, contains('50文字以内'));
     });
 
-    test('accepts valid folder names including Japanese and common punctuation', () {
-      final validNames = [
-        'Selected',
-        '2026-09-13',
-        'Burst_01',
-        '家族写真',
-        '旅行（沖縄）',
-        'Best-Shots_#1',
-      ];
-      for (final name in validNames) {
-        final res = SortService.validateFolderName(name);
-        expect(res.isValid, isTrue, reason: '$name should be valid');
-        expect(res.errorMessage, isNull);
-      }
-    });
+    test(
+      'accepts valid folder names including Japanese and common punctuation',
+      () {
+        final validNames = [
+          'Selected',
+          '2026-09-13',
+          'Burst_01',
+          '家族写真',
+          '旅行（沖縄）',
+          'Best-Shots_#1',
+        ];
+        for (final name in validNames) {
+          final res = SortService.validateFolderName(name);
+          expect(res.isValid, isTrue, reason: '$name should be valid');
+          expect(res.errorMessage, isNull);
+        }
+      },
+    );
   });
 
   group('SortService.sortPhotosToCustomFolders path traversal guard', () {
@@ -73,7 +77,8 @@ void main() {
 
     setUp(() {
       tempDir = Directory.systemTemp.createTempSync('sort_service_test_');
-      sampleFile = File(p.join(tempDir.path, 'sample.jpg'))..writeAsBytesSync([1, 2, 3]);
+      sampleFile = File(p.join(tempDir.path, 'sample.jpg'))
+        ..writeAsBytesSync([1, 2, 3]);
     });
 
     tearDown(() {
@@ -133,7 +138,10 @@ void main() {
 
       expect(result.successCount, equals(1));
       expect(result.failedFiles, isEmpty);
-      expect(File(p.join(tempDir.path, 'ValidSubfolder', 'sample.jpg')).existsSync(), isTrue);
+      expect(
+        File(p.join(tempDir.path, 'ValidSubfolder', 'sample.jpg')).existsSync(),
+        isTrue,
+      );
     });
   });
 }

@@ -16,7 +16,8 @@ class DeleteReviewScreen extends StatefulWidget {
   State<DeleteReviewScreen> createState() => _DeleteReviewScreenState();
 }
 
-class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTickerProviderStateMixin {
+class _DeleteReviewScreenState extends State<DeleteReviewScreen>
+    with SingleTickerProviderStateMixin {
   final List<String> _loupeSelection = [];
   late List<PhotoEntry> _currentItems;
 
@@ -127,14 +128,21 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
           ),
           title: const Row(
             children: [
-              Icon(Icons.warning_amber_rounded, color: BestShotTheme.accentRed, size: 22),
+              Icon(
+                Icons.warning_amber_rounded,
+                color: BestShotTheme.accentRed,
+                size: 22,
+              ),
               SizedBox(width: 8),
               Text('本当に削除しますか？'),
             ],
           ),
           content: Text(
             '選択された ${_currentItems.length}枚 の画像を完全に削除します。\n削除実行後は元に戻すことはできません。',
-            style: const TextStyle(fontSize: 13, color: BestShotTheme.textPrimary),
+            style: const TextStyle(
+              fontSize: 13,
+              color: BestShotTheme.textPrimary,
+            ),
           ),
           actions: [
             OutlinedButton(
@@ -177,7 +185,11 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
         ),
         title: const Text(
           '⚠️ 削除前最終確認',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: BestShotTheme.textPrimary),
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: BestShotTheme.textPrimary,
+          ),
         ),
         actions: [
           if (_loupeSelection.isNotEmpty)
@@ -186,7 +198,9 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
               child: TextButton.icon(
                 onPressed: () {
                   final items = _loupeSelection
-                      .map((key) => _currentItems.firstWhere((e) => e.key == key))
+                      .map(
+                        (key) => _currentItems.firstWhere((e) => e.key == key),
+                      )
                       .toList();
                   Navigator.of(context).push(
                     FastRoute(
@@ -198,7 +212,11 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                     ),
                   );
                 },
-                icon: const Icon(Icons.zoom_in, size: 16, color: BestShotTheme.accentBlue),
+                icon: const Icon(
+                  Icons.zoom_in,
+                  size: 16,
+                  color: BestShotTheme.accentBlue,
+                ),
                 label: Text('ルーペ (${_loupeSelection.length}/4)'),
               ),
             ),
@@ -213,7 +231,10 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
             color: BestShotTheme.surfaceColor,
             child: Text(
               '選択された ${_currentItems.length}枚 の画像を完全に削除します',
-              style: const TextStyle(fontSize: 13, color: BestShotTheme.textSecondary),
+              style: const TextStyle(
+                fontSize: 13,
+                color: BestShotTheme.textSecondary,
+              ),
             ),
           ),
 
@@ -238,7 +259,9 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                       color: BestShotTheme.surfaceColor,
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(
-                        color: isSelectedForLoupe ? BestShotTheme.accentBlue : BestShotTheme.accentRed,
+                        color: isSelectedForLoupe
+                            ? BestShotTheme.accentBlue
+                            : BestShotTheme.accentRed,
                         width: 2.0,
                       ),
                     ),
@@ -270,7 +293,11 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                               color: BestShotTheme.accentRed,
                               borderRadius: BorderRadius.circular(2),
                             ),
-                            child: const Icon(Icons.delete_outline, size: 12, color: Colors.white),
+                            child: const Icon(
+                              Icons.delete_outline,
+                              size: 12,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
 
@@ -292,49 +319,55 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                                   Navigator.of(context).pop(false);
                                 }
                               },
-                            borderRadius: BorderRadius.circular(2),
-                            child: Container(
-                              padding: const EdgeInsets.all(3),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.65),
-                                borderRadius: BorderRadius.circular(2),
+                              borderRadius: BorderRadius.circular(2),
+                              child: Container(
+                                padding: const EdgeInsets.all(3),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.65),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                                child: const Icon(
+                                  Icons.close,
+                                  size: 12,
+                                  color: Colors.white,
+                                ),
                               ),
-                              child: const Icon(Icons.close, size: 12, color: Colors.white),
                             ),
                           ),
                         ),
-                      ),
 
-                      // ルーペ比較トグル (右下)
-                      Positioned(
-                        right: 4,
-                        bottom: 4,
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: () => _toggleLoupe(item.key),
-                            borderRadius: BorderRadius.circular(2),
-                            child: Container(
-                              padding: const EdgeInsets.all(3),
-                              decoration: BoxDecoration(
-                                color: isSelectedForLoupe
-                                    ? BestShotTheme.accentBlue
-                                    : Colors.black.withValues(alpha: 0.65),
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                              child: Icon(
-                                isSelectedForLoupe ? Icons.zoom_in_map : Icons.zoom_in,
-                                size: 12,
-                                color: Colors.white,
+                        // ルーペ比較トグル (右下)
+                        Positioned(
+                          right: 4,
+                          bottom: 4,
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () => _toggleLoupe(item.key),
+                              borderRadius: BorderRadius.circular(2),
+                              child: Container(
+                                padding: const EdgeInsets.all(3),
+                                decoration: BoxDecoration(
+                                  color: isSelectedForLoupe
+                                      ? BestShotTheme.accentBlue
+                                      : Colors.black.withValues(alpha: 0.65),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                                child: Icon(
+                                  isSelectedForLoupe
+                                      ? Icons.zoom_in_map
+                                      : Icons.zoom_in,
+                                  size: 12,
+                                  color: Colors.white,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              );
+                );
               },
             ),
           ),
@@ -363,12 +396,19 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                             padding: const EdgeInsets.only(bottom: 4),
                             child: Row(
                               children: [
-                                const Icon(Icons.folder_outlined, size: 14, color: BestShotTheme.textSecondary),
+                                const Icon(
+                                  Icons.folder_outlined,
+                                  size: 14,
+                                  color: BestShotTheme.textSecondary,
+                                ),
                                 const SizedBox(width: 6),
                                 Expanded(
                                   child: Text(
                                     'グループ #${entry.key} から ${entry.value}枚',
-                                    style: const TextStyle(fontSize: 12, color: BestShotTheme.textPrimary),
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: BestShotTheme.textPrimary,
+                                    ),
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
@@ -387,12 +427,23 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                   children: [
                     Text(
                       '合計: ${_currentItems.length}枚',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: BestShotTheme.textPrimary,
+                      ),
                     ),
-                    Text('│', style: TextStyle(color: BestShotTheme.dividerColor)),
+                    Text(
+                      '│',
+                      style: TextStyle(color: BestShotTheme.dividerColor),
+                    ),
                     Text(
                       '総容量: ${totalMb.toStringAsFixed(1)}MB',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: BestShotTheme.accentGold),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: BestShotTheme.accentGold,
+                      ),
                     ),
                   ],
                 ),
@@ -405,7 +456,9 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: const BoxDecoration(
               color: BestShotTheme.surfaceColor,
-              border: Border(top: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+              border: Border(
+                top: BorderSide(color: BestShotTheme.dividerColor, width: 1),
+              ),
             ),
             child: Row(
               children: [
@@ -460,7 +513,10 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                                 left: 0,
                                 top: 0,
                                 bottom: 0,
-                                width: MediaQuery.of(context).size.width * 0.6 * _holdController.value,
+                                width:
+                                    MediaQuery.of(context).size.width *
+                                    0.6 *
+                                    _holdController.value,
                                 child: Container(
                                   color: Colors.white.withValues(alpha: 0.35),
                                 ),
@@ -469,7 +525,11 @@ class _DeleteReviewScreenState extends State<DeleteReviewScreen> with SingleTick
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    const Icon(Icons.delete_forever, size: 18, color: Colors.white),
+                                    const Icon(
+                                      Icons.delete_forever,
+                                      size: 18,
+                                      color: Colors.white,
+                                    ),
                                     const SizedBox(width: 8),
                                     Text(
                                       _isHolding

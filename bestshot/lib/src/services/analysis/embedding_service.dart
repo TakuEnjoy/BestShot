@@ -1,16 +1,86 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:onnxruntime/onnxruntime.dart';
 import 'package:image/image.dart' as img;
+import 'embedding_cache.dart';
 
 /// Result of an embedding extraction across multiple crops
 class EmbeddingResult {
   EmbeddingResult(this.embeddings);
-  
+
   /// Key is region name: 'full', 'center', 'tl', 'tr', 'bl', 'br' (or 'left', 'right')
   final Map<String, Float32List> embeddings;
 }
+
+/// A bounded batch owns its native ONNX session in a worker isolate. Only
+/// paths/thumbnails and plain vectors cross the isolate boundary.
+Future<List<EmbeddingResult?>> extractEmbeddingBatch({
+  required String modelPath,
+  required List<(String?, Uint8List)> images,
+  required bool isLightweight,
+  String? cacheDirectory,
+}) => Isolate.run(() async {
+  final service = OnnxEmbeddingService(modelPath: modelPath);
+  try {
+    final modelStat = await File(modelPath).stat();
+    final cache = cacheDirectory == null
+        ? null
+        : EmbeddingCache(
+            Directory(cacheDirectory),
+            '${File(modelPath).absolute.path}|${modelStat.size}|${modelStat.modified.microsecondsSinceEpoch}',
+            isLightweight,
+          );
+    bool? initialized;
+    final results = <EmbeddingResult?>[];
+    for (final image in images) {
+      try {
+        final stat = image.$1 == null ? null : await File(image.$1!).stat();
+        final fingerprint = stat == null || cache == null
+            ? null
+            : cache.fingerprint(image.$1!, stat);
+        final cached = fingerprint == null
+            ? null
+            : await cache!.read(image.$1!, fingerprint);
+        if (cached != null) {
+          results.add(EmbeddingResult(cached));
+          continue;
+        }
+        initialized ??= await service.initialize();
+        if (!initialized) {
+          results.add(null);
+          continue;
+        }
+        final bytes = image.$1 == null || image.$2.isNotEmpty
+            ? image.$2
+            : await File(image.$1!).readAsBytes();
+        final result = await service.extractEmbeddings(
+          bytes,
+          isLightweight: isLightweight,
+        );
+        results.add(result);
+        // Never save vectors if the source changed during inference.
+        if (result != null && fingerprint != null) {
+          try {
+            final after = await File(image.$1!).stat();
+            if (cache!.fingerprint(image.$1!, after) == fingerprint) {
+              await cache.write(image.$1!, fingerprint, result.embeddings);
+            }
+          } catch (_) {
+            /* Source/cache changes must not duplicate a result. */
+          }
+        }
+      } catch (e) {
+        debugPrint('[Embedding] Image unavailable: $e');
+        results.add(null);
+      }
+    }
+    return results;
+  } finally {
+    service.dispose();
+  }
+});
 
 /// Abstract interface for Embedding extraction
 abstract class EmbeddingService {
@@ -21,8 +91,11 @@ abstract class EmbeddingService {
 
   /// Extracts multi-crop embeddings from raw image bytes.
   /// If [isLightweight] is true, extracts 4 crops instead of 6.
-  Future<EmbeddingResult?> extractEmbeddings(Uint8List imageBytes, {bool isLightweight = false});
-  
+  Future<EmbeddingResult?> extractEmbeddings(
+    Uint8List imageBytes, {
+    bool isLightweight = false,
+  });
+
   void dispose();
 }
 
@@ -44,14 +117,17 @@ class OnnxEmbeddingService implements EmbeddingService {
 
   @override
   Future<bool> initialize() async {
+    if (isAvailable) return true;
     try {
       final file = File(modelPath);
       if (!await file.exists()) {
-        debugPrint('[EmbeddingService] Model file not found at: $modelPath. Safe fallback active.');
+        debugPrint(
+          '[EmbeddingService] Model file not found at: $modelPath. Safe fallback active.',
+        );
         _initialized = false;
         return false;
       }
-      
+
       OrtEnv.instance.init();
       final sessionOptions = OrtSessionOptions();
       try {
@@ -63,30 +139,44 @@ class OnnxEmbeddingService implements EmbeddingService {
 
       // Retrieve first input name dynamically if available
       final inputs = _session?.inputNames;
-      if (inputs != null && inputs.isNotEmpty) {
+      if (inputs != null && inputs.length == 1 && _session!.outputCount == 1) {
         _inputName = inputs.first;
       } else {
-        _inputName = 'input';
+        throw StateError('Embedding model must have one input and one output');
+      }
+
+      // Probe shape/layout and feature-vector size before advertising availability.
+      if (_runInferenceOnCrop(img.Image(224, 224)) == null) {
+        throw StateError(
+          'Expected NCHW 224 RGB input and 576-dimensional features',
+        );
       }
 
       _initialized = true;
-      debugPrint('[EmbeddingService] Successfully loaded ONNX model: $modelPath (input: $_inputName)');
+      debugPrint(
+        '[EmbeddingService] Successfully loaded ONNX model: $modelPath (input: $_inputName)',
+      );
       return true;
     } catch (e) {
-      debugPrint('[EmbeddingService] Initialization failed: $e. Graceful fallback active.');
-      _initialized = false;
-      _session = null;
+      debugPrint(
+        '[EmbeddingService] Initialization failed: $e. Graceful fallback active.',
+      );
+      dispose();
       return false;
     }
   }
 
   @override
-  Future<EmbeddingResult?> extractEmbeddings(Uint8List imageBytes, {bool isLightweight = false}) async {
+  Future<EmbeddingResult?> extractEmbeddings(
+    Uint8List imageBytes, {
+    bool isLightweight = false,
+  }) async {
     if (!isAvailable || _session == null) return null;
 
     try {
-      final decoded = img.decodeImage(imageBytes);
-      if (decoded == null) return null;
+      final image = img.decodeImage(imageBytes);
+      if (image == null) return null;
+      final decoded = img.bakeOrientation(image);
 
       final w = decoded.width;
       final h = decoded.height;
@@ -98,7 +188,7 @@ class OnnxEmbeddingService implements EmbeddingService {
       crops['full'] = img.copyResize(decoded, width: 224, height: 224);
 
       if (!isLightweight) {
-        // Windows (Desktop) - 6 Multi-crops
+        // Full quality - 6 multi-crops
         // Center 60%
         final cw = (w * 0.60).round();
         final ch = (h * 0.60).round();
@@ -138,7 +228,7 @@ class OnnxEmbeddingService implements EmbeddingService {
           height: 224,
         );
       } else {
-        // Mobile (iOS / Android) - 4 Lightweight crops
+        // Memory-efficient inference - 4 crops
         final cw = (w * 0.60).round();
         final ch = (h * 0.60).round();
         final cx = ((w - cw) / 2).round();
@@ -214,10 +304,12 @@ class OnnxEmbeddingService implements EmbeddingService {
         }
       }
 
-      inputTensor = OrtValueTensor.createTensorWithDataList(
-        tensorData,
-        [1, 3, targetSize, targetSize],
-      );
+      inputTensor = OrtValueTensor.createTensorWithDataList(tensorData, [
+        1,
+        3,
+        targetSize,
+        targetSize,
+      ]);
       runOptions = OrtRunOptions();
 
       final inputName = _inputName ?? 'input';
@@ -241,9 +333,13 @@ class OnnxEmbeddingService implements EmbeddingService {
           }
         }
       }
+
       flatten(rawList);
 
-      if (flatValues.isEmpty) return null;
+      if (flatValues.length != EmbeddingCache.dimensions ||
+          flatValues.any((value) => !value.isFinite)) {
+        return null;
+      }
 
       // L2 Normalization
       double normSq = 0.0;
@@ -251,6 +347,7 @@ class OnnxEmbeddingService implements EmbeddingService {
         normSq += val * val;
       }
       final norm = math.sqrt(normSq);
+      if (!norm.isFinite || norm <= 0) return null;
       final l2Normalized = Float32List(flatValues.length);
       for (var i = 0; i < flatValues.length; i++) {
         l2Normalized[i] = norm > 0 ? (flatValues[i] / norm) : 0.0;
@@ -273,13 +370,11 @@ class OnnxEmbeddingService implements EmbeddingService {
 
   @override
   void dispose() {
+    final session = _session;
+    _session = null;
+    _initialized = false;
     try {
-      _session?.release();
-      _session = null;
-      _initialized = false;
+      session?.release();
     } catch (_) {}
   }
 }
-
-/// Backward compatibility alias
-typedef WindowsOnnxEmbeddingService = OnnxEmbeddingService;

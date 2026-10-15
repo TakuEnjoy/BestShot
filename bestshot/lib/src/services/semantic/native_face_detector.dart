@@ -19,7 +19,9 @@ class NativeFace {
 }
 
 class NativeFaceDetector {
-  static const MethodChannel _channel = MethodChannel('com.example.bestshot/vision');
+  static const MethodChannel _channel = MethodChannel(
+    'com.example.bestshot/vision',
+  );
 
   Future<void> close() async {
     // No-op for now
@@ -27,21 +29,27 @@ class NativeFaceDetector {
 
   Future<List<NativeFace>> processImage(String filePath) async {
     try {
-      final result = await _channel.invokeMethod('detectFaces', {'path': filePath});
+      final result = await _channel.invokeMethod('detectFaces', {
+        'path': filePath,
+      });
       if (result == null) return [];
-      
+
       final faces = <NativeFace>[];
       for (final item in (result as List)) {
         final map = item as Map;
-        faces.add(NativeFace(
-          smilingProbability: map['smilingProbability'] as double?,
-          leftEyeOpenProbability: map['leftEyeOpenProbability'] as double?,
-          rightEyeOpenProbability: map['rightEyeOpenProbability'] as double?,
-          x: map['x'] as double? ?? 0.0,
-          y: map['y'] as double? ?? 0.0,
-          width: map['width'] as double? ?? 0.0,
-          height: map['height'] as double? ?? 0.0,
-        ));
+        faces.add(
+          NativeFace(
+            smilingProbability: (map['smilingProbability'] as num?)?.toDouble(),
+            leftEyeOpenProbability: (map['leftEyeOpenProbability'] as num?)
+                ?.toDouble(),
+            rightEyeOpenProbability: (map['rightEyeOpenProbability'] as num?)
+                ?.toDouble(),
+            x: (map['x'] as num?)?.toDouble() ?? 0.0,
+            y: (map['y'] as num?)?.toDouble() ?? 0.0,
+            width: (map['width'] as num?)?.toDouble() ?? 0.0,
+            height: (map['height'] as num?)?.toDouble() ?? 0.0,
+          ),
+        );
       }
       return faces;
     } catch (e) {

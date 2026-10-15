@@ -28,6 +28,8 @@ class AnalyzeOutput {
     this.faceY = 0,
     this.faceW = 0,
     this.faceH = 0,
+    this.faceImageWidth = 0,
+    this.faceImageHeight = 0,
     this.faceSharpness = 0,
     this.eyeOpenAvg,
     this.eyesClosed = false,
@@ -56,6 +58,8 @@ class AnalyzeOutput {
   final int faceY;
   final int faceW;
   final int faceH;
+  final int faceImageWidth;
+  final int faceImageHeight;
 
   /// Laplacian variance computed only within face ROI (0 if none).
   final double faceSharpness;

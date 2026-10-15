@@ -241,7 +241,10 @@ class BestShotTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: surfaceColor,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 10,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(4),
           borderSide: const BorderSide(color: dividerColor, width: 1),
@@ -274,8 +277,14 @@ class BestShotTheme {
         selectedItemColor: accentBlue,
         unselectedItemColor: textSecondary,
         type: BottomNavigationBarType.fixed,
-        selectedLabelStyle: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-        unselectedLabelStyle: TextStyle(fontSize: 11, fontWeight: FontWeight.w400),
+        selectedLabelStyle: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+        unselectedLabelStyle: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w400,
+        ),
       ),
       dividerTheme: const DividerThemeData(
         color: dividerColor,

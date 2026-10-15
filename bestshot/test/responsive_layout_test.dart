@@ -331,7 +331,7 @@ void main() {
     });
 
     testWidgets('スマホ幅 (<750dp) ではグループ一覧が1列ListViewで表示される', (tester) async {
-      tester.view.physicalSize = const Size(400, 800);
+      tester.view.physicalSize = const Size(320, 800);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
@@ -459,20 +459,23 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // 初期値は15秒
-      expect(find.text('15 秒'), findsOneWidget);
+      // 初期値は15秒が選択状態
+      expect(tester.widget<Text>(find.text('15秒 (標準)')).style?.fontWeight, FontWeight.bold);
+      expect(tester.widget<Text>(find.text('5秒 (連写)')).style?.fontWeight, FontWeight.normal);
 
       // 5秒チップをタップ
       await tester.tap(find.text('5秒 (連写)'));
       await tester.pumpAndSettle();
 
-      expect(find.text('5 秒'), findsOneWidget);
+      expect(tester.widget<Text>(find.text('5秒 (連写)')).style?.fontWeight, FontWeight.bold);
+      expect(tester.widget<Text>(find.text('15秒 (標準)')).style?.fontWeight, FontWeight.normal);
 
       // 30秒チップをタップ
       await tester.tap(find.text('30秒 (長連写)'));
       await tester.pumpAndSettle();
 
-      expect(find.text('30 秒'), findsOneWidget);
+      expect(tester.widget<Text>(find.text('30秒 (長連写)')).style?.fontWeight, FontWeight.bold);
+      expect(tester.widget<Text>(find.text('5秒 (連写)')).style?.fontWeight, FontWeight.normal);
     });
   });
 

@@ -301,7 +301,7 @@ void main() {
       {'moved_01', 'person_day1'}, // Distinct scenes
     };
 
-    test('Windows高精度設定 (Advanced) における詳細評価と指標算出', () {
+    test('高精度設定 (Advanced) における詳細評価と指標算出', () {
       const config = GroupingConfig(
         algorithm: GroupingAlgorithm.advanced,
         burstWindowSeconds: 15,
@@ -382,7 +382,7 @@ void main() {
       // ignore: avoid_print
       print('\n========================================================');
       // ignore: avoid_print
-      print('【BestShot グループ化精度 評価レポート (Windows Advanced)】');
+      print('【BestShot グループ化精度 評価レポート (Full Quality)】');
       // ignore: avoid_print
       print('・sameScene 適合率 (Precision)    : ${(precision * 100).toStringAsFixed(1)}% (目標: >= 90%)');
       // ignore: avoid_print
@@ -403,7 +403,7 @@ void main() {
       expect(fpr, equals(0.0), reason: '誤結合は0件でなければならない');
     });
 
-    test('Android軽量版設定 (Lightweight / Fallback) における評価と指標算出', () {
+    test('省メモリ設定 (Lightweight / Fallback) における評価と指標算出', () {
       const androidConfig = GroupingConfig(
         algorithm: GroupingAlgorithm.advanced,
         burstWindowSeconds: 15,
@@ -419,13 +419,13 @@ void main() {
         final k1 = pair.first;
         final k2 = pair.last;
         final inSameGroup = groups.any((g) => g.items.any((e) => e.key == k1) && g.items.any((e) => e.key == k2));
-        expect(inSameGroup, isFalse, reason: 'Android軽量版でも誤結合してはならない: $pair');
+        expect(inSameGroup, isFalse, reason: '省メモリ設定でも誤結合してはならない: $pair');
       }
 
       // ignore: avoid_print
       print('\n========================================================');
       // ignore: avoid_print
-      print('【BestShot グループ化精度 評価レポート (Android Lightweight)】');
+      print('【BestShot グループ化精度 評価レポート (Memory Efficient)】');
       // ignore: avoid_print
       print('・正常完了: クラッシュなし、省メモリ候補絞り込み動作確認');
       // ignore: avoid_print

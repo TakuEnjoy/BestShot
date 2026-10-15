@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../../models/photo_entry.dart';
-import '../../platform/recycle_bin.dart';
+import 'ios_file_trash.dart';
 
 /// Result of a delete/trash operation.
 class DeleteResult {
@@ -32,69 +32,16 @@ class DeleteResult {
 }
 
 class DeleteService {
-  /// Behavior:
-  /// - Windows: move files to Recycle Bin via SHFileOperation.
-  ///   If it fails (e.g. MAX_PATH exceeded or shell error), NEVER fall back to File.delete().
-  ///   Instead, abort immediately and return the failed and unprocessed entries.
-  /// - Android/iOS: delete local files or use PhotoManager editor delete.
+  /// Files are retained in BestShot Trash; library assets use PhotoKit.
   static Future<DeleteResult> moveToTrash(List<PhotoEntry> entries) async {
     if (entries.isEmpty) return const DeleteResult();
-
-    if (Platform.isWindows) {
-      final success = <PhotoEntry>[];
-      final failed = <PhotoEntry>[];
-      final unprocessed = <PhotoEntry>[];
-      String? errorMessage;
-
-      for (int i = 0; i < entries.length; i++) {
-        final entry = entries[i];
-        final path = entry.filePath;
-
-        if (path == null || entry.origin != PhotoOrigin.filePath) {
-          failed.add(entry);
-          errorMessage = '無効なファイルパスです: ${entry.key}';
-          unprocessed.addAll(entries.sublist(i + 1));
-          break;
-        }
-
-        if (path.length > 259) {
-          failed.add(entry);
-          errorMessage = 'ファイルパスが長すぎるためゴミ箱に移動できません (MAX_PATH制限): $path';
-          // DO NOT fallback to direct delete. Abort immediately.
-          unprocessed.addAll(entries.sublist(i + 1));
-          break;
-        }
-
-        try {
-          RecycleBinWindows.moveToRecycleBin([path]);
-          if (File(path).existsSync()) {
-            throw Exception('ゴミ箱への移動が完了しませんでした（ファイルが残存しています）');
-          }
-          success.add(entry);
-        } catch (e, s) {
-          developer.log('Windows recycle bin error for $path: $e\n$s');
-          failed.add(entry);
-          errorMessage = 'ゴミ箱への移動に失敗しました ($path): $e';
-          // DO NOT fallback to direct delete. Abort immediately.
-          unprocessed.addAll(entries.sublist(i + 1));
-          break;
-        }
-      }
-
-      return DeleteResult(
-        success: success,
-        failed: failed,
-        unprocessed: unprocessed,
-        errorMessage: errorMessage,
-      );
-    }
 
     final success = <PhotoEntry>[];
     final failed = <PhotoEntry>[];
     final unprocessed = <PhotoEntry>[];
     String? errorMessage;
 
-    // Delete local files on mobile (Android/iOS) for folder-imported photos
+    // Retain folder-imported originals so they can be restored in Files.
     final fileEntries = entries
         .where((e) => e.origin == PhotoOrigin.filePath && e.filePath != null)
         .toList();
@@ -103,9 +50,7 @@ class DeleteService {
       final entry = fileEntries[i];
       try {
         final file = File(entry.filePath!);
-        if (await file.exists()) {
-          await file.delete();
-        }
+        await IosFileTrash.move(file);
         success.add(entry);
       } catch (e, s) {
         developer.log('File delete error for ${entry.filePath}: $e\n$s');
@@ -116,7 +61,7 @@ class DeleteService {
       }
     }
 
-    // PhotoManager deletion for backward compatibility with legacy imported device assets
+    // PhotoKit owns library assets and presents the system deletion confirmation.
     final assetEntries = entries
         .where((e) => e.origin == PhotoOrigin.deviceAsset && e.assetId != null)
         .toList();

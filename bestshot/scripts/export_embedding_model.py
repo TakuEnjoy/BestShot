@@ -14,14 +14,6 @@ Output:
 import os
 import sys
 
-# Ensure UTF-8 output on Windows terminals (avoids UnicodeEncodeError on emoji/unicode)
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-
 def export_model():
     try:
         import torch
@@ -34,7 +26,7 @@ def export_model():
     print("[1/3] Loading MobileNetV3-Small (pretrained)...")
     model = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
 
-    # Replace classifier with Identity to output 1024-dim feature vector
+    # Replace classifier with Identity to output 576-dim feature vector
     model.classifier = torch.nn.Identity()
     model.eval()
 

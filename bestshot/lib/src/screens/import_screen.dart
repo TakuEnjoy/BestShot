@@ -1,18 +1,21 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 
 import '../models/photo_entry.dart';
 import '../services/analysis/analyzer_isolate.dart';
 import '../services/analysis/analysis_types.dart';
 import '../services/grouping/grouping.dart';
 import '../services/importing/import_service.dart';
-import '../services/semantic/mlkit_semantic_service.dart';
-import 'package:file_picker/file_picker.dart';
+import '../services/review_session_store.dart';
+import '../services/semantic/ios_face_analysis_service.dart';
 import 'package:path/path.dart' as p;
+import 'package:photo_manager/photo_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/analysis/embedding_service.dart';
-import '../platform/folder_picker.dart';
+import '../platform/ios_folder_picker.dart';
+import '../platform/ios_image_decoder.dart';
 import 'groups_screen.dart';
 import '../core/navigation/fast_route.dart';
 import 'package:flutter/services.dart';
@@ -26,6 +29,40 @@ class ImportScreen extends StatefulWidget {
 }
 
 class _ImportScreenState extends State<ImportScreen> {
+  Future<void> _resumeReview() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _status = '保存した選別作業を読み込み中…';
+    });
+    try {
+      final session = await ReviewSessionStore.open();
+      if (!mounted || session == null) return;
+      await Navigator.of(context).push(
+        FastRoute(
+          builder: (_) => GroupsScreen(
+            groups: session.groups,
+            detectionMode: session.mode,
+            reviewSession: session,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('選別作業を読み込めませんでした: $e')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _status = '';
+        });
+      }
+    }
+  }
+
   bool _busy = false;
   bool _cancelled = false;
   bool _isError = false;
@@ -82,43 +119,36 @@ class _ImportScreenState extends State<ImportScreen> {
   static Future<String?> findEmbeddingModelPath() async {
     try {
       final supportDir = await getApplicationSupportDirectory();
-      final exeDir = File(Platform.resolvedExecutable).parent.path;
-      final currentDir = Directory.current.path;
-
-      final candidatePaths = [
-        // 1. AppData / Support directory
-        p.join(supportDir.path, 'models', 'embedding.onnx'),
-        // 2. Relative to executable (packaged release or debug runner)
-        p.join(exeDir, 'data', 'flutter_assets', 'assets', 'models', 'embedding.onnx'),
-        p.join(exeDir, 'assets', 'models', 'embedding.onnx'),
-        p.join(exeDir, 'models', 'embedding.onnx'),
-        p.join(exeDir, '..', '..', '..', '..', 'assets', 'models', 'embedding.onnx'),
-        // 3. Current working directory & workspace roots
-        p.join(currentDir, 'assets', 'models', 'embedding.onnx'),
-        p.join(currentDir, 'models', 'embedding.onnx'),
-        p.join(currentDir, 'bestshot', 'assets', 'models', 'embedding.onnx'),
-        p.join(currentDir, 'bestshot', 'models', 'embedding.onnx'),
-      ];
-
-      for (final cp in candidatePaths) {
-        final normalized = p.normalize(cp);
-        if (await File(normalized).exists()) {
-          debugPrint('[Embedding] Model file detected at: $normalized');
-          return normalized;
-        }
-      }
-
-      // 4. Try loading from Flutter rootBundle and extracting to supportDir
+      // Refresh the bundled model after app updates, inside the app sandbox.
       try {
         final byteData = await rootBundle.load('assets/models/embedding.onnx');
-        final targetFile = File(p.join(supportDir.path, 'models', 'embedding.onnx'));
-        await targetFile.parent.create(recursive: true);
-        await targetFile.writeAsBytes(
-          byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes),
-          flush: true,
+        final targetFile = File(
+          p.join(supportDir.path, 'models', 'embedding.onnx'),
         );
+        final modelBytes = byteData.buffer.asUint8List(
+          byteData.offsetInBytes,
+          byteData.lengthInBytes,
+        );
+        if (await targetFile.exists() &&
+            await targetFile.length() == modelBytes.length &&
+            listEquals(await targetFile.readAsBytes(), modelBytes)) {
+          return targetFile
+              .path; // Preserve mtime so cached features remain valid.
+        }
+        await targetFile.parent.create(recursive: true);
+        final temporary = File(
+          '${targetFile.path}.${DateTime.now().microsecondsSinceEpoch}.tmp',
+        );
+        try {
+          await temporary.writeAsBytes(modelBytes, flush: true);
+          await temporary.rename(targetFile.path);
+        } finally {
+          if (await temporary.exists()) await temporary.delete();
+        }
         if (await targetFile.exists()) {
-          debugPrint('[Embedding] Extracted model from rootBundle to: ${targetFile.path}');
+          debugPrint(
+            '[Embedding] Extracted model from rootBundle to: ${targetFile.path}',
+          );
           return targetFile.path;
         }
       } catch (assetErr) {
@@ -141,7 +171,9 @@ class _ImportScreenState extends State<ImportScreen> {
       }
       debugPrint('[Embedding] Model active at: $modelPath');
     } else {
-      debugPrint('[Embedding] embedding.onnx not found. Using ORB + pHash + Color hybrid grouping.');
+      debugPrint(
+        '[Embedding] embedding.onnx not found. Using ORB + pHash + Color hybrid grouping.',
+      );
       if (mounted) {
         setState(() {
           _embeddingModelAvailable = false;
@@ -153,6 +185,7 @@ class _ImportScreenState extends State<ImportScreen> {
 
   @override
   void dispose() {
+    _cancelled = true;
     _focusNode.dispose();
     super.dispose();
   }
@@ -161,13 +194,15 @@ class _ImportScreenState extends State<ImportScreen> {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     if (_busy) return KeyEventResult.ignored;
 
-    final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
+    final isCtrl =
+        HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
     if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyO) {
-      _runFolderImportAndAnalyze(!Platform.isWindows);
+      _runFolderImportAndAnalyze();
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.enter) {
-      _runFolderImportAndAnalyze(!Platform.isWindows);
+      _runFolderImportAndAnalyze();
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -184,15 +219,26 @@ class _ImportScreenState extends State<ImportScreen> {
         ),
         title: const Row(
           children: [
-            Icon(Icons.keyboard_command_key_rounded, size: 20, color: BestShotTheme.accentBlue),
+            Icon(
+              Icons.keyboard_command_key_rounded,
+              size: 20,
+              color: BestShotTheme.accentBlue,
+            ),
             SizedBox(width: 8),
-            Text('キーボードショートカット', style: TextStyle(color: BestShotTheme.textPrimary, fontSize: 15, fontWeight: FontWeight.bold)),
+            Text(
+              'キーボードショートカット',
+              style: TextStyle(
+                color: BestShotTheme.textPrimary,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _dialogShortcutRow('Ctrl + O', 'フォルダーを指定してスキャン開始'),
+            _dialogShortcutRow('⌘ + O', 'フォルダーを指定してスキャン開始'),
             const SizedBox(height: 8),
             _dialogShortcutRow('Enter', 'インポート開始 / 決定'),
             const SizedBox(height: 8),
@@ -202,7 +248,10 @@ class _ImportScreenState extends State<ImportScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('閉じる', style: TextStyle(color: BestShotTheme.accentBlue)),
+            child: const Text(
+              '閉じる',
+              style: TextStyle(color: BestShotTheme.accentBlue),
+            ),
           ),
         ],
       ),
@@ -234,7 +283,10 @@ class _ImportScreenState extends State<ImportScreen> {
         Expanded(
           child: Text(
             description,
-            style: const TextStyle(fontSize: 12, color: BestShotTheme.textPrimary),
+            style: const TextStyle(
+              fontSize: 12,
+              color: BestShotTheme.textPrimary,
+            ),
           ),
         ),
       ],
@@ -319,6 +371,7 @@ class _ImportScreenState extends State<ImportScreen> {
             origin: i.origin,
             displayBytes: i.displayBytes,
             assetId: i.assetId,
+            originalFilename: i.originalFilename,
             filePath: i.filePath,
             pHashHex: a.pHashHex,
             sharpness: a.sharpness,
@@ -340,6 +393,8 @@ class _ImportScreenState extends State<ImportScreen> {
               faceY: a.faceY,
               faceW: a.faceW,
               faceH: a.faceH,
+              faceImageWidth: a.faceImageWidth,
+              faceImageHeight: a.faceImageHeight,
               faceSharpness: a.faceSharpness,
             ),
             debugGridSharps: a.debugGridSharps,
@@ -354,9 +409,17 @@ class _ImportScreenState extends State<ImportScreen> {
       }
 
       if (foundModelPath != null && !_cancelled) {
-        final embService = OnnxEmbeddingService(modelPath: foundModelPath);
-        final initialized = await embService.initialize();
-        if (initialized) {
+        String? embeddingCacheDirectory;
+        try {
+          final supportDirectory = await getApplicationSupportDirectory();
+          embeddingCacheDirectory = p.join(
+            supportDirectory.path,
+            'embedding_cache_v2',
+          );
+        } catch (e) {
+          debugPrint('[Embedding] Cache directory unavailable: $e');
+        }
+        {
           if (mounted) {
             setState(() {
               _stage = '特徴量抽出';
@@ -364,37 +427,60 @@ class _ImportScreenState extends State<ImportScreen> {
               _progress = 0;
             });
           }
-          try {
-            int lastEmbeddingUpdate = 0;
-            for (var idx = 0; idx < entries.length; idx++) {
-              if (_cancelled) break;
-              final entry = entries[idx];
-              final rawBytes = entry.filePath != null
-                  ? await File(entry.filePath!).readAsBytes()
-                  : entry.displayBytes;
-              final res = await embService.extractEmbeddings(
-                rawBytes,
-                isLightweight: Platform.isAndroid || Platform.isIOS,
-              );
+          const batchSize = 8;
+          for (var start = 0; start < entries.length; start += batchSize) {
+            if (_cancelled) break;
+            final end = (start + batchSize).clamp(0, entries.length);
+            final results = await extractEmbeddingBatch(
+              modelPath: foundModelPath,
+              cacheDirectory: embeddingCacheDirectory,
+              images: entries
+                  .sublist(start, end)
+                  .map(
+                    (entry) => (
+                      entry.filePath,
+                      (entry.filePath == null ||
+                              IosImageDecoder.needsNativeDecoder(
+                                entry.filePath!,
+                              ) ||
+                              {
+                                '.dng',
+                                '.arw',
+                                '.nef',
+                                '.cr2',
+                                '.cr3',
+                                '.raf',
+                                '.rw2',
+                                '.orf',
+                              }.contains(
+                                p.extension(entry.filePath!).toLowerCase(),
+                              ))
+                          ? entry.displayBytes
+                          : Uint8List(0),
+                    ),
+                  )
+                  .toList(),
+              isLightweight: true,
+            );
+            if (_cancelled || !mounted) break;
+            for (var offset = 0; offset < results.length; offset++) {
+              final res = results[offset];
               if (res != null) {
-                entries[idx] = entry.copyWith(embeddings: () => res.embeddings);
-              }
-              final now = DateTime.now().millisecondsSinceEpoch;
-              if (now - lastEmbeddingUpdate > 100 || idx == entries.length - 1) {
-                lastEmbeddingUpdate = now;
-                if (!mounted) break;
-                setState(() {
-                  _progress = (idx + 1) / entries.length;
-                  _status = '画像埋め込みを推論中... (${idx + 1} / ${entries.length})';
-                });
+                entries[start + offset] = entries[start + offset].copyWith(
+                  embeddings: () => res.embeddings,
+                );
               }
             }
-          } finally {
-            embService.dispose();
+            setState(() {
+              _progress = end / entries.length;
+              _status = '画像埋め込みを推論中... ($end / ${entries.length})';
+            });
           }
         }
       } else if (!_cancelled) {
-        debugPrint('[Embedding] Model (embedding.onnx) not found. Skipping ONNX embedding inference; using ORB + pHash + Color hybrid grouping.');
+        debugPrint(
+          '[Embedding] Model (embedding.onnx) not found. Skipping ONNX embedding inference; using ORB + pHash + Color hybrid grouping.',
+        );
       }
 
       if (_cancelled) {
@@ -402,24 +488,26 @@ class _ImportScreenState extends State<ImportScreen> {
         return;
       }
 
-      // Semantic analysis (Android/iOS only)
+      // Native face/expression analysis
       var enrichedEntries = entries;
-      if (Platform.isAndroid || Platform.isIOS) {
+      {
         setState(() {
-          _stage = '物体/顔検出';
-          _status = 'ML Kitで被写体/表情を解析中...';
+          _stage = '顔・表情検出';
+          _status = '顔・表情を解析中...';
           _progress = 0;
         });
         try {
-          final svc = await MlKitSemanticService.create();
+          final svc = await IosFaceAnalysisService.create();
           try {
             enrichedEntries = await svc.enrich(
               entries,
               onProgress: (done, total) {
                 if (!mounted) return;
                 setState(() {
-                  _progress = total <= 0 ? null : (done / total).clamp(0.0, 1.0);
-                  _status = 'ML Kit解析中... ($done / $total)';
+                  _progress = total <= 0
+                      ? null
+                      : (done / total).clamp(0.0, 1.0);
+                  _status = '顔・表情を解析中... ($done / $total)';
                 });
               },
               isCancelled: () => _cancelled,
@@ -428,11 +516,11 @@ class _ImportScreenState extends State<ImportScreen> {
             try {
               await svc.close();
             } catch (e) {
-              debugPrint('Error closing MlKitSemanticService: $e');
+              debugPrint('Error closing IosFaceAnalysisService: $e');
             }
           }
         } catch (e, stack) {
-          debugPrint('ML Kit semantic analysis skipped due to error: $e\n$stack');
+          debugPrint('Native face analysis skipped due to error: $e\n$stack');
         }
       }
 
@@ -448,7 +536,10 @@ class _ImportScreenState extends State<ImportScreen> {
       });
       final groups = await PhotoGrouper.groupAsync(
         enrichedEntries,
-        GroupingConfig(burstWindowSeconds: _burstWindowSeconds),
+        GroupingConfig(
+          burstWindowSeconds: _burstWindowSeconds,
+          mode: _detectionMode,
+        ),
       );
 
       if (!mounted) return;
@@ -571,17 +662,76 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
-  Future<void> _runFolderImportAndAnalyze(bool isAndroidSAF) async {
+  Future<void> _runPhotoLibraryImport() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final permission = await PhotoManager.requestPermissionExtend();
+      if (!mounted) return;
+      if (!permission.hasAccess) {
+        setState(() => _status = '写真へのアクセスが許可されていません。設定からアクセスを許可してください。');
+        return;
+      }
+      final albums = await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+        filterOption: FilterOptionGroup(
+          orders: [
+            const OrderOption(type: OrderOptionType.createDate, asc: false),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      final album = await showDialog<AssetPathEntity>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: Text('アルバムを選択（最新 $_maxCount 枚まで）'),
+          children: [
+            if (permission == PermissionState.limited)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('アクセスを許可した写真だけが表示されます。'),
+              ),
+            if (albums.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('アクセスできる写真がありません。'),
+              ),
+            for (final album in albums)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, album),
+                child: Text(album.name),
+              ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('キャンセル'),
+            ),
+          ],
+        ),
+      );
+      if (album == null || !mounted) return;
+      await _runImportAndAnalyze(
+        (progress) => ImportService.importAlbum(
+          album,
+          maxCount: _maxCount,
+          onProgress: progress,
+          isCancelled: () => _cancelled,
+        ),
+        skipBusyCheck: true,
+      );
+    } catch (error) {
+      if (mounted) setState(() => _status = '写真ライブラリを開けませんでした: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _runFolderImportAndAnalyze() async {
     if (_busy) return;
 
     // フォルダパスの取得
     String? dir;
     try {
-      if (isAndroidSAF) {
-        dir = await FilePicker.getDirectoryPath();
-      } else {
-        dir = FolderPickerWindows.pickFolder();
-      }
+      dir = await IosFolderPicker.pick();
     } catch (e) {
       setState(() {
         _status = 'フォルダ選択エラー: $e';
@@ -628,6 +778,7 @@ class _ImportScreenState extends State<ImportScreen> {
           selectedFiles,
           thumbnailMaxEdge: 512,
           onProgress: onProgress,
+          isCancelled: () => _cancelled,
         ),
         skipBusyCheck: true,
       );
@@ -682,9 +833,20 @@ class _ImportScreenState extends State<ImportScreen> {
               ),
               title: const Row(
                 children: [
-                  Icon(Icons.calendar_today_outlined, size: 18, color: BestShotTheme.accentBlue),
+                  Icon(
+                    Icons.calendar_today_outlined,
+                    size: 18,
+                    color: BestShotTheme.accentBlue,
+                  ),
                   SizedBox(width: 8),
-                  Text('撮影日（日付）で絞り込み', style: TextStyle(color: BestShotTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.bold)),
+                  Text(
+                    '撮影日（日付）で絞り込み',
+                    style: TextStyle(
+                      color: BestShotTheme.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ],
               ),
               content: Container(
@@ -698,7 +860,10 @@ class _ImportScreenState extends State<ImportScreen> {
                       'フォルダー: ${scanResult.folderPath}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: BestShotTheme.textSecondary, fontSize: 11),
+                      style: const TextStyle(
+                        color: BestShotTheme.textSecondary,
+                        fontSize: 11,
+                      ),
                     ),
                     const SizedBox(height: 12),
                     // クイックコントロール行
@@ -713,8 +878,13 @@ class _ImportScreenState extends State<ImportScreen> {
                           children: [
                             OutlinedButton(
                               style: OutlinedButton.styleFrom(
-                                side: const BorderSide(color: BestShotTheme.dividerColor),
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                side: const BorderSide(
+                                  color: BestShotTheme.dividerColor,
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
                                 minimumSize: Size.zero,
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               ),
@@ -723,12 +893,23 @@ class _ImportScreenState extends State<ImportScreen> {
                                   selectedDates.addAll(allDates);
                                 });
                               },
-                              child: const Text('すべて選択', style: TextStyle(color: BestShotTheme.textPrimary, fontSize: 12)),
+                              child: const Text(
+                                'すべて選択',
+                                style: TextStyle(
+                                  color: BestShotTheme.textPrimary,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ),
                             OutlinedButton(
                               style: OutlinedButton.styleFrom(
-                                side: const BorderSide(color: BestShotTheme.dividerColor),
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                side: const BorderSide(
+                                  color: BestShotTheme.dividerColor,
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
                                 minimumSize: Size.zero,
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               ),
@@ -737,7 +918,13 @@ class _ImportScreenState extends State<ImportScreen> {
                                   selectedDates.clear();
                                 });
                               },
-                              child: const Text('クリア', style: TextStyle(color: BestShotTheme.textSecondary, fontSize: 12)),
+                              child: const Text(
+                                'クリア',
+                                style: TextStyle(
+                                  color: BestShotTheme.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ),
                           ],
                         ),
@@ -747,8 +934,13 @@ class _ImportScreenState extends State<ImportScreen> {
                             // 期間で選択
                             OutlinedButton.icon(
                               style: OutlinedButton.styleFrom(
-                                side: const BorderSide(color: BestShotTheme.dividerColor),
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                side: const BorderSide(
+                                  color: BestShotTheme.dividerColor,
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
                                 minimumSize: Size.zero,
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               ),
@@ -756,7 +948,9 @@ class _ImportScreenState extends State<ImportScreen> {
                                 final range = await showDateRangePicker(
                                   context: context,
                                   firstDate: DateTime(2000),
-                                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                                  lastDate: DateTime.now().add(
+                                    const Duration(days: 365),
+                                  ),
                                   builder: (context, child) => Theme(
                                     data: ThemeData.dark().copyWith(
                                       colorScheme: const ColorScheme.dark(
@@ -771,23 +965,43 @@ class _ImportScreenState extends State<ImportScreen> {
                                   setState(() {
                                     selectedDates.clear();
                                     for (final d in allDates) {
-                                      if (d.isAfter(range.start.subtract(const Duration(seconds: 1))) &&
-                                          d.isBefore(range.end.add(const Duration(days: 1)))) {
+                                      if (d.isAfter(
+                                            range.start.subtract(
+                                              const Duration(seconds: 1),
+                                            ),
+                                          ) &&
+                                          d.isBefore(
+                                            range.end.add(
+                                              const Duration(days: 1),
+                                            ),
+                                          )) {
                                         selectedDates.add(d);
                                       }
                                     }
                                   });
                                 }
                               },
-                              icon: const Icon(Icons.date_range, size: 14, color: BestShotTheme.accentBlue),
-                              label: const Text('期間で選択', style: TextStyle(color: BestShotTheme.textPrimary, fontSize: 12)),
+                              icon: const Icon(
+                                Icons.date_range,
+                                size: 14,
+                                color: BestShotTheme.accentBlue,
+                              ),
+                              label: const Text(
+                                '期間で選択',
+                                style: TextStyle(
+                                  color: BestShotTheme.textPrimary,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ),
                             const SizedBox(width: 4),
                             // ソートトグル
                             IconButton(
                               tooltip: descending ? '新しい順' : '古い順',
                               icon: Icon(
-                                descending ? Icons.arrow_downward : Icons.arrow_upward,
+                                descending
+                                    ? Icons.arrow_downward
+                                    : Icons.arrow_upward,
                                 size: 16,
                                 color: BestShotTheme.textSecondary,
                               ),
@@ -801,7 +1015,10 @@ class _ImportScreenState extends State<ImportScreen> {
                         ),
                       ],
                     ),
-                    const Divider(color: BestShotTheme.dividerColor, height: 16),
+                    const Divider(
+                      color: BestShotTheme.dividerColor,
+                      height: 16,
+                    ),
                     // 日付リスト
                     Flexible(
                       child: Container(
@@ -824,7 +1041,10 @@ class _ImportScreenState extends State<ImportScreen> {
                             return CheckboxListTile(
                               title: Text(
                                 '$dateStr ($count 枚)',
-                                style: const TextStyle(fontSize: 13, color: BestShotTheme.textPrimary),
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: BestShotTheme.textPrimary,
+                                ),
                               ),
                               value: isChecked,
                               activeColor: BestShotTheme.accentBlue,
@@ -852,7 +1072,9 @@ class _ImportScreenState extends State<ImportScreen> {
                         Text(
                           '選択中: $totalSelected 枚',
                           style: TextStyle(
-                            color: isOverLimit ? BestShotTheme.accentGold : BestShotTheme.textPrimary,
+                            color: isOverLimit
+                                ? BestShotTheme.accentGold
+                                : BestShotTheme.textPrimary,
                             fontWeight: FontWeight.bold,
                             fontSize: 13,
                           ),
@@ -870,12 +1092,19 @@ class _ImportScreenState extends State<ImportScreen> {
                     if (isOverLimit) ...[
                       const SizedBox(height: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
                         decoration: BoxDecoration(
-                          color: BestShotTheme.accentGold.withValues(alpha: 0.12),
+                          color: BestShotTheme.accentGold.withValues(
+                            alpha: 0.12,
+                          ),
                           borderRadius: BorderRadius.circular(4),
                           border: Border.all(
-                            color: BestShotTheme.accentGold.withValues(alpha: 0.4),
+                            color: BestShotTheme.accentGold.withValues(
+                              alpha: 0.4,
+                            ),
                           ),
                         ),
                         child: Row(
@@ -917,7 +1146,9 @@ class _ImportScreenState extends State<ImportScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: BestShotTheme.accentBlue,
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4),
+                    ),
                   ),
                   onPressed: selectedDates.isEmpty
                       ? null
@@ -951,8 +1182,6 @@ class _ImportScreenState extends State<ImportScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isWindows = Platform.isWindows;
-    final isAndroid = Platform.isAndroid;
     final size = MediaQuery.of(context).size;
     final isWide = size.width >= 850;
     final isSmallMobile = size.width < 600;
@@ -965,7 +1194,10 @@ class _ImportScreenState extends State<ImportScreen> {
         backgroundColor: BestShotTheme.backgroundPrimary,
         appBar: PreferredSize(
           preferredSize: const Size.fromHeight(56),
-          child: _buildTopBar(context, isSmallMobile, isWindows),
+          child: SafeArea(
+            bottom: false,
+            child: _buildTopBar(context, isSmallMobile),
+          ),
         ),
         body: SafeArea(
           child: Center(
@@ -986,7 +1218,7 @@ class _ImportScreenState extends State<ImportScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                _buildDropzone(context, isWindows, isSmallMobile),
+                                _buildDropzone(context, isSmallMobile),
                                 _buildProgressDisplay(),
                                 _buildStatusDisplay(),
                               ],
@@ -996,18 +1228,21 @@ class _ImportScreenState extends State<ImportScreen> {
                           // 右側インスペクター (パイプライン設定、エンジン仕様、システム診断)
                           Expanded(
                             flex: 4,
-                            child: _buildParametersSidebar(context, isSmallMobile, isAndroid),
+                            child: _buildParametersSidebar(
+                              context,
+                              isSmallMobile,
+                            ),
                           ),
                         ],
                       )
                     : Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          _buildDropzone(context, isWindows, isSmallMobile),
+                          _buildDropzone(context, isSmallMobile),
                           _buildProgressDisplay(),
                           _buildStatusDisplay(),
                           const SizedBox(height: 16),
-                          _buildParametersSidebar(context, isSmallMobile, isAndroid),
+                          _buildParametersSidebar(context, isSmallMobile),
                         ],
                       ),
               ),
@@ -1018,13 +1253,15 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
-  Widget _buildTopBar(BuildContext context, bool isSmallMobile, bool isWindows) {
+  Widget _buildTopBar(BuildContext context, bool isSmallMobile) {
     return Container(
       height: 56,
       padding: EdgeInsets.symmetric(horizontal: isSmallMobile ? 14 : 24),
       decoration: const BoxDecoration(
         color: BestShotTheme.backgroundPrimary,
-        border: Border(bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1)),
+        border: Border(
+          bottom: BorderSide(color: BestShotTheme.dividerColor, width: 1),
+        ),
       ),
       child: Row(
         children: [
@@ -1033,7 +1270,9 @@ class _ImportScreenState extends State<ImportScreen> {
             decoration: BoxDecoration(
               color: BestShotTheme.accentBlue.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: BestShotTheme.accentBlue.withValues(alpha: 0.3)),
+              border: Border.all(
+                color: BestShotTheme.accentBlue.withValues(alpha: 0.3),
+              ),
             ),
             child: const Icon(
               Icons.camera,
@@ -1061,7 +1300,10 @@ class _ImportScreenState extends State<ImportScreen> {
                     ),
                     const SizedBox(width: 6),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 1,
+                      ),
                       decoration: BoxDecoration(
                         color: BestShotTheme.surfaceColor,
                         borderRadius: BorderRadius.circular(2),
@@ -1093,10 +1335,19 @@ class _ImportScreenState extends State<ImportScreen> {
               ],
             ),
           ),
-          if (!isSmallMobile && isWindows)
+          IconButton(
+            tooltip: '選別作業を再開',
+            onPressed: _busy ? null : _resumeReview,
+            icon: const Icon(Icons.folder_open),
+          ),
+          if (!isSmallMobile)
             IconButton(
-              tooltip: 'キーボードショートカット [Ctrl+O]',
-              icon: const Icon(Icons.keyboard_command_key_rounded, size: 18, color: BestShotTheme.textSecondary),
+              tooltip: 'キーボードショートカット [⌘O]',
+              icon: const Icon(
+                Icons.keyboard_command_key_rounded,
+                size: 18,
+                color: BestShotTheme.textSecondary,
+              ),
               onPressed: () => _showShortcutsDialog(context),
             ),
         ],
@@ -1104,7 +1355,7 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
-  Widget _buildDropzone(BuildContext context, bool isWindows, bool isSmallMobile) {
+  Widget _buildDropzone(BuildContext context, bool isSmallMobile) {
     if (_busy) return const SizedBox.shrink();
 
     return Container(
@@ -1127,7 +1378,7 @@ class _ImportScreenState extends State<ImportScreen> {
           ),
           const SizedBox(height: 16),
           Text(
-            isWindows ? 'フォルダーを指定してスキャン開始' : 'スキャンするフォルダーを選択',
+            'スキャンするフォルダーを選択',
             style: TextStyle(
               fontSize: isSmallMobile ? 16 : 19,
               fontWeight: FontWeight.bold,
@@ -1154,37 +1405,69 @@ class _ImportScreenState extends State<ImportScreen> {
                 horizontal: isSmallMobile ? 28 : 36,
                 vertical: isSmallMobile ? 14 : 16,
               ),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(4),
+              ),
               elevation: 0,
             ),
-            onPressed: () => _runFolderImportAndAnalyze(!isWindows),
+            onPressed: () => _runFolderImportAndAnalyze(),
             icon: const Icon(Icons.folder_open, size: 20),
             label: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  isWindows ? 'フォルダーを開く' : 'フォルダーを選択',
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 0.3),
+                  'フォルダーを選択',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.3,
+                  ),
                 ),
-                if (isWindows) ...[
+                if (!isSmallMobile) ...[
                   const SizedBox(width: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.25),
                       borderRadius: BorderRadius.circular(2),
                     ),
-                    child: const Text('Ctrl+O', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white70)),
+                    child: const Text(
+                      '⌘O',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white70,
+                      ),
+                    ),
                   ),
                 ],
               ],
             ),
           ),
+          ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _runPhotoLibraryImport,
+              icon: const Icon(Icons.photo_library_outlined),
+              label: const Text('写真ライブラリから読み込む'),
+            ),
+            TextButton(
+              onPressed: () => PhotoManager.presentLimited(),
+              child: const Text('アクセスを許可する写真を変更'),
+            ),
+          ],
           const SizedBox(height: 24),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.check_circle_outline, size: 12, color: BestShotTheme.textSecondary),
+              const Icon(
+                Icons.check_circle_outline,
+                size: 12,
+                color: BestShotTheme.textSecondary,
+              ),
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
@@ -1265,7 +1548,9 @@ class _ImportScreenState extends State<ImportScreen> {
               value: _progress,
               minHeight: 6,
               backgroundColor: BestShotTheme.backgroundPrimary,
-              valueColor: const AlwaysStoppedAnimation<Color>(BestShotTheme.accentBlue),
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                BestShotTheme.accentBlue,
+              ),
             ),
           ),
           const SizedBox(height: 18),
@@ -1274,7 +1559,9 @@ class _ImportScreenState extends State<ImportScreen> {
               side: const BorderSide(color: BestShotTheme.accentRed),
               foregroundColor: BestShotTheme.accentRed,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(4),
+              ),
             ),
             onPressed: () {
               setState(() {
@@ -1283,7 +1570,10 @@ class _ImportScreenState extends State<ImportScreen> {
               });
             },
             icon: const Icon(Icons.cancel_outlined, size: 16),
-            label: const Text('処理を中断', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            label: const Text(
+              '処理を中断',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
@@ -1311,8 +1601,12 @@ class _ImportScreenState extends State<ImportScreen> {
         child: Row(
           children: [
             Icon(
-              _isError ? Icons.error_outline_rounded : Icons.info_outline_rounded,
-              color: _isError ? BestShotTheme.accentRed : BestShotTheme.accentBlue,
+              _isError
+                  ? Icons.error_outline_rounded
+                  : Icons.info_outline_rounded,
+              color: _isError
+                  ? BestShotTheme.accentRed
+                  : BestShotTheme.accentBlue,
               size: 18,
             ),
             const SizedBox(width: 10),
@@ -1320,7 +1614,9 @@ class _ImportScreenState extends State<ImportScreen> {
               child: Text(
                 _status,
                 style: TextStyle(
-                  color: _isError ? BestShotTheme.accentRed : BestShotTheme.textPrimary,
+                  color: _isError
+                      ? BestShotTheme.accentRed
+                      : BestShotTheme.textPrimary,
                   fontSize: 13,
                 ),
               ),
@@ -1331,7 +1627,7 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
-  Widget _buildParametersSidebar(BuildContext context, bool isSmallMobile, bool isAndroid) {
+  Widget _buildParametersSidebar(BuildContext context, bool isSmallMobile) {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -1344,15 +1640,21 @@ class _ImportScreenState extends State<ImportScreen> {
         children: [
           const Row(
             children: [
-              Icon(Icons.tune_rounded, size: 15, color: BestShotTheme.accentBlue),
+              Icon(
+                Icons.tune_rounded,
+                size: 15,
+                color: BestShotTheme.accentBlue,
+              ),
               SizedBox(width: 8),
-              Text(
-                'PIPELINE CONFIGURATION',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.8,
-                  color: BestShotTheme.textSecondary,
+              Expanded(
+                child: Text(
+                  'PIPELINE CONFIGURATION',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.8,
+                    color: BestShotTheme.textSecondary,
+                  ),
                 ),
               ),
             ],
@@ -1362,7 +1664,11 @@ class _ImportScreenState extends State<ImportScreen> {
           // 1. 検出モード
           const Text(
             '検出・評価モード (Detection Mode)',
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: BestShotTheme.textPrimary,
+            ),
           ),
           const SizedBox(height: 6),
           Row(
@@ -1372,20 +1678,26 @@ class _ImportScreenState extends State<ImportScreen> {
                   title: '標準モード',
                   icon: Icons.auto_awesome_mosaic_outlined,
                   selected: _detectionMode == DetectionMode.standard,
-                  onTap: _busy ? null : () => setState(() => _detectionMode = DetectionMode.standard),
+                  onTap: _busy
+                      ? null
+                      : () => setState(
+                          () => _detectionMode = DetectionMode.standard,
+                        ),
                 ),
               ),
-              if (isAndroid) ...[
-                const SizedBox(width: 6),
-                Expanded(
-                  child: _modeSegmentItem(
-                    title: 'ポートレート',
-                    icon: Icons.face_rounded,
-                    selected: _detectionMode == DetectionMode.portrait,
-                    onTap: _busy ? null : () => setState(() => _detectionMode = DetectionMode.portrait),
-                  ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _modeSegmentItem(
+                  title: 'ポートレート',
+                  icon: Icons.face_rounded,
+                  selected: _detectionMode == DetectionMode.portrait,
+                  onTap: _busy
+                      ? null
+                      : () => setState(
+                          () => _detectionMode = DetectionMode.portrait,
+                        ),
                 ),
-              ],
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -1393,7 +1705,11 @@ class _ImportScreenState extends State<ImportScreen> {
           // 2. 連写判定インターバル
           const Text(
             '連写・同一シーン判定時間窓',
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: BestShotTheme.textPrimary,
+            ),
           ),
           const SizedBox(height: 6),
           Wrap(
@@ -1425,16 +1741,25 @@ class _ImportScreenState extends State<ImportScreen> {
                       dropdownColor: BestShotTheme.surfaceColor,
                       decoration: const InputDecoration(
                         labelText: '分 (Min)',
-                        labelStyle: TextStyle(fontSize: 10, color: BestShotTheme.textSecondary),
+                        labelStyle: TextStyle(
+                          fontSize: 10,
+                          color: BestShotTheme.textSecondary,
+                        ),
                         border: OutlineInputBorder(),
                         isDense: true,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6,
+                        ),
                       ),
                       items: [
                         for (var i = 0; i <= 60; i++)
                           DropdownMenuItem(
                             value: i,
-                            child: Text(i.toString().padLeft(2, '0'), style: const TextStyle(fontSize: 11)),
+                            child: Text(
+                              i.toString().padLeft(2, '0'),
+                              style: const TextStyle(fontSize: 11),
+                            ),
                           ),
                       ],
                       onChanged: _busy
@@ -1453,16 +1778,25 @@ class _ImportScreenState extends State<ImportScreen> {
                       dropdownColor: BestShotTheme.surfaceColor,
                       decoration: const InputDecoration(
                         labelText: '秒 (Sec)',
-                        labelStyle: TextStyle(fontSize: 10, color: BestShotTheme.textSecondary),
+                        labelStyle: TextStyle(
+                          fontSize: 10,
+                          color: BestShotTheme.textSecondary,
+                        ),
                         border: OutlineInputBorder(),
                         isDense: true,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6,
+                        ),
                       ),
                       items: [
                         for (var i = 0; i < 60; i++)
                           DropdownMenuItem(
                             value: i,
-                            child: Text(i.toString().padLeft(2, '0'), style: const TextStyle(fontSize: 11)),
+                            child: Text(
+                              i.toString().padLeft(2, '0'),
+                              style: const TextStyle(fontSize: 11),
+                            ),
                           ),
                       ],
                       onChanged: _busy
@@ -1483,7 +1817,11 @@ class _ImportScreenState extends State<ImportScreen> {
           // 3. 最大インポート件数
           const Text(
             '最大インポート件数 (Batch Limit)',
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: BestShotTheme.textPrimary),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: BestShotTheme.textPrimary,
+            ),
           ),
           const SizedBox(height: 6),
           Wrap(
@@ -1512,13 +1850,21 @@ class _ImportScreenState extends State<ImportScreen> {
             ),
           ),
           const SizedBox(height: 6),
-          _diagnosticRow('Isolate Pool', '${Platform.numberOfProcessors} Threads Active'),
-          _diagnosticRow('Memory Cache', '256MB LRU Image Cache'),
+          _diagnosticRow(
+            'Isolate Pool',
+            '最大 ${(Platform.numberOfProcessors ~/ 2).clamp(1, 3)} 並列',
+          ),
+          _diagnosticRow(
+            'Memory Cache',
+            '${PaintingBinding.instance.imageCache.maximumSizeBytes ~/ (1024 * 1024)}MB LRU Image Cache',
+          ),
           _diagnosticRow('Engines', 'Laplacian + ORB + pHash 64bit'),
           _diagnosticRow(
             'Embedding ONNX',
             _embeddingModelAvailable ? '有効 (Active)' : '無効 (未配置)',
-            valueColor: _embeddingModelAvailable ? BestShotTheme.accentGreen : BestShotTheme.textSecondary,
+            valueColor: _embeddingModelAvailable
+                ? BestShotTheme.accentGreen
+                : BestShotTheme.textSecondary,
             tooltip: _embeddingModelAvailable
                 ? '画像埋め込み推論が有効です (${p.basename(_embeddingModelPath ?? "embedding.onnx")})'
                 : 'embedding.onnx が未配置のため、ORB+pHash+Colorハイブリッド方式でグループ化します',
@@ -1547,10 +1893,14 @@ class _ImportScreenState extends State<ImportScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
-          color: selected ? BestShotTheme.accentBlue.withValues(alpha: 0.2) : BestShotTheme.backgroundPrimary,
+          color: selected
+              ? BestShotTheme.accentBlue.withValues(alpha: 0.2)
+              : BestShotTheme.backgroundPrimary,
           borderRadius: BorderRadius.circular(3),
           border: Border.all(
-            color: selected ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+            color: selected
+                ? BestShotTheme.accentBlue
+                : BestShotTheme.dividerColor,
             width: selected ? 1.5 : 1.0,
           ),
         ),
@@ -1559,7 +1909,9 @@ class _ImportScreenState extends State<ImportScreen> {
           style: TextStyle(
             fontSize: 11,
             fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-            color: selected ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
+            color: selected
+                ? BestShotTheme.accentBlue
+                : BestShotTheme.textSecondary,
           ),
         ),
       ),
@@ -1583,10 +1935,14 @@ class _ImportScreenState extends State<ImportScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
-          color: selected ? BestShotTheme.accentBlue.withValues(alpha: 0.2) : BestShotTheme.backgroundPrimary,
+          color: selected
+              ? BestShotTheme.accentBlue.withValues(alpha: 0.2)
+              : BestShotTheme.backgroundPrimary,
           borderRadius: BorderRadius.circular(3),
           border: Border.all(
-            color: selected ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+            color: selected
+                ? BestShotTheme.accentBlue
+                : BestShotTheme.dividerColor,
             width: selected ? 1.5 : 1.0,
           ),
         ),
@@ -1595,7 +1951,9 @@ class _ImportScreenState extends State<ImportScreen> {
           style: TextStyle(
             fontSize: 11,
             fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-            color: selected ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
+            color: selected
+                ? BestShotTheme.accentBlue
+                : BestShotTheme.textSecondary,
           ),
         ),
       ),
@@ -1610,10 +1968,14 @@ class _ImportScreenState extends State<ImportScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
-          color: selected ? BestShotTheme.accentBlue.withValues(alpha: 0.2) : BestShotTheme.backgroundPrimary,
+          color: selected
+              ? BestShotTheme.accentBlue.withValues(alpha: 0.2)
+              : BestShotTheme.backgroundPrimary,
           borderRadius: BorderRadius.circular(3),
           border: Border.all(
-            color: selected ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+            color: selected
+                ? BestShotTheme.accentBlue
+                : BestShotTheme.dividerColor,
             width: selected ? 1.5 : 1.0,
           ),
         ),
@@ -1622,13 +1984,14 @@ class _ImportScreenState extends State<ImportScreen> {
           style: TextStyle(
             fontSize: 11,
             fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-            color: selected ? BestShotTheme.accentBlue : BestShotTheme.textSecondary,
+            color: selected
+                ? BestShotTheme.accentBlue
+                : BestShotTheme.textSecondary,
           ),
         ),
       ),
     );
   }
-
 
   Widget _modeSegmentItem({
     required String title,
@@ -1642,17 +2005,27 @@ class _ImportScreenState extends State<ImportScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
         decoration: BoxDecoration(
-          color: selected ? BestShotTheme.accentBlue.withValues(alpha: 0.15) : BestShotTheme.backgroundPrimary,
+          color: selected
+              ? BestShotTheme.accentBlue.withValues(alpha: 0.15)
+              : BestShotTheme.backgroundPrimary,
           borderRadius: BorderRadius.circular(3),
           border: Border.all(
-            color: selected ? BestShotTheme.accentBlue : BestShotTheme.dividerColor,
+            color: selected
+                ? BestShotTheme.accentBlue
+                : BestShotTheme.dividerColor,
             width: selected ? 1.5 : 1.0,
           ),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 14, color: selected ? BestShotTheme.accentBlue : BestShotTheme.textSecondary),
+            Icon(
+              icon,
+              size: 14,
+              color: selected
+                  ? BestShotTheme.accentBlue
+                  : BestShotTheme.textSecondary,
+            ),
             const SizedBox(width: 6),
             Flexible(
               child: Text(
@@ -1660,7 +2033,9 @@ class _ImportScreenState extends State<ImportScreen> {
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-                  color: selected ? BestShotTheme.textPrimary : BestShotTheme.textSecondary,
+                  color: selected
+                      ? BestShotTheme.textPrimary
+                      : BestShotTheme.textSecondary,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -1671,12 +2046,23 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
-  Widget _diagnosticRow(String label, String value, {Color? valueColor, String? tooltip}) {
+  Widget _diagnosticRow(
+    String label,
+    String value, {
+    Color? valueColor,
+    String? tooltip,
+  }) {
     final row = Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(
         children: [
-          Text(label, style: const TextStyle(fontSize: 11, color: BestShotTheme.textSecondary)),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              color: BestShotTheme.textSecondary,
+            ),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -1695,14 +2081,8 @@ class _ImportScreenState extends State<ImportScreen> {
     );
 
     if (tooltip != null) {
-      return Tooltip(
-        message: tooltip,
-        child: row,
-      );
+      return Tooltip(message: tooltip, child: row);
     }
     return row;
   }
 }
-
-
-

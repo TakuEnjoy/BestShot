@@ -30,20 +30,24 @@ class PhotoGroup {
   late final String timeRange = _computeTimeRange();
   String _computeTimeRange() {
     if (items.isEmpty) return '';
-    final times = items.map((e) => e.capturedAt).whereType<DateTime>().toList()..sort();
+    final times = items.map((e) => e.capturedAt).whereType<DateTime>().toList()
+      ..sort();
     if (times.isEmpty) return '時刻不明';
     final first = times.first;
     final last = times.last;
-    final fStr = '${first.hour.toString().padLeft(2, '0')}:${first.minute.toString().padLeft(2, '0')}';
+    final fStr =
+        '${first.hour.toString().padLeft(2, '0')}:${first.minute.toString().padLeft(2, '0')}';
     if (first == last) return fStr;
-    final lStr = '${last.hour.toString().padLeft(2, '0')}:${last.minute.toString().padLeft(2, '0')}';
+    final lStr =
+        '${last.hour.toString().padLeft(2, '0')}:${last.minute.toString().padLeft(2, '0')}';
     return '$fStr - $lStr';
   }
 
   late final String burstDuration = _computeBurstDuration();
   String _computeBurstDuration() {
     if (!isBurst) return '単写';
-    final times = items.map((e) => e.capturedAt).whereType<DateTime>().toList()..sort();
+    final times = items.map((e) => e.capturedAt).whereType<DateTime>().toList()
+      ..sort();
     if (times.length < 2) return '連写';
     final diffMs = times.last.difference(times.first).inMilliseconds;
     final sec = (diffMs / 1000.0).toStringAsFixed(1);
@@ -70,10 +74,15 @@ class PhotoGroup {
     bool? isBurst,
     bool? needsReview,
   }) {
+    final newItems = items != null ? items.toList() : this.items;
+    String newBestKey = bestKey ?? this.bestKey;
+    if (newItems.isNotEmpty && !newItems.any((e) => e.key == newBestKey)) {
+      newBestKey = newItems.first.key;
+    }
     return PhotoGroup(
       id: id ?? this.id,
-      items: items ?? this.items,
-      bestKey: bestKey ?? this.bestKey,
+      items: newItems,
+      bestKey: newBestKey,
       deleteCandidateKeys: deleteCandidateKeys ?? this.deleteCandidateKeys,
       isBurst: isBurst ?? this.isBurst,
       needsReview: needsReview ?? this.needsReview,
